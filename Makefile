@@ -1,0 +1,118 @@
+SHELL := /bin/bash
+-include .env
+export
+
+GO              ?= go
+MIGRATE_IMAGE   := migrate/migrate:v4.18.3
+COMPOSE_NETWORK := kotoki_default
+MIGRATE_DB_URL  := postgres://kotoki:kotoki@postgres:5432/kotoki?sslmode=disable
+GOLANGCI_LINT_VERSION := v2.1.6
+VERSION         ?= $(shell git describe --tags --always --dirty)
+GIT_COMMIT      ?= $(shell git rev-parse --short HEAD)
+N               ?= 1
+
+.PHONY: env up up-obs down reset migrate-up migrate-down migrate-create seed promote-admin \
+        sqlc sqlc-check tidy-check migrations-check modelname-check arch-check \
+        test test-cover test-integration test-e2e test-live lint vuln \
+        run-api run-realtime run-worker build cli docker-build load
+
+env:            ## salin .env.example → .env (tidak menimpa)
+	@test -f .env || cp .env.example .env
+
+up:             ## jalankan dependency lokal
+	docker compose up -d --wait
+
+up-obs:         ## dependency + otel-collector + grafana/otel-lgtm (Grafana http://localhost:3000)
+	docker compose --profile observability up -d --wait
+
+down:
+	docker compose --profile observability down
+
+reset:          ## hapus volume (data lokal hilang)
+	docker compose --profile observability down -v
+
+migrate-up:
+	docker run --rm --network $(COMPOSE_NETWORK) -v $(CURDIR)/migrations:/migrations \
+	  $(MIGRATE_IMAGE) -path=/migrations -database "$(MIGRATE_DB_URL)" up
+
+migrate-down:   ## turun N langkah (default 1): make migrate-down N=3
+	docker run --rm --network $(COMPOSE_NETWORK) -v $(CURDIR)/migrations:/migrations \
+	  $(MIGRATE_IMAGE) -path=/migrations -database "$(MIGRATE_DB_URL)" down $(N)
+
+migrate-create: ## make migrate-create NAME=add_x
+	docker run --rm -v $(CURDIR)/migrations:/migrations -u $$(id -u):$$(id -g) \
+	  $(MIGRATE_IMAGE) create -ext sql -dir /migrations -seq -digits 6 $(NAME)
+
+seed:           ## jalankan seed/*.sql (idempoten) berurutan
+	@for f in seed/*.sql; do echo "seed $$f"; \
+	  docker compose exec -T postgres psql -U kotoki -d kotoki -v ON_ERROR_STOP=1 < $$f || exit 1; done
+
+promote-admin:  ## make promote-admin EMAIL=dev@example.test
+	docker compose exec -T postgres psql -U kotoki -d kotoki -v ON_ERROR_STOP=1 \
+	  -c "UPDATE users SET role='ADMIN' WHERE email='$(EMAIL)'"
+
+sqlc:
+	$(GO) tool sqlc generate
+
+sqlc-check: sqlc
+	git diff --exit-code -- internal/postgres/sqlcgen
+
+tidy-check:
+	$(GO) mod tidy && git diff --exit-code -- go.mod go.sum
+
+migrations-check:
+	$(GO) run ./test/tools/migcheck -dir migrations -base origin/main
+
+modelname-check:
+	$(GO) run ./test/tools/modelcheck ./internal ./cmd
+
+arch-check:     ## §2.2 aturan 5: api & worker tanpa cgo (depguard menangani impor langsung)
+	CGO_ENABLED=0 $(GO) build ./cmd/api ./cmd/worker
+	@if $(GO) list -deps ./cmd/api ./cmd/worker | grep -E 'internal/conversation/audio|hraban/opus|go-webrtcvad'; then \
+	  echo 'cmd/api atau cmd/worker bergantung pada paket cgo (§2.2 aturan 5)'; exit 1; fi
+
+test:           ## unit + contract + component, race
+	$(GO) test -race -short -count=1 ./...
+
+test-cover:
+	$(GO) test -race -short -count=1 -coverprofile=coverage.out ./...
+	$(GO) run ./test/tools/covercheck -profile coverage.out -thresholds test/tools/covercheck/thresholds.txt
+
+test-integration:
+	$(GO) test -race -count=1 -tags=integration -timeout 20m ./...
+
+test-e2e:
+	$(GO) test -race -count=1 -tags=e2e -timeout 30m ./test/e2e/...
+
+test-live:      ## butuh kunci provider di .env
+	$(GO) test -race -count=1 -tags=live -timeout 10m ./internal/provider/...
+
+lint:
+	golangci-lint run ./...
+
+vuln:
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+run-api:
+	$(GO) run ./cmd/api
+
+run-realtime:
+	$(GO) run ./cmd/realtime
+
+run-worker:      ## WORKER_HTTP_ADDR default Bab 9 (:8081) bentrok dengan realtime di host → :9092
+	WORKER_HTTP_ADDR=:9092 $(GO) run ./cmd/worker --handlers=outbox,evaluation,memory,learner,summary,sweeper,cleanup
+
+build:
+	CGO_ENABLED=0 $(GO) build -trimpath -o bin/ ./cmd/api ./cmd/worker
+	CGO_ENABLED=1 $(GO) build -trimpath -o bin/ ./cmd/realtime ./cmd/kotoki-cli
+
+cli:
+	CGO_ENABLED=1 $(GO) build -o bin/kotoki-cli ./cmd/kotoki-cli
+
+docker-build:
+	for b in api realtime worker migrate; do \
+	  docker build -f deploy/docker/$$b.Dockerfile --build-arg VERSION=$(VERSION) \
+	    --build-arg GIT_COMMIT=$(GIT_COMMIT) -t kotoki/$$b:$(VERSION) . || exit 1; done
+
+load:           ## make load ARGS="--vus 20 --hold 5m"
+	CGO_ENABLED=1 $(GO) run ./test/load/cmd/kotoki-load $(ARGS)
