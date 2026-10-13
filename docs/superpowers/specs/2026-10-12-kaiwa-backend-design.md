@@ -105,7 +105,7 @@ kotoki-backend/
 │   ├── wsgateway/          # handshake WebSocket (ticket, Origin, kapasitas) → conversation.Manager
 │   ├── jobs/               # scheduler + advisory lock + job terjadwal (memanggil Service fitur)
 │   │   ── PENDUKUNG ──
-│   ├── platform/           # subpaket: config/, log/, otel/, metrics/, health/, clock/, idgen/, ratelimit/, buildinfo/, errs/ (kode error domain lintas fitur)
+│   ├── platform/           # subpaket: config/, logging/, otel/, metrics/, health/, clock/, idgen/, ratelimit/, buildinfo/, errs/ (kode error domain lintas fitur)
 │   ├── kaiwaclient/        # library klien uji (REST + WS): kaiwa-cli, test/e2e, test/load
 │   │   └── audio/          # encode/decode Opus klien (membungkus conversation/audio, cgo)
 │   └── testutil/           # helper test, testcontainers

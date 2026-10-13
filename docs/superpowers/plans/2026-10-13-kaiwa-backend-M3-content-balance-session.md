@@ -4,10 +4,10 @@
 
 **Goal:** Sesi percakapan dapat dibuat (konten ter-resolve, saldo ter-reservasi secara idempotent), dijalankan lewat `session.RuntimeService` (tanpa runtime nyata), diakhiri/diselesaikan dengan settlement yang benar, dan dibaca lewat REST, dengan ledger yang lolos rekonsiliasi §4.8.
 **Architecture:** Tiga paket fitur baru/dilengkapi: `content` (→ `prompt`), `balance`, `session` (→ `balance`, `content`, `events`); semua akses DB lewat port yang didefinisikan di sisi pemakai dan diimplementasikan `postgres` (`postgres.Store` satu `*Tx`). `session.Service` satu-satunya penulis `sessions.status`; transisi yang menyentuh saldo memakai satu transaksi dengan urutan lock §4.6.0. Redis hanya lewat port kecil (`HeartbeatReader`, `ControlPublisher`) agar paket fitur bebas `go-redis`.
-**Tech Stack:** Go 1.25, chi, pgx + sqlc, testify, testcontainers (postgres, redis), `text/template` (stdlib), `github.com/santhosh-tekuri/jsonschema/v6` (disebut spec §6.10.1 sebagai [builder call]; tambahkan ke register D-003 sebelum `go get`).
-**Spec:** docs/superpowers/specs/2026-10-12-kaiwa-backend-design.md — Bab 4 (§4.2, §4.4–§4.9), Bab 5 (§5.2–§5.7, §5.8.3–§5.8.6, §5.9.3–§5.9.5, §5.10, §5.11), Bab 6 (§6.2–§6.5, §6.8.1–§6.8.3, §6.9–§6.14), §7.9.3 & §7.13.1 (signature runtime), §9.3.1 (OutboxWriter).
+**Tech Stack:** Go 1.25, chi, pgx + sqlc, testify, testcontainers (postgres, redis), `text/template` (stdlib), `github.com/santhosh-tekuri/jsonschema/v6` (sudah di allowlist D-003), `internal/platform/ratelimit` (dibuat M2; rule `admin_user`, `api_user_default`, `session_create_user`, `ticket_user` dipasang di router).
+**Spec:** docs/superpowers/specs/2026-10-12-kaiwa-backend-design.md — Bab 4 (§4.2, §4.4–§4.9), Bab 5 (§5.2–§5.7, §5.8.3–§5.8.6, §5.9.3–§5.9.5, §5.10, §5.11), Bab 6 (§6.2–§6.5, §6.8.3 (seed), §6.9–§6.14), §7.9.3 & §7.13.1 (signature runtime), §9.3.1 (OutboxWriter).
 **Master plan:** docs/superpowers/plans/2026-10-13-kaiwa-backend-00-master.md (Global Constraints di sana berlaku untuk semua task)
-**Depends on:** M1 (semua migration/sqlc/`postgres.Store`/`repotest`, `errs`, `clock`, `idgen`, `config`), M2 (`auth.Principal`, `auth.TicketService`, `balance.Store/Tx` + `Repository` bagian grant/adjust + `OpenAccount`, `httpapi` `Handle/HandleNoBody/Page/Request/router.go/deps.go/errors.go`, `admin_audit_logs` writer, ticket store Redis).
+**Depends on:** M2, M4. M1 (semua migration/sqlc/`postgres.Store`/`repotest`, `errs`, `clock`, `idgen`, `config`), M2 (`auth.Principal`, `auth.TicketService`, `balance.Store/Tx` + `Repository` bagian grant/adjust + `OpenAccount`, `httpapi` `Handle/HandleNoBody/Page/Request/router.go/deps.go/errors.go`, `admin_audit_logs` writer, ticket store Redis, `internal/platform/ratelimit`); M4 (`prompt.Render/Template/Rendered/Params/RegisterFixtures/Fixtures/PromptData/OpeningPromptData/VocabHint/LearnerContext/ConversationV1/OpeningV1/CoreRules/OutputContract/FixtureMinimal/FixtureMaximal`; M3 **tidak** membuat file apa pun di `internal/prompt`).
 
 ## Global Constraints
 
@@ -24,11 +24,11 @@
 
 ## Review Focus
 
-1. **Klik ganda / retry `POST /sessions`** (master #1): satu sesi + satu `RESERVE`, replay = sesi sama, key sama payload beda → 409 `IDEMPOTENCY_KEY_REUSED`, key berbeda saat sesi terbuka → 409 `SESSION_ALREADY_OPEN` — Task 17 (unit + 20-goroutine), Task 24.
-2. **Pod mati / client putus saat sesi berjalan** (master #4 bagian M3): tagihan berhenti di `ENDING`, finalize tepat sekali, tidak ada reservasi yatim, `session.completed` sekali — Task 19 (race Finalize), Task 22 (sweeper), Task 24 (rekonsiliasi).
-3. **Runtime lama tidak boleh menulis setelah takeover/terminal** (implisit §7.9.3, tidak ada test lintas-bab): fence — Task 16 (tulis turn 0 baris), Task 19.
-4. **Saldo tidak pernah bocor** (§4.4 I1–I10): R1–R5 = 0 baris setelah setiap skenario integration — helper Task 5, dipakai Task 17–24.
-5. **Versi konten immutable & tepat satu `PUBLISHED`; katalog tidak menampilkan entitas yang gagal resolver** — Task 11 (publish konkuren), Task 13.
+1. **Klik ganda / retry `POST /sessions`** (master #1): satu sesi + satu `RESERVE`, replay = sesi sama, key sama payload beda → 409 `IDEMPOTENCY_KEY_REUSED`, key berbeda saat sesi terbuka → 409 `SESSION_ALREADY_OPEN` — Task 16 (unit + 20-goroutine), Task 23.
+2. **Pod mati / client putus saat sesi berjalan** (master #4 bagian M3): tagihan berhenti di `ENDING`, finalize tepat sekali, tidak ada reservasi yatim, `session.completed` sekali — Task 18 (race Finalize), Task 21 (sweeper), Task 23 (rekonsiliasi).
+3. **Runtime lama tidak boleh menulis setelah takeover/terminal** (implisit §7.9.3, tidak ada test lintas-bab): fence — Task 15 (tulis turn 0 baris), Task 18.
+4. **Saldo tidak pernah bocor** (§4.4 I1–I10): R1–R5 = 0 baris setelah setiap skenario integration — helper Task 5, dipakai Task 16–23.
+5. **Versi konten immutable & tepat satu `PUBLISHED`; katalog tidak menampilkan entitas yang gagal resolver** — Task 10 (publish konkuren), Task 12.
 
 ## File Structure
 
@@ -38,13 +38,13 @@
 | `internal/httpapi/errors.go` (modifikasi) | Map kode → HTTP status |
 | `internal/balance/charge.go` | `BillableEnd`, `ComputeCharge` (pure) |
 | `internal/balance/balance.go`, `service.go`, `reconcile.go` | Reservation/Movement, `Reserve/ReleaseReservation/SettleReservation`, `GetBalance/ListTransactions`, `Reconcile` |
-| `internal/prompt/types.go`, `render.go`, `funcs.go`, `fixtures.go` | Tipe & mekanisme §6.8 yang dibutuhkan validator (lihat Task 6) |
 | `internal/content/{types,character,expression,ports,repository,resolver,config_loader,cache,validator,catalog,admin}.go` | Domain konten, resolver §6.9, validator §6.10, katalog publik, `AdminService` |
 | `internal/events/outbox.go`, `types.go` | `Event`, `OutboxWriter`, `NewSessionCompleted` (M6 menambah publisher) |
 | `internal/session/{session,tx,transition,service,lifecycle,runtime,query,sweeper,guard}.go` | Domain, state machine, `Service`, `RuntimeService`, `QueryService`, `Sweeper` |
 | `internal/postgres/{balance_repo,content_repo,session_repo,session_turn_repo,session_event_repo,outbox_writer}.go` + `db/queries/{balance,content,sessions,session_turns,session_events,outbox}.sql` | Implementasi port |
 | `internal/redisstore/{heartbeat_reader,session_control}.go` | `session.HeartbeatReader`, `session.ControlPublisher` |
-| `internal/httpapi/{content,admin_content,session,balance}_{routes,handler,dto}.go` | REST grup User/Admin |
+| `internal/httpapi/{content,admin_content,session,balance}_{routes,handler,dto}.go`, `admin_session_{handler,dto}.go` | REST grup User/Admin |
+| `internal/session/admin_query.go`, `internal/postgres/session_admin_repo.go` | Query admin sesi/turns/events (Task 24) |
 | `internal/testutil/fakes/*.go`, `internal/testutil/repotest/{balance,session}.go`, `internal/testutil/reconcile.go` | Fake tulisan tangan, contract suite, `AssertReconciled` |
 | `seed/0010…0070_*.sql`, `Makefile` (target `seed`) | Seed konten |
 | `test/integration/m3_*_test.go` | Skenario lifecycle lintas paket (`//go:build integration`) |
@@ -151,24 +151,7 @@ func (s *Service) Reconcile(ctx context.Context) ([]Violation, error)
 - [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS; `go test ./internal/balance/... -race` tetap PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(postgres): balance repository, reconcile queries, AssertReconciled helper"`
 
-### Task 6: Mekanisme prompt yang dibutuhkan validator (§6.8)
-
-> Catatan koordinasi: spec §6.8 menyebut mekanisme render/FuncMap/fixture "dimiliki Bab 6", master memberi `prompt.Render` ke M4. Task ini membuat **hanya** yang dibutuhkan M3. Bila `internal/prompt/render.go` sudah ada (M4 lebih dulu), lewati Step 3 file yang sudah ada dan jalankan test saja; bila belum, M4 MUST memakai file ini dan hanya menambah `EstimateTokens`, `Budget`, `SentenceParser`, `core.go`, `phrases.go`.
-
-**Files:**
-- Create: `internal/prompt/types.go`, `funcs.go`, `render.go`, `fixtures.go`
-- Test: `internal/prompt/render_test.go`
-
-**Interfaces:**
-- Produces (persis §6.8.1–§6.8.2): `Template{Key string; Version int; System, User string; Params Params; OutputSchema json.RawMessage}`, `Params{Temperature *float64; MaxOutputTokens *int; TopP *float64; Seed *int64}` (tag `omitempty`), `Rendered{System, User string}`, `VocabHint`, `LearnerContext`, `PromptData` + `type OpeningPromptData = PromptData`, `func Render(t Template, data any) (Rendered, error)`, `func RegisterFixtures(key string, fn func() []any)`, `func Fixtures(key string) []any`, `FuncMap` (`join`, `bullets`, `quote`, `vocab`).
-
-- [ ] **Step 1: Write the failing test** — `TestRender_MissingKeyErrors` (`{{.Nope}}` → error); `TestRender_SnakeCaseFails` (`{{.character_name}}`); `TestFuncMap` (`bullets []string{"a","b"}` → `"- a\n- b"`, `quote "私"` → `「私」`, `vocab` → `"- 経験（けいけん）: experience"`, `join`); `TestRender_UserEmptyWhenNoUserTemplate`; `TestConversationFixtures` (`Fixtures("CONVERSATION")` memuat tepat 2 instance bertipe `PromptData`: minimal dan maksimal; render template seed §6.8.3 dengan keduanya sukses, hasil maksimal ≤ 12.000 karakter — template diambil dari `seed/0070_prompts.sql` di Task 12, jadi test ini memakai string template kecil lokal dan test penuh dipindah ke Task 12).
-- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/prompt/... -race` → FAIL (undefined).
-- [ ] **Step 3: Implement** — `text/template` dengan `Option("missingkey=error")`; fixtures `CONVERSATION`/`OPENING` terdaftar di `init()` milik paket `prompt`; `RegisterFixtures` dengan key sama dua kali → panic (programmer error).
-- [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS.
-- [ ] **Step 5: Commit** — `git commit -m "feat(prompt): template types, render, funcmap, fixtures for content validation"`
-
-### Task 7: Domain konten, `EffectiveFormality`, `SpeakingRate`, katalog ekspresi
+### Task 6: Domain konten, `EffectiveFormality`, `SpeakingRate`, katalog ekspresi
 
 **Files:**
 - Create: `internal/content/types.go`, `character.go`, `expression.go`
@@ -183,14 +166,14 @@ func (s *Service) Reconcile(ctx context.Context) ([]Violation, error)
 - [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS; `make arch-check` (depguard) bersih.
 - [ ] **Step 5: Commit** — `git commit -m "feat(content): domain types, effective formality, speaking rate, expression catalog"`
 
-### Task 8: `content.Validator` (§6.10)
+### Task 7: `content.Validator` (§6.10)
 
 **Files:**
 - Create: `internal/content/validator.go`
 - Test: `internal/content/validator_test.go`
 
 **Interfaces:**
-- Consumes: `prompt.Render`, `prompt.Fixtures`, `content.Repository` (Task 9 mendefinisikan; validator hanya memakai subset `ValidatorRepo` yang didefinisikan di file ini: `GetCharacterDefaults(ctx, versionID) (CharacterRefs, error)` dst. — fake di test).
+- Consumes (M4): `prompt.Template`, `prompt.Render`, `prompt.Fixtures(key) []any`; M3: `content.Repository` (Task 8 mendefinisikan; validator hanya memakai subset `ValidatorRepo` yang didefinisikan di file ini: `GetCharacterDefaults(ctx, versionID) (CharacterRefs, error)` dst. — fake di test).
 - Produces: `type Issue struct{Severity, Entity, Field, Rule, Message string}`; `type Validator interface{ValidateDraft(ctx, Family, any) []Issue; ValidatePublish(ctx, Family, uuid.UUID) []Issue; ValidateCatalog(ctx) []Issue}`; `func NewValidator(repo ValidatorRepo, cfg ValidatorConfig) Validator` dengan `ValidatorConfig{PrimaryTTS string; ProviderModeReal bool}`.
 
 - [ ] **Step 1: Write the failing test** — table-driven per family (satu kasus per aturan §6.10.1; `Rule` string = nama dari plan, ditulis di test): scenario (`evaluation_focus` 4 item → `max_items`; skill tak dikenal → `invalid_skill`; `opening_line` tanpa karakter Jepang → `japanese_required`; `opening_line` memuat `<e:` → `tag_not_allowed`; `recommended_level_min > max` → `range`; vocab `term_ja` ganda → `duplicate`); character (dialect KANSAI + voice accent KANTO → `dialect_accent_mismatch` ERROR; tier≠quality_tier → `tier_mismatch`; tanpa voice_provider_config primary → `missing_primary_voice_config`; placeholder + real → ERROR, fake → WARNING); style (`behavior_flags` kurang 1 key → `required`; `correction_policy` ≠ NONE); expression (`allowed` tanpa `neutral`; `expression_limits` key `neutral`; `tts_mappings` param tak dikenal); prompt — tabel §6.14 #8 lengkap: `user_template` NULL untuk SUMMARY/EVALUATION/MEMORY_EXTRACTION → `required`; `user_template`/`output_schema` terisi untuk CONVERSATION/OPENING → `must_be_null`; `output_schema` NULL untuk EVALUATION/MEMORY_EXTRACTION; schema invalid → `invalid_json_schema`; `{{.snake_case}}` → `template_render`; `{{.CoreRules}}` dua kali → `placeholder_count`; key tanpa fixture → `missing_fixture`; `llm_params` key `model` → ERROR; `temperature` absen → WARNING.
@@ -199,14 +182,14 @@ func (s *Service) Reconcile(ctx context.Context) ([]Violation, error)
 - [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(content): content validator with prompt dry-run rules"`
 
-### Task 9: `Repository` konten, cache, `Resolver` (§6.9), `SessionConfigLoader`
+### Task 8: `Repository` konten, cache, `Resolver` (§6.9), `SessionConfigLoader`
 
 **Files:**
 - Create: `internal/content/ports.go`, `repository.go`, `cache.go`, `resolver.go`, `config_loader.go`, `internal/testutil/fakes/content_repo.go`
 - Test: `internal/content/resolver_test.go`, `internal/content/cache_test.go`
 
 **Interfaces:**
-- Consumes: tipe Task 7, `clock.Clock`.
+- Consumes: tipe Task 6, `clock.Clock`.
 - Produces (§6.5 persis): `ResolveInput`, `ResolvedConfig`, `Resolver`, `SessionConfig`, `SessionConfigLoader`; `type Repository interface` dengan method baca: `GetTopic`, `GetScenario`, `GetPublishedScenarioVersion`, `GetCharacter`, `GetPublishedCharacterVersion`, `GetConversationStyle`, `GetPublishedConversationStyleVersion`, `GetExpressionProfile`, `GetPublishedExpressionProfileVersion`, `GetDefaultVoiceProfile(characterID)`, `GetVoiceProviderConfig(voiceProfileID, provider)`, `GetPublishedPromptVersion(key)`, plus by-ID `GetScenarioVersion/GetCharacterVersion/…/GetPromptVersion/GetTopicByID/GetVoiceProfile` dan `ListVoiceConfigs(voiceProfileID)`; `type ResolverConfig struct{TTSMode, TTSPrimary, TTSFallback string; ProviderProfiles []string}`; `type Observer interface{ResolveError(code string); VoiceFallbackMissing(voiceProfile string)}`; `func NewCachedRepository(r Repository, ttl time.Duration, c clock.Clock) Repository`; `func NewResolver(r Repository, cfg ResolverConfig, obs Observer) Resolver`; `func NewSessionConfigLoader(r Repository) SessionConfigLoader`.
 
 - [ ] **Step 1: Write the failing test** — `TestResolve` table-driven, satu kasus per baris pseudocode §6.9 dengan kode yang diharapkan: topic nil/non-ACTIVE → `TOPIC_NOT_AVAILABLE`; scenario nil/non-ACTIVE/tanpa PUBLISHED → `SCENARIO_NOT_AVAILABLE`; topic beda → `SCENARIO_TOPIC_MISMATCH`; character nil/non-ACTIVE/tanpa PUBLISHED → `CHARACTER_NOT_AVAILABLE`; style override rusak → `CONVERSATION_STYLE_NOT_AVAILABLE` tetapi default karakter rusak → `CONTENT_MISCONFIGURED`; hal sama untuk expression; voice nil/non-ACTIVE, dialek tak cocok, tier tak cocok → `CONTENT_MISCONFIGURED`; mode real: config primary nil/DISABLED/`PLACEHOLDER_` → `CONTENT_MISCONFIGURED`; mode fake: tanpa baris vendor tetap sukses; fallback hilang → sukses + `Observer.VoiceFallbackMissing`; tanpa prompt CONVERSATION → `CONTENT_MISCONFIGURED`; `ProviderProfiles` tidak memuat tier → `CONTENT_MISCONFIGURED`; `AI_FIRST` tanpa OPENING PUBLISHED → **sukses**. Urutan error: input dengan topic DAN scenario rusak mengembalikan `TOPIC_NOT_AVAILABLE`. `TestCache`: dua baca dalam 30 s → 1 hit ke repo; setelah fake clock +31 s → 2; method by-ID tidak kedaluwarsa. `TestLoadIgnoresStatus`: version `RETIRED` + induk `DISABLED` tetap dimuat.
@@ -215,14 +198,14 @@ func (s *Service) Reconcile(ctx context.Context) ([]Violation, error)
 - [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(content): repository port, cache, resolver and session config loader"`
 
-### Task 10: Repository konten di Postgres (integration)
+### Task 9: Repository konten di Postgres (integration)
 
 **Files:**
 - Create: `internal/postgres/content_repo.go`, `db/queries/content.sql` (termasuk `GetUserVoiceExposure` §6.11 dan `ListPublic*` §6.12)
 - Test: `internal/postgres/content_repo_integration_test.go` (`//go:build integration`)
 
 **Interfaces:**
-- Consumes: `content.Repository` (Task 9). Produces: `postgres.NewContentRepo(pool) content.Repository` + `(*postgres.Tx).Content() content.TxRepository` (tambah method tulis: `InsertDraft`, `LockParent`, `LockVersion`, `RetirePublished`, `SetPublished`, `DeleteDraft`, `SetEntityStatus`, `NextVersionNumber`).
+- Consumes: `content.Repository` (Task 8). Produces: `postgres.NewContentRepo(pool) content.Repository` + `(*postgres.Tx).Content() content.TxRepository` (tambah method tulis: `InsertDraft`, `LockParent`, `LockVersion`, `RetirePublished`, `SetPublished`, `DeleteDraft`, `SetEntityStatus`, `NextVersionNumber`).
 
 - [ ] **Step 1: Write the failing test** — setelah migrate + seed fixture kecil lewat SQL: `TestGetPublished_ReturnsOnlyPublished`; `TestLoadByIDIgnoresStatus`; `TestPublishTwiceSameParent_UniqueViolation` (insert langsung dua PUBLISHED → error `23505`); `TestVersionImmutable` (UPDATE `situation` → error trigger `content_version_guard`; DELETE PUBLISHED → error); `TestNextVersionNumber_UnderParentLock` (dua tx paralel menunggu lock → nomor 2 dan 3); `TestGetUserVoiceExposure`.
 - [ ] **Step 2: Run it to verify it fails** — `go test -tags integration ./internal/postgres/... -race -run TestContentRepo` → FAIL.
@@ -230,7 +213,7 @@ func (s *Service) Reconcile(ctx context.Context) ([]Violation, error)
 - [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(postgres): content repository and sqlc queries"`
 
-### Task 11: `CatalogService` & `AdminService` konten
+### Task 10: `CatalogService` & `AdminService` konten
 
 **Files:**
 - Create: `internal/content/catalog.go`, `admin.go`, `tx.go`
@@ -256,7 +239,7 @@ func (s *AdminService) Retire(...) (RetireResult, error); DeleteDraft(...) error
 - [ ] **Step 4: Run tests to verify they pass** — unit PASS; `go test -tags integration ./test/integration -race -run TestPublishConcurrent -count=20` PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(content): catalog and admin lifecycle services"`
 
-### Task 12: Seed SQL, `make seed`, `TestSeedContentIsValid`
+### Task 11: Seed SQL, `make seed`, `TestSeedContentIsValid`
 
 **Files:**
 - Create: `seed/0010_topics.sql`, `0020_conversation_styles.sql`, `0030_expression_profiles.sql`, `0040_voice_profiles.sql`, `0050_characters.sql`, `0060_scenarios.sql`, `0070_prompts.sql`
@@ -264,15 +247,15 @@ func (s *AdminService) Retire(...) (RetireResult, error); DeleteDraft(...) error
 - Test: `test/integration/m3_seed_test.go` (`integration`)
 
 **Interfaces:**
-- Consumes: validator (Task 8), resolver (Task 9), repo (Task 10), `prompt.Render`. Produces: konten seed §6.13.4 (5 topic, 13 scenario, 3 style, 3 expression profile, 4 voice profile × 3 vendor config, 4 karakter HARUKA/KENJI/AOI/RIKU, 5 `prompt_configs` + version 1 `PUBLISHED` untuk `CONVERSATION` dan `OPENING`).
+- Consumes: validator (Task 7), resolver (Task 8), repo (Task 9), `prompt.Render`/`prompt.Fixtures`/`prompt.ConversationV1`/`prompt.OpeningV1` (M4). Produces: konten seed §6.13.4 (5 topic, 13 scenario, 3 style, 3 expression profile, 4 voice profile × 3 vendor config, 4 karakter HARUKA/KENJI/AOI/RIKU, 5 `prompt_configs` + version 1 `PUBLISHED` untuk `CONVERSATION` dan `OPENING`).
 
-- [ ] **Step 1: Write the failing test** — `TestSeedContentIsValid`: migrate + jalankan semua `seed/*.sql` (psql `ON_ERROR_STOP`) dengan `PROVIDER_MODE=fake` → `ValidateCatalog` tanpa ERROR; `TestSeedIdempotent` (jalankan 2× → jumlah baris tiap tabel konten identik); `TestSeedCounts` (5/13/3/3/4/12/4/5 + 2 prompt versions); `TestSeedResolveHarukaBackend`: `Resolve{Topic JOB_INTERVIEW, Scenario BACKEND_ENGINEER_INTERVIEW (01920000-0002-7000-8000-000000000003), Character HARUKA (…000a…01)}` → `ProviderProfile=="PREMIUM"`, style `FRIENDLY_POLITE`, `Dialect STANDARD`, `ScenarioVersion.FormalityOverride == KEIGO`; `TestSeedPromptsRender`: render `CONVERSATION` & `OPENING` seed terhadap kedua fixture (minimal: tanpa kalimat nama learner; maksimal ≤ 12.000 char); `TestSeedFullNameNeverRendered` (fixture dengan `Learner.DisplayName=""` dan string `"FULLNAME-SENTINEL"` tidak ada di output — struct tidak punya field full name).
+- [ ] **Step 1: Write the failing test** — `TestSeedContentIsValid`: migrate + jalankan semua `seed/*.sql` (psql `ON_ERROR_STOP`) dengan `PROVIDER_MODE=fake` → `ValidateCatalog` tanpa ERROR; `TestSeedIdempotent` (jalankan 2× → jumlah baris tiap tabel konten identik); `TestSeedCounts` (5/13/3/3/4/12/4/5 + 2 prompt versions); `TestSeedResolveHarukaBackend`: `Resolve{Topic JOB_INTERVIEW, Scenario BACKEND_ENGINEER_INTERVIEW (01920000-0002-7000-8000-000000000003), Character HARUKA (…000a…01)}` → `ProviderProfile=="PREMIUM"`, style `FRIENDLY_POLITE`, `Dialect STANDARD`, `ScenarioVersion.FormalityOverride == KEIGO`; `TestSeedPromptsRender`: render `CONVERSATION` & `OPENING` seed terhadap kedua fixture (minimal: tanpa kalimat nama learner; maksimal ≤ 12.000 char); `TestSeedPromptsMatchM4Constants` (`system_template` seed CONVERSATION/OPENING identik byte-per-byte dengan `prompt.ConversationV1.System`/`prompt.OpeningV1.System`, `llm_params` `{temperature 0.8, max_output_tokens 320}` / `{0.7, 120}`); `TestSeedFullNameNeverRendered` (fixture dengan `Learner.DisplayName=""` dan string `"FULLNAME-SENTINEL"` tidak ada di output — struct tidak punya field full name).
 - [ ] **Step 2: Run it to verify it fails** — `go test -tags integration ./test/integration -race -run 'TestSeed'` → FAIL (file seed belum ada).
-- [ ] **Step 3: Implement** — salin contoh HARUKA/voice/BACKEND_ENGINEER_INTERVIEW dari §6.13.5 apa adanya; sisanya mengikuti tabel §6.13.4 dengan ID literal skema §6.13.2; `0070_prompts.sql` memuat 5 baris `prompt_configs` + version `CONVERSATION`/`OPENING` dari §6.8.3 (dollar-quoting `$tpl$`); versi SUMMARY/EVALUATION/MEMORY_EXTRACTION ditambahkan M7/M8 ke file ini. `Makefile`: target `seed` persis §6.13.2.
+- [ ] **Step 3: Implement** — salin contoh HARUKA/voice/BACKEND_ENGINEER_INTERVIEW dari §6.13.5 apa adanya; sisanya mengikuti tabel §6.13.4 dengan ID literal skema §6.13.2; `0070_prompts.sql` memuat 5 baris `prompt_configs` + version `CONVERSATION`/`OPENING` dari konstanta M4 `prompt.ConversationV1/OpeningV1` (salin teks persis; bila ada beda dengan §6.8.3 — mis. frasa rujukan silang "(Bab 11 §11.7)" dibuang M4 — konstanta M4 menang; dollar-quoting `$tpl$`); versi SUMMARY/EVALUATION/MEMORY_EXTRACTION ditambahkan M7/M8 ke file ini. `Makefile`: target `seed` persis §6.13.2.
 - [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS; `make seed` dua kali di DB lokal → sukses.
 - [ ] **Step 5: Commit** — `git commit -m "feat(seed): content seed, make seed target, seed validity tests"`
 
-### Task 13: REST konten (katalog publik + admin content) & `TestRouteTable` bagian konten
+### Task 12: REST konten (katalog publik + admin content) & `TestRouteTable` bagian konten
 
 **Files:**
 - Create: `internal/httpapi/content_{routes,handler,dto}.go`, `admin_content_{routes,handler,dto}.go`, `testdata/api/rest/content/*.json`
@@ -289,7 +272,7 @@ func (s *AdminService) Retire(...) (RetireResult, error); DeleteDraft(...) error
 - [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(httpapi): content catalog and admin content endpoints"`
 
-### Task 14: Domain `session` — status, transisi, tipe, port
+### Task 13: Domain `session` — status, transisi, tipe, port
 
 **Files:**
 - Create: `internal/session/session.go`, `tx.go`, `transition.go`
@@ -305,7 +288,7 @@ func (s *AdminService) Retire(...) (RetireResult, error); DeleteDraft(...) error
 - [ ] **Step 4: Run tests to verify they pass** — PASS; `go build ./...`.
 - [ ] **Step 5: Commit** — `git commit -m "feat(session): domain types, state machine, ports"`
 
-### Task 15: Paket `events` + outbox writer minimal
+### Task 14: Paket `events` + outbox writer minimal
 
 **Files:**
 - Create: `internal/events/outbox.go`, `internal/events/types.go`, `internal/postgres/outbox_writer.go`, `db/queries/outbox.sql`, `internal/testutil/fakes/outbox.go`
@@ -321,29 +304,29 @@ func (s *AdminService) Retire(...) (RetireResult, error); DeleteDraft(...) error
 - [ ] **Step 4: Run tests to verify they pass** — kedua perintah → PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(events): outbox port, session.completed builder, postgres writer"`
 
-### Task 16: Repository session/turn/event di Postgres + fencing (integration)
+### Task 15: Repository session/turn/event di Postgres + fencing (integration)
 
 **Files:**
 - Create: `internal/postgres/session_repo.go`, `session_turn_repo.go`, `session_event_repo.go`, `db/queries/{sessions,session_turns,session_events}.sql`, `internal/testutil/repotest/session.go`
 - Test: `internal/postgres/session_repo_integration_test.go` (`integration`)
 
 **Interfaces:**
-- Consumes: port Task 14. Produces: `postgres.NewSessionRepo(pool)` (non-tx reader) dan `(*Tx).Sessions()/Turns()/Events()`; `Store.SessionStore() session.Store`; `func RunSessionRepoSuite(t, mk)`.
+- Consumes: port Task 13. Produces: `postgres.NewSessionRepo(pool)` (non-tx reader) dan `(*Tx).Sessions()/Turns()/Events()`; `Store.SessionStore() session.Store`; `func RunSessionRepoSuite(t, mk)`.
 
 - [ ] **Step 1: Write the failing test** — (a) CHECK §5.11: `COMPLETED` dengan `PROVIDER_FAILURE` ditolak; `ACTIVE` tanpa `started_at` ditolak; `opening_prompt_version_id` pada `USER_FIRST` ditolak; sesi terbuka kedua ditolak (`ux_sessions_one_open_per_user` → `session.ErrAlreadyOpen`); `chk_turn_status` menerima NULL; `handoff_at < started_at` ditolak; (b) partisi: `session_turns_pYYYYMM`/`session_events_pYYYYMM` ada untuk bulan berjalan+3; insert `created_at` bulan depan masuk partisi benar; di luar rentang gagal; tidak ada FK menunjuk ke keduanya (`pg_constraint`); `EXPLAIN` turns per sesi dengan batas `created_at` hanya menyentuh partisi relevan; (c) fence: `Turns().Insert(fence=1)` sukses saat `runtime_fence=1`, `ClaimRuntime` kedua (fence 2) → `Insert(fence=1)` mengembalikan `ErrFenceLost` (0 baris) dan `Events().AppendFenced` sama; status terminal → `ErrFenceLost`; (d) `Claim` menaikkan `runtime_fence` tanpa menaikkan `version` dan me-NULL `handoff_at`; (e) `AddDisconnected` SQL §5.6.5: n=12 → 12; episode melewati `expires_at` 5 s → `n−5`; fence salah → `ErrFenceLost`; (f) `FailInProgress` mengubah semua `status IS NULL` menjadi `FAILED`.
 - [ ] **Step 2: Run it to verify it fails** — `go test -tags integration ./internal/postgres/... -race -run TestSessionRepo` → FAIL.
-- [ ] **Step 3: Implement** — query fenced persis pola §7.9.3 (`INSERT … SELECT … WHERE EXISTS`); UPDATE turn memakai `WHERE id=$1 AND created_at=$2 AND status IS NULL`; query turns per sesi selalu membawa batas `created_at`; translasi `23505` pada dua index unik ke `ErrAlreadyOpen` / `ErrDuplicateIdempotency` (sentinel baru di `session`, dipakai Task 17). Perbaikan DDL (jika ditemukan celah) dilakukan di migration M1 yang bersangkutan.
+- [ ] **Step 3: Implement** — query fenced persis pola §7.9.3 (`INSERT … SELECT … WHERE EXISTS`); UPDATE turn memakai `WHERE id=$1 AND created_at=$2 AND status IS NULL`; query turns per sesi selalu membawa batas `created_at`; translasi `23505` pada dua index unik ke `ErrAlreadyOpen` / `ErrDuplicateIdempotency` (sentinel baru di `session`, dipakai Task 16). Perbaikan DDL (jika ditemukan celah) dilakukan di migration M1 yang bersangkutan.
 - [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(postgres): session, turn, event repositories with fencing"`
 
-### Task 17: `session.Service.Create` (idempotency, satu sesi terbuka, reservasi)
+### Task 16: `session.Service.Create` (idempotency, satu sesi terbuka, reservasi)
 
 **Files:**
 - Create: `internal/session/service.go`, `internal/session/create.go`, `internal/testutil/fakes/{session_repo,adaptive,user_gate}.go`
 - Test: `internal/session/create_test.go`, `test/integration/m3_create_test.go` (`integration`)
 
 **Interfaces:**
-- Consumes: Task 3 (`Reserve`), Task 9 (`Resolver`), port Task 14.
+- Consumes: Task 3 (`Reserve`), Task 8 (`Resolver`), port Task 13.
 - Produces: `type Deps struct{Store Store; Reader Repository; Balance *balance.Service; Resolver content.Resolver; Adaptive AdaptiveProvider; Users UserGate; OpeningPrompts OpeningPromptSource; Control ControlPublisher; Clock clock.Clock; IDs idgen.Generator; Log *slog.Logger; TermsVersion string; Producer func(Fence) string}`; `func NewService(d Deps) *Service`; `CreateSessionInput`, `CreateSessionResult{Session; Replayed bool}` (§5.2); `func (s *Service) Create(ctx, in CreateSessionInput) (CreateSessionResult, error)`; `func HashCreateRequest(in CreateSessionInput) []byte`.
 
 - [ ] **Step 1: Write the failing test** — unit (fakes): `TestCreate_HappyPath` (status `RESERVED`, reservasi 900, event `SESSION_RESERVED` payload `{"duration_seconds":900,"reservation_id":…}`, `adaptive_difficulty` tersalin dari fake); `TestCreate_Replay_SameKeySamePayload` (`Replayed=true`, tetap 1 `RESERVE`); `TestCreate_KeyReused_DifferentPayload` → `IDEMPOTENCY_KEY_REUSED`; `TestCreate_SecondSessionDifferentKey_SessionAlreadyOpen` (`details.session_id`); `TestCreate_InvalidKeyFormat` (`IDEMPOTENCY_KEY_INVALID`; kosong → `_REQUIRED`); `TestCreate_BalanceInsufficient` (available 600, durasi 900 → `BALANCE_INSUFFICIENT` details `{"available_seconds":600,"requested_seconds":900}`); `TestCreate_DurationNotAllowed` (`VALIDATION_FAILED`); `TestCreate_UserSuspended` (`ACCOUNT_SUSPENDED`) dan `TestCreate_TermsStale` (`TERMS_NOT_ACCEPTED`, `details.current_version`) — keduanya dicek **sebelum** resolve; `TestCreate_ResolveErrorPropagates` (`SCENARIO_TOPIC_MISMATCH` apa adanya); `TestCreate_AdaptiveFailure_503` (tanpa fallback default); `TestHashCreateRequest` (deterministik; style nil ≠ style terisi; mode beda → hash beda). Integration `TestCreate_20Parallel_DifferentKeys` (available 600, durasi 300 → tepat 1 sukses, 19 `SESSION_ALREADY_OPEN`; setelah `Cancel` lagi 20 → tepat 1), `TestCreate_20Parallel_SameKey` (semua mengembalikan sesi yang sama, tepat 1 entry `RESERVE`), `TestCreate_UniqueViolationBackstop` (paksa tabrakan di INSERT → respons ditentukan ulang di luar tx); `AssertReconciled` setelah tiap test.
@@ -352,7 +335,7 @@ func (s *AdminService) Retire(...) (RetireResult, error); DeleteDraft(...) error
 - [ ] **Step 4: Run tests to verify they pass** — unit PASS; `go test -tags integration ./test/integration -race -run TestCreate` PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(session): Create with idempotency, single-open guard and reservation"`
 
-### Task 18: Jalur release — `Cancel`, `Abandon`, `CancelInTx`, `BeginStart`, `Activate`, `FailStart`
+### Task 17: Jalur release — `Cancel`, `Abandon`, `CancelInTx`, `BeginStart`, `Activate`, `FailStart`
 
 **Files:**
 - Create: `internal/session/lifecycle.go` (bagian release/start), `internal/session/control.go`
@@ -367,7 +350,7 @@ func (s *AdminService) Retire(...) (RetireResult, error); DeleteDraft(...) error
 - [ ] **Step 4: Run tests to verify they pass** — unit PASS; `go test -tags integration ./test/integration -race -run 'TestCancelVsBeginStart|TestCancelInTx'` PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(session): cancel, abandon, start, activate and fail-start transitions"`
 
-### Task 19: Transisi runtime — `ClaimRuntime`, `AddDisconnected`, `MarkHandoff`, `BeginEnding`, `Finalize`, `FailActive`
+### Task 18: Transisi runtime — `ClaimRuntime`, `AddDisconnected`, `MarkHandoff`, `BeginEnding`, `Finalize`, `FailActive`
 
 **Files:**
 - Create: `internal/session/runtime_ops.go` (di `lifecycle.go` bila lebih ringkas)
@@ -382,7 +365,7 @@ func (s *AdminService) Retire(...) (RetireResult, error); DeleteDraft(...) error
 - [ ] **Step 4: Run tests to verify they pass** — unit PASS; `go test -tags integration ./test/integration -race -run 'TestFinalize|TestHandoff|TestTakeover' -count=3` PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(session): runtime transitions, settlement and outbox"`
 
-### Task 20: `session.RuntimeService` (fasad §7.13.1)
+### Task 19: `session.RuntimeService` (fasad §7.13.1)
 
 **Files:**
 - Create: `internal/session/runtime.go`
@@ -411,7 +394,7 @@ func (r *RuntimeService) Fail(ctx, sessionID uuid.UUID, fence int64, reason EndR
 - [ ] **Step 4: Run tests to verify they pass** — PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(session): RuntimeService facade per spec 7.13.1"`
 
-### Task 21: `session.QueryService` (Get/List/Turns + 410)
+### Task 20: `session.QueryService` (Get/List/Turns + 410)
 
 **Files:**
 - Create: `internal/session/query.go`, `internal/postgres/session_view_repo.go` (JOIN topics/scenarios/character_versions/reservations; sqlc), `db/queries/session_views.sql`
@@ -426,7 +409,7 @@ func (r *RuntimeService) Fail(ctx, sessionID uuid.UUID, fence int64, reason EndR
 - [ ] **Step 4: Run tests to verify they pass** — unit PASS; `go test -tags integration ./internal/postgres/... -race -run TestListViews` PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(session): query service for session views and transcript"`
 
-### Task 22: `session.Sweeper` (aturan a–e + guard) + adapter Redis
+### Task 21: `session.Sweeper` (aturan a–e + guard) + adapter Redis
 
 **Files:**
 - Create: `internal/session/sweeper.go`, `internal/session/guard.go`, `internal/redisstore/heartbeat_reader.go`, `internal/redisstore/session_control.go`
@@ -437,11 +420,11 @@ func (r *RuntimeService) Fail(ctx, sessionID uuid.UUID, fence int64, reason EndR
 
 - [ ] **Step 1: Write the failing test** — fake clock, tiap aturan: (a) `expires_at+14s` tidak diproses, `+16s` → `DURATION_ELAPSED`+`COMPLETED`, charge dipotong di `expires_at` (contoh 7: disconnected 20 → 280); (c) `ENDING` 59 s tidak, 61 s → Finalize; (d) `STARTING` 29 s tidak, 31 s → `FAILED` `SERVER_ERROR`, charge 0, tanpa outbox; (e) `handoff_at` 29 s tidak, 31 s → `ending_at = handoff_at`, `RECONNECT_TIMEOUT`, charge contoh 10; (b) heartbeat 10:05:00 → `FailActive(estimatedEnd=10:05:00)` contoh 9; key hilang → `now−45s` minimal `started_at`; sesi `handoff_at NOT NULL` tanpa heartbeat tidak pernah kena (b); guard massal: 30 kandidat dari 40 `ACTIVE` non-handoff → (b) dilewati; 30 sesi handoff tidak ikut hitung; 19 kandidat dari 20 → tetap diproses; `HeartbeatGuard`: Redis error → disabled; pulih 30 s → disabled, 46 s → enabled, error lagi → reset; saat reader error aturan (a)(c)(d)(e) tetap jalan; error satu sesi tidak menghentikan loop; batas 200/aturan. Integration Redis: `TestHeartbeatReader_MGet` (key ada/hilang), `TestSessionControl_Publish` (subscriber menerima JSON `status_changed`); skenario Postgres+Redis: runtime "mati" (heartbeat berhenti) → (b) menyelesaikan, `AssertReconciled`, satu outbox.
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/session/... -race -run 'TestSweeper|TestGuard'` → FAIL.
-- [ ] **Step 3: Implement** — query kandidat di `Repository` (Task 14) memakai SQL §5.6.4; aksi lewat `Service` (fence nil, actor `SWEEPER`); (e) `BeginEnding(RECONNECT_TIMEOUT,"handoff_not_resumed")` lalu `Finalize`; (b) `FailActive(est,"heartbeat_lost")`; guard tidak berbasis wall-clock (selalu `clock.Clock`).
+- [ ] **Step 3: Implement** — query kandidat di `Repository` (Task 13) memakai SQL §5.6.4; aksi lewat `Service` (fence nil, actor `SWEEPER`); (e) `BeginEnding(RECONNECT_TIMEOUT,"handoff_not_resumed")` lalu `Finalize`; (b) `FailActive(est,"heartbeat_lost")`; guard tidak berbasis wall-clock (selalu `clock.Clock`).
 - [ ] **Step 4: Run tests to verify they pass** — unit PASS; `go test -tags integration ./internal/redisstore/... ./test/integration -race -run 'TestHeartbeat|TestSessionControl|TestSweeper'` PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(session): sweeper rules a-e with heartbeat guard and redis adapters"`
 
-### Task 23: REST sesi & balance + ticket + `TestRouteTable` grup User
+### Task 22: REST sesi & balance + ticket + `TestRouteTable` grup User
 
 **Files:**
 - Create: `internal/httpapi/session_{routes,handler,dto}.go`, `balance_{routes,handler,dto}.go`, `testdata/api/rest/{sessions,balance}/*.json`
@@ -452,13 +435,13 @@ func (r *RuntimeService) Fail(ctx, sessionID uuid.UUID, fence int64, reason EndR
 - Consumes: `session.Service`, `session.QueryService`, `balance.Service`, M2 `auth.TicketService` (nama method dari M2: `Issue(ctx, principal, sessionID)`; adaptasi bila berbeda).
 - Produces: `registerSessionRoutes(user, h)` (6 route §5.8.6), `registerBalanceRoutes(user, h)` (2 route); `Deps.Session`, `Deps.SessionQuery`, `Deps.Balance`, `Deps.Tickets`; DTO `sessionResponse` (field persis §5.9.4: `topic{id,name}`, `scenario{id,name}`, `character{id,name,avatar_key}`, `remaining_seconds = max(0, ceil(expires_at − server_time))` hanya `ACTIVE`, `summary`, `server_time`), `createSessionRequest` (`Validate()`; field asing → `unknown_field`), `Location` header, `Idempotent-Replayed: true` pada replay (status 200 vs 201).
 
-- [ ] **Step 1: Write the failing test** — (a) golden JSON: `POST /sessions` 201 + `Location: /api/v1/sessions/{id}` (status `RESERVED`), replay 200 + `Idempotent-Replayed: true` + body sesi saat ini; `GET /sessions/{id}` memuat `scenario.name`, `character.avatar_key`, tanpa `title`/`avatar_url`/`adaptive_difficulty`/`runtime_fence`; list `{"data":[…],"next_cursor":…}`; turns `{"data":…}` + 410; balance & transactions (field §5.9.5, tanpa `reason`); (b) error: tanpa header → 400 `IDEMPOTENCY_KEY_REQUIRED`; body memuat `version_id` → 400 `VALIDATION_FAILED` (`unknown_field`); UUID path invalid → 404 `SESSION_NOT_FOUND`; sesi user lain → 404; `limit=101` → 400; cursor rusak → 400 `INVALID_CURSOR`; `entry_type=FOO` → 400; cancel idempotent 200 dan 409 `SESSION_NOT_CANCELLABLE`; ticket: 200 `{session_id, ticket, expires_in:30, realtime_url}` dan 409 `SESSION_NOT_CONNECTABLE`/`SESSION_START_DEADLINE_PASSED` dipetakan dari `auth.TicketService`; (c) `TestRouteTable_UserGroup`: (method, path, grup) seluruh route milik M3 = `POST|GET /sessions`, `GET /sessions/{session_id}`, `POST …/cancel`, `POST …/realtime-ticket`, `GET …/turns`, `GET /balance`, `GET /balance/transactions` + 7 route katalog (Task 13) — semua grup User; tidak ada route berlebih pada prefix tsb (evaluation/profile/me ditambahkan milik M2/M7/M8 ke tabel harapan yang sama).
+- [ ] **Step 1: Write the failing test** — (a) golden JSON: `POST /sessions` 201 + `Location: /api/v1/sessions/{id}` (status `RESERVED`), replay 200 + `Idempotent-Replayed: true` + body sesi saat ini; `GET /sessions/{id}` memuat `scenario.name`, `character.avatar_key`, tanpa `title`/`avatar_url`/`adaptive_difficulty`/`runtime_fence`; list `{"data":[…],"next_cursor":…}`; turns `{"data":…}` + 410; balance & transactions (field §5.9.5, tanpa `reason`); (b) error: tanpa header → 400 `IDEMPOTENCY_KEY_REQUIRED`; body memuat `version_id` → 400 `VALIDATION_FAILED` (`unknown_field`); UUID path invalid → 404 `SESSION_NOT_FOUND`; sesi user lain → 404; `limit=101` → 400; cursor rusak → 400 `INVALID_CURSOR`; `entry_type=FOO` → 400; cancel idempotent 200 dan 409 `SESSION_NOT_CANCELLABLE`; ticket: 200 `{session_id, ticket, expires_in:30, realtime_url}` dan 409 `SESSION_NOT_CONNECTABLE`/`SESSION_START_DEADLINE_PASSED` dipetakan dari `auth.TicketService`; (c) `TestRouteTable_UserGroup`: (method, path, grup) seluruh route milik M3 = `POST|GET /sessions`, `GET /sessions/{session_id}`, `POST …/cancel`, `POST …/realtime-ticket`, `GET …/turns`, `GET /balance`, `GET /balance/transactions` + 7 route katalog (Task 12) — semua grup User; tidak ada route berlebih pada prefix tsb (evaluation/profile/me ditambahkan milik M2/M7/M8 ke tabel harapan yang sama).
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/httpapi/... -race -run 'TestSession|TestBalance|TestRouteTable'` → FAIL.
 - [ ] **Step 3: Implement** — handler memanggil `Create` lalu `QueryService.Get` untuk DTO; rate rule `session_create_user`/`ticket_user`/`api_user_default` dipasang di `router.go` per route sesuai §5.8.5.
 - [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(httpapi): session and balance endpoints with route table test"`
 
-### Task 24: Skenario lifecycle lintas paket + wiring + rekonsiliasi akhir
+### Task 23: Skenario lifecycle lintas paket + wiring + rekonsiliasi akhir
 
 **Files:**
 - Create: `test/integration/m3_lifecycle_test.go` (`integration`)
@@ -466,13 +449,30 @@ func (r *RuntimeService) Fail(ctx, sessionID uuid.UUID, fence int64, reason EndR
 - Test: file di atas
 
 **Interfaces:**
-- Consumes: seluruh Task 1–23 melalui HTTP (httptest server dengan wiring nyata, Postgres+Redis testcontainers, fake clock, fake `AdaptiveProvider`, seed konten) dan `session.RuntimeService` langsung.
+- Consumes: seluruh Task 1–22 melalui HTTP (httptest server dengan wiring nyata, Postgres+Redis testcontainers, fake clock, fake `AdaptiveProvider`, seed konten) dan `session.RuntimeService` langsung.
 
 - [ ] **Step 1: Write the failing test** — (1) `TestLifecycle_HappyPath_AIFirst` (§5.11): register-grant saldo 1200 → `POST /sessions` (HARUKA + BACKEND_ENGINEER_INTERVIEW, 600 s) → ticket → `ClaimRuntime([RESERVED])` → `MarkStarting` (opening id terisi) → `Activate` → `BeginEnding(USER_ENDED)` pada +420,4 s → `Complete` → `COMPLETED`, `charged=421`, saldo 779/0, tepat 1 outbox `session.completed final_status=COMPLETED`, event berurutan `SESSION_RESERVED, SESSION_STARTING, SESSION_STARTED, SESSION_ENDING, SESSION_COMPLETED`; (2) `TestLifecycle_OpeningFallback` (hapus/retire OPENING → `STARTING`, `opening_prompt_version_id NULL`); (3) `TestLifecycle_ProviderFailure` (`BeginEnding(PROVIDER_FAILURE)` pada 45 s → `Fail` → `FAILED`, charge 0, outbox `FAILED`; `STARTING→FAILED` tanpa outbox); (4) `TestLifecycle_DoubleClick` (Review Focus 1 lewat HTTP: 2× POST kunci sama paralel → 201 + 200 replay, sesi sama, 1 `RESERVE`; kunci sama + `duration_seconds` beda → 409 `IDEMPOTENCY_KEY_REUSED`; kunci berbeda → 409 `SESSION_ALREADY_OPEN`); (5) `TestLifecycle_PodDies_SweeperSettlesOnce` (ACTIVE tanpa heartbeat → sweeper (b); `session.completed` sekali; runtime lama `Complete` → idempotent/`ErrFenceLost`); (6) `TestLifecycle_AbandonedReservation` (deadline +5m → `Abandon` → saldo kembali); (7) `TestLifecycle_TranscriptAccess` (turns 200 saat `ACTIVE`, 410 setelah 181 hari); (8) `TestNoOrphanReservation_AfterAllScenarios`: setelah semua subtest di DB yang sama → `AssertReconciled` (R1–R5 kosong) **dan** R6 kosong dengan `now()` normal, serta tidak ada reservasi `HELD` untuk sesi terminal.
 - [ ] **Step 2: Run it to verify it fails** — `go test -tags integration ./test/integration -race -run 'TestLifecycle|TestNoOrphan'` → FAIL (wiring/config belum ada).
 - [ ] **Step 3: Implement** — hanya wiring `cmd/api/main.go` dan config; perbaikan bug yang ditemukan dicatat di `docs/implementation-log.md` dan diperbaiki di task pemilik (commit terpisah `fix(...)`).
 - [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS; `make test-integration` penuh PASS.
 - [ ] **Step 5: Commit** — `git commit -m "test(session): lifecycle integration scenarios and api wiring"`
+
+### Task 24: Endpoint admin sesi (§5.9.8) + audit `SESSION_TRANSCRIPT_VIEW`
+
+**Files:**
+- Create: `internal/session/admin_query.go`, `internal/postgres/session_admin_repo.go`, `db/queries/session_admin.sql`, `internal/httpapi/admin_session_{handler,dto}.go`, `testdata/api/rest/admin_sessions/*.json`
+- Modify: `internal/httpapi/admin_routes.go` (milik M2; tambah `registerAdminSessionRoutes(admin, h)` dan panggilannya di `router.go`), `internal/httpapi/deps.go`, `cmd/api/main.go`
+- Test: `internal/session/admin_query_test.go`, `internal/httpapi/admin_session_handler_test.go`, `internal/httpapi/route_table_test.go` (tambah baris), `test/integration/m3_admin_sessions_test.go` (`integration`)
+
+**Interfaces:**
+- Consumes: `QueryService` (Task 20), `session.TurnRepository`, M2 `admin.AuditRepository`/audit writer (action `SESSION_TRANSCRIPT_VIEW`, target `SESSION`), `httpapi` cursor helper M2.
+- Produces (nama dari plan): `type AdminView struct{View; UserID uuid.UUID; ScenarioVersionID, CharacterVersionID, VoiceProfileID, ConversationStyleVersionID, ExpressionProfileVersionID, PromptVersionID uuid.UUID; OpeningPromptVersionID *uuid.UUID; ProviderProfile string; AdaptiveDifficulty json.RawMessage; RuntimeFence int64; HandoffAt *time.Time; FailureDetail *string; TranscriptPurgedAt *time.Time; Version int64; Reservation *balance.Reservation}`; `type AdminQueryService`; `NewAdminQueryService(q *QueryService, r AdminRepository, c clock.Clock, retentionDays int) *AdminQueryService`; `ListByUser(ctx, userID, statuses []Status, after *uuid.UUID, limit int) ([]AdminView, error)`; `Get(ctx, id) (AdminView, error)`; `Turns(ctx, id, afterSeq *int, limit int) ([]TurnRecord, error)` (semua kolom, termasuk `DISCARDED` dan turn berjalan; 410 sama seperti user); `Events(ctx, id, after *EventCursor, limit int) ([]Event, error)` dengan `EventCursor{CreatedAt time.Time; ID uuid.UUID}`. Route (grup Admin): `GET /admin/users/{user_id}/sessions`, `GET /admin/sessions/{session_id}`, `GET /admin/sessions/{session_id}/turns`, `GET /admin/sessions/{session_id}/events`.
+
+- [ ] **Step 1: Write the failing test** — unit: `TestAdminGet_IncludesInternalFieldsAndReservation` (`adaptive_difficulty`, `runtime_fence`, `handoff_at`, `reservation{status,reserved,consumed,released,start_deadline_at,settled_at,released_at}`); `TestAdminGet_AnyUser_NotOwnerFiltered` dan `404 SESSION_NOT_FOUND` bila tidak ada; `TestAdminTurns_IncludesDiscardedAndInProgress`; `TestAdminTurns_410WhenPurged`; `TestAdminEvents_CursorOrderCreatedAtIdAsc` (query `(created_at,id) > ($c_created_at,$c_id)` tanpa subquery by id; limit default 100/max 100); `TestAdminListByUser_StatusFilterKeyset`. Handler/golden: bentuk `AdminSession` (= `Session` + field internal §5.9.8), events `{"data":[{id,event_type,actor,from_status,to_status,turn_id,payload,created_at}],"next_cursor"}`; non-admin → 403 `FORBIDDEN`; `GET …/turns` menulis tepat satu audit `SESSION_TRANSCRIPT_VIEW` (`target_id=session_id`, `target_user_id=pemilik`) dan 410 **tidak** menulis audit; endpoint lain tidak menulis audit. `TestRouteTable_AdminSessions`: empat route di atas ada di grup Admin. Integration: sesi selesai dari skenario Task 23 dibaca admin → reservasi `SETTLED`, `charged_seconds == consumed_seconds`.
+- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/session/... ./internal/httpapi/... -race -run 'TestAdmin|TestRouteTable_AdminSessions'` → FAIL.
+- [ ] **Step 3: Implement** — gabungkan view dengan JOIN reservasi di `session_admin_repo.go`; audit ditulis setelah query turns sukses lewat audit writer M2 di transaksi singkat sendiri (bila gagal → 500, data tidak dikembalikan); rate rule `admin_user`; handler lewat `Handle*`.
+- [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS; `go test -tags integration ./test/integration -race -run TestAdminSessions` → PASS.
+- [ ] **Step 5: Commit** — `git commit -m "feat(session): admin session read endpoints with transcript view audit"`
 
 ---
 
@@ -485,11 +485,12 @@ func (r *RuntimeService) Fail(ctx, sessionID uuid.UUID, fence int64, reason EndR
 - [ ] `make seed && make seed` (DB lokal) → keduanya sukses, jumlah baris tabel konten tidak berubah.
 - [ ] `AssertReconciled` (R1–R5) kosong di akhir setiap integration test; `TestNoOrphanReservation_AfterAllScenarios` PASS (Gerbang "rekonsiliasi §4.8 bersih").
 - [ ] `go test ./internal/httpapi/... -race -run TestRouteTable` → PASS untuk grup User (+ Admin `/admin/content`).
+- [ ] `go test ./internal/httpapi/... -race -run TestRouteTable_AdminSessions` dan `TestAdminSessions` (integration) → PASS (admin sesi §5.9.8 + audit `SESSION_TRANSCRIPT_VIEW`).
 - [ ] Review Focus 1 dibuktikan oleh `TestCreate_20Parallel_SameKey` dan `TestLifecycle_DoubleClick`.
 - [ ] Catat perintah + ringkasan output di `docs/implementation-log.md`; deviasi di `docs/implementation-deviations.md`.
 
 ## Self-Review
 
-**Cakupan spec.** Dicakup: §4.2, §4.4–§4.9; §5.2–§5.7, §5.8.3–§5.8.6 (route/handler sesi & balance), §5.9.3–§5.9.5, §5.10 (kode M3), §5.11; §6.2–§6.5, §6.8.1–§6.8.3 (mekanisme + seed template), §6.9–§6.14 (kecuali tes DB §6.14 #1–2 milik M1); §7.13.1; §9.3.1 (port + writer minimal). **Tidak dicakup (milik lain):** grant/adjust/registrasi/`/me` (M2), publisher/topologi/job scheduler `session_sweeper`/`reservation_cleanup`/`balance_reconcile` + metrik job (M6; M3 menyediakan `Sweeper.Tick`, `Service.Abandon`, `Balance.Reconcile`), `ResolveTTSParams` & provider (M4), `EstimateTokens/SentenceParser/phrases/core.go` (M4/M5), runtime WS (M5), evaluation/profile endpoint (M7/M8), template SUMMARY/EVALUATION/MEMORY_EXTRACTION (M7/M8), endpoint admin sesi `/admin/users/{id}/sessions`, `/admin/sessions/*` (§5.9.8 — **tidak ada pemilik di master; usulan: ditambahkan ke M2 atau M10 memakai `session.QueryService`**), `GetUserVoiceExposure` hanya query (dipakai M8).
-**Konsistensi tipe.** `balance.SettleInput/SettleResult` (Task 3) dipakai Task 19; `session.Deps` (Task 17) dipakai Task 18–22; `events.NewSessionCompleted` (Task 15) dipakai Task 19; `RuntimeRecord/Settlement` (Task 14) dipakai Task 20; `ControlPublisher/HeartbeatReader` (Task 14) diimplementasikan Task 22; `AssertReconciled` (Task 5) dipakai Task 17–24; `Fixtures/Render` (Task 6) dipakai Task 8 & 12.
-**Deviasi yang harus dicatat:** (1) `OpeningPromptSource` dibaca sebelum tx `BeginStart`; (2) `ValidateCatalog` memperlakukan prompt non-CONVERSATION tanpa PUBLISHED sebagai WARNING; (3) spec §6.8 vs master M4 untuk `prompt.Render` (Task 6); (4) master Review Focus #1 menyebut "sesi kedua tanpa key → 409" sedangkan spec §5.8.4 mewajibkan key (tanpa key = 400 `IDEMPOTENCY_KEY_REQUIRED`; key berbeda = 409 `SESSION_ALREADY_OPEN`) — plan mengikuti spec.
+**Cakupan spec.** Dicakup: §4.2, §4.4–§4.9; §5.2–§5.7, §5.8.3–§5.8.6 (route/handler sesi & balance), §5.9.3–§5.9.5, §5.9.8 (admin sesi, Task 24), §5.10 (kode M3), §5.11; §6.2–§6.5, §6.8.3 (hanya seed template; mekanisme `prompt` milik M4), §6.9–§6.14 (kecuali tes DB §6.14 #1–2 milik M1); §7.13.1; §9.3.1 (port + writer minimal). **Tidak dicakup (milik lain):** grant/adjust/registrasi/`/me` (M2), publisher/topologi/job scheduler `session_sweeper`/`reservation_cleanup`/`balance_reconcile` + metrik job (M6; M3 menyediakan `Sweeper.Tick`, `Service.Abandon`, `Balance.Reconcile`), `ResolveTTSParams` & provider (M4), `EstimateTokens/SentenceParser/phrases/core.go` (M4/M5), runtime WS (M5), evaluation/profile endpoint (M7/M8), template SUMMARY/EVALUATION/MEMORY_EXTRACTION (M7/M8), `GetUserVoiceExposure` hanya query (dipakai M8).
+**Konsistensi tipe.** `balance.SettleInput/SettleResult` (Task 3) dipakai Task 18; `session.Deps` (Task 16) dipakai Task 17–21; `events.NewSessionCompleted` (Task 14) dipakai Task 18; `RuntimeRecord/Settlement` (Task 13) dipakai Task 19; `ControlPublisher/HeartbeatReader` (Task 13) diimplementasikan Task 21; `AssertReconciled` (Task 5) dipakai Task 16–23; kontrak `prompt.*` (M4) dipakai Task 6 (`Template()`), 7 (validator), 11 (seed).
+**Deviasi yang harus dicatat:** (1) `OpeningPromptSource` dibaca sebelum tx `BeginStart`; (2) `ValidateCatalog` memperlakukan prompt non-CONVERSATION tanpa PUBLISHED sebagai WARNING; (3) teks seed prompt mengikuti konstanta M4 bila beda dari §6.8.3. Master Review Focus #1 sudah selaras spec (tanpa key = 400 `IDEMPOTENCY_KEY_REQUIRED`; key berbeda = 409 `SESSION_ALREADY_OPEN`).
