@@ -79,7 +79,8 @@ kotoki-backend/
 │   ├── conversation/       # runtime realtime: Manager, turn engine, detector, barge-in, generation, context builder
 │   │   ├── audio/          # opus decode/encode, VAD, pacing (cgo; hanya boleh diimpor graf realtime: conversation, wsgateway, cmd/realtime, kaiwaclient)
 │   │   │   └── assets/     # audio APOLOGY pra-render (go:embed)
-│   │   └── protocol/       # pesan WS & binary frame (dipakai juga kaiwaclient)
+│   │   ├── protocol/       # pesan WS & binary frame (dipakai juga kaiwaclient)
+│   │   └── rtstate/        # port & tipe state realtime Redis (redisstore tidak mengimpor conversation)
 │   ├── prompt/             # Render, RegisterFixtures, EstimateTokens, SentenceParser & tag ekspresi
 │   ├── provider/           # port STT/LLM/TTS/Evaluation/Embedding/Pronunciation, router, breaker, health
 │   │   ├── pricing/        # prices.yaml (embed)

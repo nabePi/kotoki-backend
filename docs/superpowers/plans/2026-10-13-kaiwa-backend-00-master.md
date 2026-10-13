@@ -38,7 +38,7 @@ Kondisi yang tersirat spec tetapi paling mungkin menggigit pengguna, dan milesto
 2. **Mikrofon senyap atau hanya noise, dan ucapan sangat panjang** (> 45 s): tidak boleh memicu turn kosong; noise-only → turn `DISCARDED`; ucapan dipaksa selesai di `MAX_UTTERANCE`; filler `えっと…` tidak memotong user (M5).
 3. **Barge-in dengan echo speaker** dan frame audio lama sesudah interupsi: audio generasi lama tidak boleh diputar/diproses; frame dengan `generation` lama dibuang client dan runtime tidak menghitung echo sebagai barge-in (M5).
 4. **Client terputus di tengah turn / pod mati saat sesi berjalan:** saldo tetap benar (tagihan berhenti di `ENDING`, detik disconnect tidak ditagih), sesi diselesaikan sweeper tepat sekali, tidak ada reservasi yatim, `session.completed` terbit sekali (M3, M5, M6).
-5. **STT final kosong / provider mengembalikan teks non-Jepang atau LLM diblokir content filter:** turn `FAILED` + APOLOGY, sesi tetap berjalan, tidak dihitung ke batas 3 turn gagal berturut-turut, tagihan tidak berubah (M5, M4).
+5. **STT final kosong, teks non-Jepang, atau LLM diblokir content filter:** STT final kosong → turn `DISCARDED` (spec §7.6.2); teks non-Jepang atau generation gagal/diblokir content filter → turn `FAILED` + APOLOGY; sesi tetap berjalan, tidak dihitung ke batas 3 turn gagal berturut-turut (khusus content filter), tagihan tidak berubah (M5, M4).
 
 ## Cara membaca rencana ini
 
