@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"go.opentelemetry.io/otel/trace"
@@ -49,13 +51,19 @@ func EmailHash(email string) string {
 	return hex.EncodeToString(sum[:])[:32]
 }
 
+const redactedComplex = "[REDACTED_COMPLEX]"
+
 type redactHandler struct {
 	inner          slog.Handler
 	logTranscripts bool
+	// denyAll is set once the handler is inside a sensitive group (WithGroup),
+	// so every attribute below it is redacted regardless of its own key.
+	denyAll bool
 }
 
 // NewRedactingHandler wraps inner, redacting sensitive keys (recursively through
-// groups) and adding trace_id/span_id from the context span.
+// groups) and adding trace_id/span_id from the context span. Composite values
+// (maps, structs, slices, raw JSON) are denied by default.
 func NewRedactingHandler(inner slog.Handler, logTranscripts bool) slog.Handler {
 	return &redactHandler{inner: inner, logTranscripts: logTranscripts}
 }
@@ -67,7 +75,7 @@ func (h *redactHandler) Enabled(ctx context.Context, l slog.Level) bool {
 func (h *redactHandler) Handle(ctx context.Context, r slog.Record) error {
 	nr := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
 	r.Attrs(func(a slog.Attr) bool {
-		nr.AddAttrs(h.redact(a))
+		nr.AddAttrs(h.redact(a, h.denyAll))
 		return true
 	})
 	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
@@ -79,27 +87,47 @@ func (h *redactHandler) Handle(ctx context.Context, r slog.Record) error {
 func (h *redactHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	out := make([]slog.Attr, len(attrs))
 	for i, a := range attrs {
-		out[i] = h.redact(a)
+		out[i] = h.redact(a, h.denyAll)
 	}
-	return &redactHandler{inner: h.inner.WithAttrs(out), logTranscripts: h.logTranscripts}
+	return &redactHandler{inner: h.inner.WithAttrs(out), logTranscripts: h.logTranscripts, denyAll: h.denyAll}
 }
 
 func (h *redactHandler) WithGroup(name string) slog.Handler {
-	return &redactHandler{inner: h.inner.WithGroup(name), logTranscripts: h.logTranscripts}
+	return &redactHandler{
+		inner:          h.inner.WithGroup(name),
+		logTranscripts: h.logTranscripts,
+		denyAll:        h.denyAll || IsSensitiveKey(name, h.logTranscripts),
+	}
 }
 
-func (h *redactHandler) redact(a slog.Attr) slog.Attr {
+// redact applies deny-by-default redaction. deny is true when an ancestor is sensitive.
+func (h *redactHandler) redact(a slog.Attr, deny bool) slog.Attr {
 	a.Value = a.Value.Resolve()
-	if a.Value.Kind() == slog.KindGroup {
+	if deny || IsSensitiveKey(a.Key, h.logTranscripts) {
+		return slog.String(a.Key, redacted)
+	}
+	switch a.Value.Kind() {
+	case slog.KindGroup:
 		group := a.Value.Group()
 		out := make([]slog.Attr, len(group))
 		for i, g := range group {
-			out[i] = h.redact(g)
+			out[i] = h.redact(g, false)
 		}
 		return slog.Attr{Key: a.Key, Value: slog.GroupValue(out...)}
-	}
-	if IsSensitiveKey(a.Key, h.logTranscripts) {
-		return slog.String(a.Key, redacted)
+	case slog.KindAny:
+		switch v := a.Value.Any().(type) {
+		case nil, error:
+		case fmt.Stringer:
+			// Byte/slice/map-backed Stringers (e.g. json.RawMessage) can carry
+			// arbitrary payloads, so only opaque scalar/struct Stringers pass.
+			switch reflect.Indirect(reflect.ValueOf(v)).Kind() {
+			case reflect.Slice, reflect.Map, reflect.Array, reflect.Invalid:
+				return slog.String(a.Key, redactedComplex)
+			}
+			return slog.String(a.Key, v.String())
+		default:
+			return slog.String(a.Key, redactedComplex)
+		}
 	}
 	return a
 }

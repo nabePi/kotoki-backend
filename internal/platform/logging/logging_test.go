@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -153,4 +155,81 @@ func TestErrAttrs(t *testing.T) {
 	require.Contains(t, m["error"], "need auth")
 	require.Regexp(t, `^internal/platform/logging/logging_test.go:\d+ `, m["error_location"])
 	require.Contains(t, m["error_location"], "TestErrAttrs")
+}
+
+type strer struct{}
+
+func (strer) String() string { return "stringer-ok" }
+
+type lv struct{ v any }
+
+func (l lv) LogValue() slog.Value { return slog.AnyValue(l.v) }
+
+func TestComplexValuesDenied(t *testing.T) {
+	type st struct{ Email string }
+	cases := map[string]any{
+		"map":    map[string]any{"email": "a@b.c", "text": "hi"},
+		"struct": st{Email: "a@b.c"},
+		"slice":  []string{"a@b.c"},
+		"raw":    json.RawMessage(`{"email":"a@b.c"}`),
+	}
+	for name, v := range cases {
+		t.Run(name, func(t *testing.T) {
+			l, buf := newLogger(t, logging.Options{})
+			l.Info("m", slog.Any("payload", v))
+			require.Equal(t, "[REDACTED_COMPLEX]", decode(t, buf)["payload"])
+			require.NotContains(t, buf.String(), "a@b.c")
+		})
+	}
+	l, buf := newLogger(t, logging.Options{})
+	l.Info("m", slog.Any("err", errors.New("boom")), slog.Any("s", strer{}), slog.Any("n", nil))
+	m := decode(t, buf)
+	require.Equal(t, "boom", m["err"])
+	require.Equal(t, "stringer-ok", m["s"])
+}
+
+func TestSensitiveGroups(t *testing.T) {
+	l, buf := newLogger(t, logging.Options{})
+	l.Info("m", slog.Group("transcript", slog.String("a", "x1")), slog.Group("token", slog.Group("n", slog.String("b", "x2"))))
+	m := decode(t, buf)
+	require.Equal(t, "[REDACTED]", m["transcript"])
+	require.Equal(t, "[REDACTED]", m["token"])
+	require.NotContains(t, buf.String(), "x1")
+	require.NotContains(t, buf.String(), "x2")
+
+	l, buf = newLogger(t, logging.Options{})
+	l.WithGroup("token").Info("m", "a", "x3", slog.Group("n", slog.String("b", "x4")))
+	require.NotContains(t, buf.String(), "x3")
+	require.NotContains(t, buf.String(), "x4")
+
+	l, buf = newLogger(t, logging.Options{})
+	l.With(slog.Group("req", slog.String("email", "x5")), slog.Group("secret", slog.String("k", "x6"))).Info("m")
+	require.NotContains(t, buf.String(), "x5")
+	require.NotContains(t, buf.String(), "x6")
+
+	// transcript group is exempt when LogTranscripts is on
+	l, buf = newLogger(t, logging.Options{LogTranscripts: true})
+	l.Info("m", slog.Group("transcript", slog.String("a", "visible")))
+	require.Contains(t, buf.String(), "visible")
+}
+
+func TestLogValuerResolvedThenRedacted(t *testing.T) {
+	l, buf := newLogger(t, logging.Options{})
+	l.Info("m", slog.Any("token", lv{"x7"}), slog.Any("p", lv{map[string]any{"email": "x8"}}), slog.Any("q", lv{"fine"}))
+	m := decode(t, buf)
+	require.Equal(t, "[REDACTED]", m["token"])
+	require.Equal(t, "[REDACTED_COMPLEX]", m["p"])
+	require.Equal(t, "fine", m["q"])
+	require.NotContains(t, buf.String(), "x7")
+	require.NotContains(t, buf.String(), "x8")
+}
+
+func TestTimeNormalizedToUTC(t *testing.T) {
+	var buf bytes.Buffer
+	l := logging.New(&buf, logging.Options{Format: "json"})
+	loc := time.FixedZone("WIB", 7*3600)
+	ts := time.Date(2026, 10, 13, 15, 4, 5, 123456789, loc)
+	r := slog.NewRecord(ts, slog.LevelInfo, "m", 0)
+	require.NoError(t, l.Handler().Handle(context.Background(), r))
+	require.Equal(t, "2026-10-13T08:04:05.123456789Z", decode(t, &buf)["time"])
 }

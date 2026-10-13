@@ -74,7 +74,8 @@ Status: DONE
 Tanggal: 2026-10-13
 ### Implementasi
 - `logging.go` (`Options`, `New`: JSON/text handler, `time` UTC, field service/version/git_commit/env), `redact.go` (`sensitiveKeys`, `IsSensitiveKey`, `EmailHash`, `NewRedactingHandler` redaksi rekursif + `trace_id`/`span_id`), `errattrs.go` (`ErrAttrs`: error_code, error, error_location)
-- Dependensi langsung baru: otel, otel/sdk, otel/trace, testify (go.mod/go.sum)
+- Dependensi langsung baru: otel/sdk, otel/trace v1.38.0, testify; `go 1.25` dipertahankan, x/sys dipin v0.35.0 (lihat implementation-deviations.md#M1-T5)
+- Redaksi deny-by-default: nilai komposit (map/struct/slice/RawMessage) -> `[REDACTED_COMPLEX]`; grup/WithGroup bernama sensitif meredaksi seluruh isi
 ### Test
 - go test ./internal/platform/logging/... -race -cover — PASS, coverage 100%
 ### Penyimpangan
