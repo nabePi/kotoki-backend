@@ -133,3 +133,19 @@ Tanggal: 2026-10-13
 - Tidak ada
 ### Sisa / blocker
 - Tidak ada
+
+## M1-T10 — Lint (.golangci.yml) dan make arch-check
+Status: DONE
+Tanggal: 2026-10-13
+### Implementasi
+- `.golangci.yml` disalin persis dari spec §14.9.5 (enam aturan depguard termasuk `audio-only-realtime-graph` dan `no-test-deps-in-prod`, forbidigo, nolintlint); golangci-lint v2.1.6 dipasang ke `bin/tools` (gitignored)
+- `test/arch`: `forbiddenImports` + `TestForbiddenImportsTable`, `TestCmdAPIWorkerGraphHasNoCgo` (skip bila `cmd/api`/`cmd/worker` belum ada), `TestFeaturePackagesRespectLayout`
+- Makefile: `arch-check` melewati paket `cmd/*` yang belum ada (Task 23); `lint` memakai `bin/tools` bila ada
+- Perbaikan temuan lint Task 1–9 (18 isu): errcheck, errorlint, gocritic ifElseChain, revive, staticcheck QF1008, `//nolint:gosec` G101 (3 kode error) dan `//nolint:revive` untuk `CodeInvalidJson` (nama dari spec/plan)
+### Test
+- go test ./test/arch/... -race — PASS; `make lint` 0 issue; uji negatif manual: depguard (feature-no-infra, no-test-deps-in-prod, audio-only-realtime-graph) dan forbidigo time.Now terbukti gagal
+### Penyimpangan
+- golangci-lint v2.1.6 tidak bisa membaca export data Go 1.27 (toolchain lokal): lint dijalankan/dipasang dengan `GOTOOLCHAIN=go1.25.5`
+- `//nolint:revive` untuk `CodeInvalidJson` (brief hanya mengizinkan gosec) karena rename memutus nama di plan
+### Sisa / blocker
+- `make arch-check` penuh baru bermakna setelah Task 23 membuat cmd/api dan cmd/worker

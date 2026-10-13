@@ -31,9 +31,9 @@ const (
 	CodeIdempotencyKeyRequired        Code = "IDEMPOTENCY_KEY_REQUIRED"
 	CodeIdempotencyKeyReused          Code = "IDEMPOTENCY_KEY_REUSED"
 	CodeInternalError                 Code = "INTERNAL_ERROR"
-	CodeInvalidCredentials            Code = "INVALID_CREDENTIALS"
+	CodeInvalidCredentials            Code = "INVALID_CREDENTIALS" //nolint:gosec // G101: error code identifier, not a credential
 	CodeInvalidCursor                 Code = "INVALID_CURSOR"
-	CodeInvalidJson                   Code = "INVALID_JSON"
+	CodeInvalidJson                   Code = "INVALID_JSON" //nolint:revive // name fixed by spec error-code catalog
 	CodeInvalidMessage                Code = "INVALID_MESSAGE"
 	CodeInvalidUserStatusTransition   Code = "INVALID_USER_STATUS_TRANSITION"
 	CodeMemoryNotFound                Code = "MEMORY_NOT_FOUND"
@@ -47,8 +47,8 @@ const (
 	CodeProviderFailure               Code = "PROVIDER_FAILURE"
 	CodeRateLimited                   Code = "RATE_LIMITED"
 	CodeRefreshTokenInvalid           Code = "REFRESH_TOKEN_INVALID"
-	CodeRefreshTokenRotated           Code = "REFRESH_TOKEN_ROTATED"
-	CodeResetTokenInvalid             Code = "RESET_TOKEN_INVALID"
+	CodeRefreshTokenRotated           Code = "REFRESH_TOKEN_ROTATED" //nolint:gosec // G101: error code identifier, not a credential
+	CodeResetTokenInvalid             Code = "RESET_TOKEN_INVALID"   //nolint:gosec // G101: error code identifier, not a credential
 	CodeScenarioNotAvailable          Code = "SCENARIO_NOT_AVAILABLE"
 	CodeScenarioTopicMismatch         Code = "SCENARIO_TOPIC_MISMATCH"
 	CodeServerAtCapacity              Code = "SERVER_AT_CAPACITY"

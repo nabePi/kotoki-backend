@@ -67,8 +67,10 @@ modelname-check:
 	$(GO) run ./test/tools/modelcheck ./internal ./cmd
 
 arch-check:     ## §2.2 aturan 5: api & worker tanpa cgo (depguard menangani impor langsung)
-	CGO_ENABLED=0 $(GO) build ./cmd/api ./cmd/worker
-	@if $(GO) list -deps ./cmd/api ./cmd/worker | grep -E 'internal/conversation/audio|hraban/opus|go-webrtcvad'; then \
+	@pkgs=""; for p in api worker; do [ -d cmd/$$p ] && pkgs="$$pkgs ./cmd/$$p"; done; \
+	if [ -z "$$pkgs" ]; then echo 'arch-check: cmd/api dan cmd/worker belum ada, dilewati (dibuat di Task 23)'; exit 0; fi; \
+	CGO_ENABLED=0 $(GO) build -o /dev/null $$pkgs || exit 1; \
+	if $(GO) list -deps $$pkgs | grep -E 'internal/conversation/audio|hraban/opus|go-webrtcvad'; then \
 	  echo 'cmd/api atau cmd/worker bergantung pada paket cgo (§2.2 aturan 5)'; exit 1; fi
 
 test:           ## unit + contract + component, race
@@ -87,8 +89,8 @@ test-e2e:
 test-live:      ## butuh kunci provider di .env
 	$(GO) test -race -count=1 -tags=live -timeout 10m ./internal/provider/...
 
-lint:
-	golangci-lint run ./...
+lint:           ## golangci-lint $(GOLANGCI_LINT_VERSION); pasang: GOBIN=$$PWD/bin/tools go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	PATH="$(CURDIR)/bin/tools:$$PATH" golangci-lint run ./...
 
 vuln:
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...

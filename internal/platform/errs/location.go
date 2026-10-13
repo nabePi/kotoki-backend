@@ -40,7 +40,8 @@ func LocationOf(err error) (Location, bool) {
 	var found Location
 	ok := false
 	for ; err != nil; err = errors.Unwrap(err) {
-		if e, is := err.(*Error); is && e.hasLoc {
+		var e *Error
+		if errors.As(err, &e) && e.hasLoc {
 			found, ok = e.loc, true
 		}
 	}

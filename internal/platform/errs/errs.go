@@ -8,7 +8,9 @@ import "errors"
 type Kind int
 
 const (
+	// KindBusiness marks errors caused by the caller.
 	KindBusiness Kind = iota
+	// KindInternal marks errors caused by the system.
 	KindInternal
 )
 

@@ -146,7 +146,7 @@ func TestServeShutsDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	cancel()
 	select {
 	case err := <-done:

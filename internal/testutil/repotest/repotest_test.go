@@ -10,7 +10,7 @@ type counter struct{ n int }
 
 func TestEachFreshRepo(t *testing.T) {
 	made := 0
-	mk := func(t *testing.T) *counter { made++; return &counter{} }
+	mk := func(_ *testing.T) *counter { made++; return &counter{} }
 	c := repotest.Case[*counter]{Name: "x", Run: func(t *testing.T, r *counter) {
 		if r.n != 0 {
 			t.Fatalf("state leaked: %d", r.n)

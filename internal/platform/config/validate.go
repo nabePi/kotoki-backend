@@ -75,13 +75,14 @@ func (d DB) validate(v *validator, c Common) {
 }
 
 func (r Redis) validate(v *validator, c Common) {
-	if r.SentinelMaster != "" {
+	switch {
+	case r.SentinelMaster != "":
 		if len(r.SentinelAddrs) == 0 {
 			v.fail("REDIS_SENTINEL_ADDRS", "required when REDIS_SENTINEL_MASTER is set")
 		}
-	} else if r.URL == "" {
+	case r.URL == "":
 		v.fail("REDIS_URL", "required unless REDIS_SENTINEL_MASTER is set")
-	} else if c.strict() && !strings.HasPrefix(r.URL.Reveal(), "rediss://") {
+	case c.strict() && !strings.HasPrefix(r.URL.Reveal(), "rediss://"):
 		v.fail("REDIS_URL", "must use rediss:// when APP_ENV is staging or prod")
 	}
 	if r.PoolSize <= 0 {
