@@ -108,3 +108,16 @@ Tanggal: 2026-10-13
 - Tidak ada
 ### Sisa / blocker
 - Tidak ada
+
+## M1-T8 — internal/platform/metrics
+Status: DONE
+Tanggal: 2026-10-13
+### Implementasi
+- `metrics.go` (`HTTPBuckets`/`TurnBuckets`/`BargeBuckets`/`AsyncBuckets`, `NewRegistry` dengan collector Go + process tanpa registry global, `Handler`), `db.go` (`PoolStat`, `NewDB`: GaugeFunc acquired/idle/max, `kotoki_db_pool_acquire_wait_seconds`, `kotoki_db_query_duration_seconds{query}`), `redis.go` (`NewRedis`: `kotoki_redis_command_errors_total{op}`, `kotoki_redis_pool_timeouts_total`)
+- Dependensi langsung baru: prometheus/client_golang v1.23.2 (v1.25.0 memaksa `go 1.26`, jadi dipin ke v1.23.2); `go 1.25` dan x/sys v0.35.0 dipertahankan
+### Test
+- go test ./internal/platform/metrics/... -race -cover — PASS (5 test)
+### Penyimpangan
+- client_golang dipin v1.23.2, bukan versi terbaru, demi direktif `go 1.25`
+### Sisa / blocker
+- Tidak ada
