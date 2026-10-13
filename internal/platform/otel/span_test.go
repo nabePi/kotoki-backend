@@ -120,3 +120,36 @@ func TestAttrRedaction(t *testing.T) {
 	assert.Equal(t, "u1", m["user.id"].AsString())
 	assert.Equal(t, "[REDACTED]", m["password"].AsString())
 }
+
+func TestEndDoesNotLeakErrorText(t *testing.T) {
+	rec := testutil.NewTraceRecorder(t)
+	_, sp := Start(context.Background(), "leak")
+	cause := errors.New("duplicate key secret@example.com; llm echoed: user said hello")
+	err := errs.Wrap(cause, errs.CodeInternalError, "insert")
+	End(sp, &err)
+
+	s := rec.Find("leak")
+	var all []string
+	all = append(all, s.Status.Description)
+	for _, kv := range s.Attributes {
+		all = append(all, kv.Value.Emit())
+	}
+	var stack string
+	for _, e := range s.Events {
+		for _, kv := range e.Attributes {
+			all = append(all, kv.Value.Emit())
+			if kv.Key == "exception.stacktrace" {
+				stack = kv.Value.AsString()
+			}
+		}
+	}
+	for _, v := range all {
+		assert.NotContains(t, v, "secret@example.com")
+		assert.NotContains(t, v, "user said hello")
+	}
+	assert.NotEmpty(t, stack)
+	assert.Equal(t, "INTERNAL_ERROR", s.Status.Description)
+	m := attrMap(s)
+	assert.Contains(t, m, "code.file.path")
+	assert.Equal(t, "INTERNAL_ERROR", m["kotoki.error_code"].AsString())
+}

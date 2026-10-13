@@ -1,9 +1,15 @@
 // Package otel wraps OpenTelemetry tracing for feature packages (spec 13.7.2.1):
-// they import this package, never the SDK directly.
+// they import this package, never the SDK directly. Feature code must create
+// spans only via otel.Start and finish them via otel.End: calling
+// span.SetAttributes (or RecordError) directly bypasses attribute redaction and
+// error-text sanitising, which keep user/AI text, prompts, tokens and emails
+// out of exported spans.
 package otel
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
 
 	otelsdk "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -66,7 +72,17 @@ func End(span trace.Span, errp *error) {
 		span.SetAttributes(AttrErrorCode.String(code))
 	}
 	if errs.KindOf(err) == errs.KindInternal {
-		span.RecordError(err, trace.WithStackTrace(true))
+		// Never export err.Error(): the cause chain may carry emails or prompt
+		// text. Record a sanitised exception event (code + stack only).
+		typ := code
+		if typ == "" {
+			typ = fmt.Sprintf("%T", err)
+		}
+		span.AddEvent("exception", trace.WithAttributes(
+			semconv.ExceptionType(typ),
+			semconv.ExceptionMessage(code),
+			semconv.ExceptionStacktrace(string(debug.Stack())),
+		))
 		span.SetStatus(codes.Error, code)
 	}
 }
