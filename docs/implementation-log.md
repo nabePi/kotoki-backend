@@ -121,3 +121,15 @@ Tanggal: 2026-10-13
 - client_golang dipin v1.23.2, bukan versi terbaru, demi direktif `go 1.25`
 ### Sisa / blocker
 - Tidak ada
+
+## M1-T9 — internal/platform/health
+Status: DONE
+Tanggal: 2026-10-13
+### Implementasi
+- `ops.go` (`Check`, `OpsOptions`, `Ops`: `/healthz` selalu 200, `/readyz` starting sampai `RunStartupChecks` sukses sekali lalu tetap ready meski dependency gagal, draining 503, body tidak memuat teks error; `/metrics` via `metrics.Handler` hanya jika `MetricsEnabled`; pprof didaftarkan manual hanya jika `PprofEnabled`; `Serve` dengan `ReadHeaderTimeout` 5 s dan `Shutdown` 5 s)
+### Test
+- go test ./internal/platform/health/... -race -cover — PASS (8 test)
+### Penyimpangan
+- Tidak ada
+### Sisa / blocker
+- Tidak ada
