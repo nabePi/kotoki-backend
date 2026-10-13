@@ -95,3 +95,16 @@ Tanggal: 2026-10-13
 - Tidak ada
 ### Sisa / blocker
 - Tidak ada
+
+## M1-T7 — internal/platform/otel
+Status: DONE
+Tanggal: 2026-10-13
+### Implementasi
+- `span.go` (`Start` dengan redaksi atribut via `logging.IsSensitiveKey`; `End`: atribut `code.function.name`/`code.file.path`/`code.line.number` (semconv v1.37.0) + `kotoki.error_code`; error internal/tanpa kode -> `RecordError` + stack + status Error, error bisnis -> hanya atribut), `setup.go` (`Config`, `Setup`: propagator TraceContext+Baggage, tanpa endpoint = no-op, OTLP gRPC + batcher + AlwaysSample + resource service.name/version/deployment.environment.name, shutdown dibatasi 3 s)
+- Dependensi langsung baru: otlptracegrpc v1.38.0; `go 1.25` dan x/sys v0.35.0 dipertahankan (grpc v1.75.0, protobuf v1.36.8 dll. naik sebagai transitif)
+### Test
+- go test ./internal/platform/otel/... -race -cover — PASS, coverage 92.3%
+### Penyimpangan
+- Tidak ada
+### Sisa / blocker
+- Tidak ada
