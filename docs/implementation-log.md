@@ -68,3 +68,16 @@ Tanggal: 2026-10-13
 - Tidak ada (default `WS_ALLOWED_ORIGINS=http://localhost:3000` dipilih agar realtime lolos MinimalEnv; spec menandainya wajib di prod, yang ditegakkan oleh validasi https)
 ### Sisa / blocker
 - Tidak ada
+
+## M1-T5 — internal/platform/logging
+Status: DONE
+Tanggal: 2026-10-13
+### Implementasi
+- `logging.go` (`Options`, `New`: JSON/text handler, `time` UTC, field service/version/git_commit/env), `redact.go` (`sensitiveKeys`, `IsSensitiveKey`, `EmailHash`, `NewRedactingHandler` redaksi rekursif + `trace_id`/`span_id`), `errattrs.go` (`ErrAttrs`: error_code, error, error_location)
+- Dependensi langsung baru: otel, otel/sdk, otel/trace, testify (go.mod/go.sum)
+### Test
+- go test ./internal/platform/logging/... -race -cover — PASS, coverage 100%
+### Penyimpangan
+- Tidak ada
+### Sisa / blocker
+- `trace_id`/`span_id` ditambahkan di Handle sehingga bila logger memakai `WithGroup`, keduanya berada di dalam grup tersebut (perilaku slog standar)
