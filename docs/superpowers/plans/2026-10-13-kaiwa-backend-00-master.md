@@ -55,7 +55,7 @@ Eksekusi **berurutan** M1 → M10 kecuali tabel dependensi di bawah mengizinkan 
 |---|---|---|---|---|
 | **M1** | Foundation & Schema | Repo bootstrap, `platform/*` (config, log, otel, errs, clock, idgen, health, metrics), lint `depguard`, CI, docker-compose, **seluruh 21 migration** + sqlc + `postgres.Store` + test migration | §2, §13.2, §14, §15 | — |
 | **M2** | Identity, Auth & Admin | Register/login/refresh/logout/reset password, JWT, ticket WS, rate limit, consent, hapus akun, `balance_accounts`, endpoint admin (grant/adjust, audit) | Bab 3, §4 (grant/adjust), §5.8 | M1 |
-| **M3** | Content, Balance & Session lifecycle | Konten + seed + resolver + katalog REST; reservasi/ledger/settlement; `POST /sessions`, cancel, state machine, `RuntimeService`, transcript/query, sweeper rules (tanpa runtime) | Bab 4, 5, 6 | M2 |
+| **M3** | Content, Balance & Session lifecycle | Konten + seed + resolver + katalog REST; reservasi/ledger/settlement; `POST /sessions`, cancel, state machine, `RuntimeService`, transcript/query, sweeper rules (tanpa runtime) | Bab 4, 5, 6 | M2, **M4** (paket `prompt` + `provider` ports) |
 | **M4** | Provider layer, Prompt & Fakes | Port provider, router + breaker + fallback, `prompt` (Render, tokens, parser kalimat), fake STT/LLM/TTS/Evaluation/Embedding/Pronunciation, cost metering | Bab 8, §6.8 | M1 |
 | **M5** | Realtime core (**demo pertama**) | `conversation` (turn engine, VAD, barge-in, context builder), protokol WS, `wsgateway`, Redis state, reconnect/takeover, drain, `kaiwaclient` + `kaiwa-cli`, e2e dengan fake provider | Bab 7 | M3, M4 |
 | **M6** | Async backbone & jobs | Outbox + publisher, topologi RabbitMQ, consumer framework (retry/DLQ/idempotency), `jobs` scheduler + semua job terjadwal (sweeper, cleanup, partition, reconcile, purge) | Bab 9 | M3 (M5 untuk e2e penutup) |
@@ -64,7 +64,7 @@ Eksekusi **berurutan** M1 → M10 kecuali tabel dependensi di bawah mengizinkan 
 | **M9** | Real providers & benchmark | Adapter ElevenLabs, Deepgram, OpenAI, Gemini, Azure; contract test `-tags live`; `kaiwa-cli provider-bench`; penetapan model & voice ID | Bab 8 §8.4, §8.10 | M5, M7 |
 | **M10** | Hardening & operasi | Manifest k8s, dashboard/alert, load test gate G1–G4, failure injection, checklist produksi | Bab 13 | M8, M9 |
 
-Paralel yang diizinkan: **M4 paralel dengan M2–M3** (hanya butuh M1); **M6 paralel dengan M5** setelah M3; **M9 paralel dengan M7–M8** setelah M5. Selain itu berurutan.
+Paralel yang diizinkan: **M4 paralel dengan M2** (hanya butuh M1; **M4 harus selesai sebelum M3** karena M3 memakai `prompt.Render/Template`); **M6 paralel dengan M5** setelah M3; **M9 paralel dengan M7–M8** setelah M5. Selain itu berurutan.
 
 ## Kontrak antar-milestone (siapa memproduksi apa)
 
