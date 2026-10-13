@@ -16,3 +16,29 @@ Tanggal: YYYY-MM-DD
 ### Sisa / blocker
 - ...
 ```
+
+## M1-T1 — Bootstrap go module, Makefile, buildinfo
+Status: DONE
+Tanggal: 2026-10-13
+### Implementasi
+- go.mod, Makefile, `internal/buildinfo` (commit 0e22fb5)
+### Test
+- TestDefaults (buildinfo) — PASS
+- TestMakeTargetsExist — PASS
+### Penyimpangan
+- Tidak ada
+### Sisa / blocker
+- Tidak ada
+
+## M1-T2 — internal/platform/errs
+Status: DONE
+Tanggal: 2026-10-13
+### Implementasi
+- `codes.go` (70 kode: 53 REST §5.10 + 17 WS-saja §7.4.8, nama konstanta kanonik mekanis), `messages.go` (teks Indonesia verbatim), `errs.go` (New/Wrap/CodeOf/KindOf/WithDetails/DetailsOf), `location.go` (lokasi asal, relatif root modul)
+### Test
+- go test ./internal/platform/errs/... -race -cover — PASS, coverage 97.9%
+- (make test-integration belum relevan: tanpa DB)
+### Penyimpangan
+- Tidak ada
+### Sisa / blocker
+- Tidak ada
