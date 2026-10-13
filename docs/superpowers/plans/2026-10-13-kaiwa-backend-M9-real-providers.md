@@ -31,7 +31,7 @@
 2. **LLM diblokir content filter tidak memicu fallback (master #5):** OpenAI `finish_reason=content_filter` → `DONE{CONTENT_FILTERED}`, HTTP 400 `content_policy_violation` → `KindContentFiltered`, `refusal` → `KindContentFiltered`; Gemini `blockReason`/`SAFETY` setara — `TestOpenAIContentFilter*` (Task 2–3), `TestGeminiContentFilter*` (Task 4–5); `FallbackEligible==false` ditegaskan.
 3. **Cancel/barge-in menutup stream ≤ 50 ms tanpa goroutine bocor atau chunk lama (master #3 sisi adapter):** `Test<Vendor><Cap>CancelWithin50ms` (Task 2, 4, 6, 7, 11) + `TestNoGoroutineLeakAfterCancel` semua adapter (Task 13).
 4. **Rahasia tidak bocor:** API key tidak ada di log, `Error.Message`, span, dan rekaman — `TestRecorderRedactsSecrets` (Task 1), `TestNoSecretInLogsOrErrors` semua adapter (Task 13).
-5. **Real mode tidak boleh start dengan konfigurasi yang pasti gagal di tengah sesi:** kunci vendor yang direferensikan wajib, voice ID `PLACEHOLDER_*` untuk vendor TTS primary/fallback ditolak (`CONTENT_MISCONFIGURED` di runtime = sesi pertama gagal) — `TestValidateRealRejectsMissingKeys` (Task 14), `TestPlaceholderVoiceRejectedAtStartup` (Task 15).
+5. **Real mode tidak boleh start dengan konfigurasi yang pasti gagal di tengah sesi:** kunci vendor yang direferensikan wajib, voice ID `PLACEHOLDER_*` untuk vendor TTS primary/fallback ditolak (`errs.CodeContentMisconfigured` di runtime = sesi pertama gagal) — `TestValidateRealRejectsMissingKeys`, `TestPlaceholderVoiceRejectedAtStartup` (Task 14).
 
 ## File Structure
 
@@ -46,7 +46,8 @@ internal/provider/deepgram/{config,stt,tts}.go + testdata/recordings/           
 internal/provider/azure/{config,pronunciation}.go + testdata/recordings/                          # T11
 internal/provider/*/conformance_test.go, internal/provider/adapters_test.go                       # providertest + aturan impor (T12)
 internal/provider/*/live_test.go (tag live)                                                       # T16
-cmd/internal/providerwire/{build.go,validate.go,voicecheck.go}                                    # T13–T14 (build T13; validate/voicecheck T14)
+cmd/internal/providerwire/{build.go,validate.go}  (fake.go milik M5)                                 # T13 (build), T14 (validate)
+internal/content/voicecheck.go                                                                    # T14 (VoiceChecker, ValidateVoices)
 internal/postgres/voicecheck_repo.go + db/queries/voicecheck.sql                                  # T14
 cmd/realtime, cmd/worker (ubah wiring); cmd/api (validasi voice)                                  # T14
 test/e2e/real/{run.sh,real_test.go}; Makefile (e2e-real, bench)                                   # T16
@@ -303,7 +304,7 @@ Tambah: `TestELSTTPartialMapping` (`partial_transcript{text}` → `PARTIAL{Text:
 
 **Interfaces:**
 - Consumes: Task 7; M4 router resilient STT (`provider/resilient_stt.go`) mengenali rotasi lewat `Err.VendorCode ∈ {"session_time_limit_exceeded","insufficient_audio_activity"}` (**ambiguitas spec** — keputusan: adapter mengirim `STTEvent{Type: STTError, Err: &provider.Error{Kind: KindUnavailable, VendorCode: <kode vendor persis>}}` lalu `CLOSED`; Task 12 memverifikasinya terhadap test rotasi M4).
-- Produces: tabel pemetaan error §8.4.1 lengkap; keep-alive; `Close` sesuai kontrak.
+- Produces: tabel pemetaan error §8.4.1 lengkap; keep-alive; `Close` sesuai kontrak; rotasi vendor-sama (§8.5.8 butir 5) untuk KEDUA kode `session_time_limit_exceeded` dan `insufficient_audio_activity`.
 
 - [ ] **Step 1: Write the failing test**
 ```go
@@ -318,7 +319,7 @@ func TestELSTTErrorMapping(t *testing.T) {
 }
 func TestELSTTKeepAliveSilenceWhenIdle(t *testing.T) { /* KeepAliveAfter=40ms, tanpa audio → pesan 100 ms silence (3200 byte nol, commit:false); tidak ada commit */ }
 ```
-Tambah: `TestELSTTRotationSignals` (`session_time_limit_exceeded` dan `insufficient_audio_activity` → `ERROR` dengan `VendorCode` tersebut lalu `CLOSED`, bukan kind AUTH/RATE_LIMITED); `TestELSTTWarningLogsOnly` (`warning` → tanpa event, ada log WARN); `TestELSTTSocketDropIsUnavailable` (fixture `drop`: close 1006 tanpa `CloseConnection` kita → `ERROR{UNAVAILABLE}` lalu `CLOSED`); `TestELSTTSendAudioBufferFull` (server tidak membaca; > 2 s audio (> 64.000 byte) ter-antre → `SendAudio` mengembalikan `*Error{KindUnavailable}` tanpa blok); `TestELSTTSendAfterClose` (`errors.Is(err, provider.ErrSessionClosed)`); `TestELSTTCloseIdempotentWithin500ms` (`Close` dua kali, selesai ≤ 500 ms walau server tidak menutup; channel `Events()` tertutup setelah `CLOSED`); `TestELSTTEventsDropOldestPartialNeverFinal` (konsumen berhenti membaca, banjir 200 PARTIAL + 1 FINAL + ERROR → FINAL & ERROR tetap ada); `TestELSTTCancelWithin50ms` (cancel ctx saat `Open` menggantung).
+Tambah: `TestELSTTRotationSignals` (`session_time_limit_exceeded` dan `insufficient_audio_activity` → `ERROR` dengan `VendorCode` tersebut lalu `CLOSED`, bukan kind AUTH/RATE_LIMITED; test tabel dua kasus, `Err.VendorCode` persis kode vendor); `TestELSTTWarningLogsOnly` (`warning` → tanpa event, ada log WARN); `TestELSTTSocketDropIsUnavailable` (fixture `drop`: close 1006 tanpa `CloseConnection` kita → `ERROR{UNAVAILABLE}` lalu `CLOSED`); `TestELSTTSendAudioBufferFull` (server tidak membaca; > 2 s audio (> 64.000 byte) ter-antre → `SendAudio` mengembalikan `*Error{KindUnavailable}` tanpa blok); `TestELSTTSendAfterClose` (`errors.Is(err, provider.ErrSessionClosed)`); `TestELSTTCloseIdempotentWithin500ms` (`Close` dua kali, selesai ≤ 500 ms walau server tidak menutup; channel `Events()` tertutup setelah `CLOSED`); `TestELSTTEventsDropOldestPartialNeverFinal` (konsumen berhenti membaca, banjir 200 PARTIAL + 1 FINAL + ERROR → FINAL & ERROR tetap ada); `TestELSTTCancelWithin50ms` (cancel ctx saat `Open` menggantung).
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/elevenlabs/ -race -run 'ErrorMapping|KeepAlive|Rotation|Warning|Drop|BufferFull|AfterClose|CloseIdempotent|DropOldest|CancelWithin'`. Expected: FAIL.
 - [ ] **Step 3: Implement** pemetaan §8.4.1; antrean tulis berkapasitas 2 s audio; keep-alive timer `Config.KeepAliveAfter` direset tiap pengiriman; `Close`: kirim pesan penutupan, tunggu ≤ 500 ms, `Conn.CloseNow()`, emit `CLOSED`, tutup channel; semua goroutine berhenti (diverifikasi Task 12).
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/elevenlabs/ -race -count=3` → PASS.
@@ -439,7 +440,7 @@ func TestOpenAILLMConformance(t *testing.T) {
 func TestAdaptersImportRules(t *testing.T) { /* go/parser ImportsOnly: tiap internal/provider/<vendor> non-test hanya boleh stdlib, coder/websocket, prometheus/client_golang, platform/otel, provider, provider/httpx; terlarang: conversation/audio, fake, pricing, vendor lain, paket fitur lain, "os" Getenv tidak dicek di sini */ }
 func TestNoGoroutineLeakAfterCancel(t *testing.T) { /* untuk tiap adapter: catat runtime.NumGoroutine(), 20× buka stream/sesi lalu cancel/Close, tunggu ≤ 500 ms, selisih ≤ 2 */ }
 func TestNoSecretInLogsOrErrors(t *testing.T) { /* tiap adapter dengan key "SECRETKEY-123": jalankan kasus sukses + setiap kasus error 401/429/5xx dengan slog ke buffer; buffer, err.Error(), Error.Message, dan span attributes tidak memuat "SECRETKEY-123" */ }
-func TestAdapterRotationSignalMatchesRouter(t *testing.T) { /* ELEVENLABS: session_time_limit_exceeded → ERROR VendorCode yang dikenali resilientSTT M4: gunakan provider.NewRouter dengan RouterDeps.STT{ELEVENLABS: adapter(replay), DEEPGRAM: adapter(replay)} dan pastikan Stats().Reconnects==1 dan tidak ada PROVIDER_SWITCHED */ }
+func TestAdapterRotationSignalMatchesRouter(t *testing.T) { /* tabel dua kasus {session_time_limit_exceeded, insufficient_audio_activity}; ELEVENLABS: kode vendor → ERROR VendorCode yang dikenali resilientSTT M4 (masing-masing kasus): gunakan provider.NewRouter dengan RouterDeps.STT{ELEVENLABS: adapter(replay), DEEPGRAM: adapter(replay)} dan pastikan Stats().Reconnects==1 dan tidak ada PROVIDER_SWITCHED */ }
 ```
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/... -race -run 'Conformance|ImportRules|NoGoroutineLeak|NoSecret|RotationSignal'`. Expected: FAIL (fixture `*_suite.jsonl` belum ada; suite gagal).
 - [ ] **Step 3: Implement** fixture `*_suite.jsonl` reaktif per adapter dan wiring test. Bila `providertest` menemukan pelanggaran kontrak adapter, perbaiki ADAPTER (bukan suite). Bila `TestAdapterRotationSignalMatchesRouter` gagal karena router M4 mengenali sinyal lain, sesuaikan adapter (Task 8) ke sinyal router dan catat di `docs/implementation-deviations.md`; jangan ubah router.
@@ -456,7 +457,7 @@ func TestAdapterRotationSignalMatchesRouter(t *testing.T) { /* ELEVENLABS: sessi
 - Test: `cmd/internal/providerwire/build_test.go`
 
 **Interfaces:**
-- Consumes: semua `New*` Task 2–11, `httpx.NewClient`, `provider.RouterConfig` (+`Selection(cap)`, `Mode(cap)` bila ada; jika M4 tidak mengekspos mode efektif per kapabilitas, tambahkan `func (c RouterConfig) ModeFor(cap Capability) string` (nama dari plan) di `config.go` + test).
+- Consumes: semua `New*` Task 2–11, `httpx.NewClient`, `provider.RouterConfig` (+`Selection(cap)` dan `ModeFor(cap Capability) string` dari M4 T3; dipakai tanpa syarat, tidak ditambahkan ulang), `providerwire` yang sudah dibuat M5 (`cmd/internal/providerwire/fake.go`, `BuildFake`) — task ini MEMPERLUAS paket itu dengan `build.go`.
 - Produces: `type RealDeps struct{ STT map[provider.Name]provider.STTProvider; LLM map[provider.Name]provider.LLMProvider; TTS map[provider.Name]provider.TTSProvider; Evaluation map[provider.Name]provider.EvaluationProvider; Embedding provider.EmbeddingProvider; Pron provider.PronunciationProvider }`; `func Build(cfg provider.RouterConfig, caps []provider.Capability, log *slog.Logger) (RealDeps, error)` — hanya membangun kapabilitas di `caps` yang `ModeFor(cap)=="real"`, hanya vendor yang dirujuk `Selection(cap)` (primary + fallback bila `FallbackEnabled`); `cmd/*/main.go` menggabungkan: kapabilitas mode `real` ← `RealDeps`, sisanya ← wiring fake M4/M5 yang sudah ada. Satu `*http.Client` (`httpx.NewClient`) per vendor.
 
 - [ ] **Step 1: Write the failing test**
@@ -483,13 +484,13 @@ func TestBuildPronunciationNone(t *testing.T) { /* PronunciationPrimary=NONE →
 ### Task 14: Validasi startup mode `real` + penolakan voice ID placeholder + wiring `cmd/*`
 
 **Files:**
-- Create: `cmd/internal/providerwire/{validate.go,voicecheck.go}`, `db/queries/voicecheck.sql`, `internal/postgres/voicecheck_repo.go`
-- Modify: `cmd/realtime/main.go` & `wiring.go` (blok pembuat `RouterDeps`), `cmd/worker/wiring.go`, `cmd/api/main.go` (hanya panggil `ValidateVoices`), `internal/postgres/sqlcgen` (hasil `make sqlc`)
-- Test: `cmd/internal/providerwire/validate_test.go`, `internal/postgres/voicecheck_repo_integration_test.go` (tag `integration`), `cmd/realtime/main_test.go`
+- Create: `cmd/internal/providerwire/validate.go`, `internal/content/voicecheck.go`, `db/queries/voicecheck.sql`, `internal/postgres/voicecheck_repo.go`
+- Modify: `cmd/realtime/main.go` & `cmd/realtime/providers.go` (blok pembuat `RouterDeps`: kapabilitas mode real ← `providerwire.Build`, sisanya ← `providerwire.BuildFake`), `cmd/worker/main.go` (+ wiring provider worker bila sudah ada file wiring-nya; ikuti nama file M6/M7), `cmd/api/main.go` (hanya `content.ValidateVoices`; TIDAK mengimpor `providerwire`), `internal/postgres/sqlcgen` (hasil `make sqlc`)
+- Test: `cmd/internal/providerwire/validate_test.go`, `internal/content/voicecheck_test.go`, `internal/postgres/voicecheck_repo_integration_test.go` (tag `integration`), `cmd/realtime/main_test.go` (HAPUS/balik `TestRealtimeRejectsRealModeInM5` milik M5 T25 — mode real kini diterima — diganti `TestRealtimeAcceptsRealModeWithKeys` dan `TestRealtimeRejectsRealModeWithoutKeys`)
 
 **Interfaces:**
 - Consumes: Task 13; `postgres` pool; M3 tabel `voice_provider_configs`, seed §6.13.
-- Produces: `func ValidateReal(cfg provider.RouterConfig, caps []provider.Capability) error` (kunci wajib per vendor yang dirujuk `Selection(cap)` di kapabilitas mode `real`: `ELEVENLABS_API_KEY`, `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `AZURE_SPEECH_KEY`+`AZURE_SPEECH_ENDPOINT` (kecuali `PRONUNCIATION_PRIMARY=NONE`); model profile PREMIUM/STANDARD terisi; pesan menyebut nama env, tidak pernah nilainya); `type VoiceChecker interface{ PlaceholderVoices(ctx context.Context, vendors []provider.Name) ([]PlaceholderVoice, error) }` + `PlaceholderVoice{VoiceProfileCode string; Provider provider.Name; VoiceID string}`; `func ValidateVoices(ctx context.Context, cfg provider.RouterConfig, vc VoiceChecker) error` (hanya bila `ModeFor(CapTTS)=="real"`: baris `ACTIVE` untuk `TTSPrimary` dan, bila `FallbackEnabled`, `TTSFallback` dengan `provider_voice_id LIKE 'PLACEHOLDER\_%'` → error menyebut `voice_profile.code`, vendor, dan petunjuk `seed/env/<env>/0900_voice_ids.sql` §6.13.3); `postgres.NewVoiceCheckRepo(pool) *VoiceCheckRepo` (`PlaceholderVoices`).
+- Produces: `func ValidateReal(cfg provider.RouterConfig, caps []provider.Capability) error` (kunci wajib per vendor yang dirujuk `Selection(cap)` di kapabilitas mode `real`: `ELEVENLABS_API_KEY`, `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `AZURE_SPEECH_KEY`+`AZURE_SPEECH_ENDPOINT` (kecuali `PRONUNCIATION_PRIMARY=NONE`); model profile PREMIUM/STANDARD terisi; pesan menyebut nama env, tidak pernah nilainya); di paket `content` (M3; tanpa impor `provider`/infra, vendor berupa `string` UPPERCASE): `type PlaceholderVoice struct{ VoiceProfileCode, Provider, VoiceID string }`; `type VoiceChecker interface{ PlaceholderVoices(ctx context.Context, vendors []string) ([]PlaceholderVoice, error) }`; `type VoiceCheckConfig struct{ RealTTS bool; Primary, Fallback string; FallbackEnabled bool }`; `func ValidateVoices(ctx context.Context, vc VoiceChecker, c VoiceCheckConfig) error` (hanya bila `RealTTS`: baris `ACTIVE` untuk `Primary` dan, bila `FallbackEnabled`, `Fallback` dengan `provider_voice_id LIKE 'PLACEHOLDER\_%'` → error menyebut `voice_profile.code`, vendor, dan petunjuk `seed/env/<env>/0900_voice_ids.sql` §6.13.3); `postgres.NewVoiceCheckRepo(pool) *VoiceCheckRepo` memenuhi `content.VoiceChecker`. Pemanggil (`cmd/api`, `cmd/realtime`) mengisi `VoiceCheckConfig{RealTTS: cfg.ModeFor(provider.CapTTS)=="real", Primary: string(cfg.TTSPrimary), Fallback: string(cfg.TTSFallback), FallbackEnabled: cfg.FallbackEnabled}`. `providerwire` hanya memuat `Build`, `ValidateReal` (dan `BuildFake` milik M5).
 
 - [ ] **Step 1: Write the failing test**
 ```go
@@ -499,14 +500,14 @@ func TestValidateRealRejectsMissingKeys(t *testing.T) {
 	cfg = realConfig(t); cfg.PronunciationPrimary = provider.None; cfg.AzureSpeechKey = ""; require.NoError(t, providerwire.ValidateReal(cfg, allCaps))
 	cfg = realConfig(t); cfg.ModeLLM = "fake"; cfg.OpenAIAPIKey = ""; require.NoError(t, providerwire.ValidateReal(cfg, allCaps)) // LLM fake → key tak wajib
 }
-func TestPlaceholderVoiceRejectedAtStartup(t *testing.T) { // VoiceChecker fake mengembalikan {Code:"JA_F_KANTO_PREMIUM_01", Provider: ELEVENLABS, VoiceID: "PLACEHOLDER_ELEVENLABS_JA_F_KANTO_PREMIUM_01"}
-	err := providerwire.ValidateVoices(ctx, realConfig(t), fakeChecker{...}); require.ErrorContains(t, err, "JA_F_KANTO_PREMIUM_01"); require.ErrorContains(t, err, "0900_voice_ids.sql")
-	cfg := realConfig(t); cfg.ModeTTS = "fake"; require.NoError(t, providerwire.ValidateVoices(ctx, cfg, fakeChecker{...})) // mode TTS fake → tidak diperiksa
+func TestPlaceholderVoiceRejectedAtStartup(t *testing.T) { // (di internal/content/voicecheck_test.go) VoiceChecker fake mengembalikan {VoiceProfileCode:"JA_F_KANTO_PREMIUM_01", Provider:"ELEVENLABS", VoiceID:"PLACEHOLDER_ELEVENLABS_JA_F_KANTO_PREMIUM_01"}
+	err := content.ValidateVoices(ctx, fakeChecker{...}, content.VoiceCheckConfig{RealTTS: true, Primary: "ELEVENLABS", Fallback: "DEEPGRAM", FallbackEnabled: true}); require.ErrorContains(t, err, "JA_F_KANTO_PREMIUM_01"); require.ErrorContains(t, err, "0900_voice_ids.sql")
+	require.NoError(t, content.ValidateVoices(ctx, fakeChecker{...}, content.VoiceCheckConfig{RealTTS: false, Primary: "ELEVENLABS"})) // mode TTS fake → tidak diperiksa; FallbackEnabled=false → fallback tidak diperiksa
 }
 ```
-Integration (`-tags integration`): `TestVoiceCheckRepoFindsPlaceholders` — `testutil.NewPostgres(t)` + apply `seed/*.sql` (helper seed M3 `testutil.ApplySeed(t, pool)`; jika tidak ada, jalankan file seed lewat `pool.Exec`): `PlaceholderVoices(ctx, [ELEVENLABS, DEEPGRAM])` → 8 baris (4 voice × 2 vendor); setelah `UPDATE … SET provider_voice_id='real-1'` untuk semua ELEVENLABS & status DISABLED untuk satu DEEPGRAM → hanya 3 baris DEEPGRAM tersisa; vendor `OPENAI` → 0 baris (voice bawaan valid). `cmd/realtime/main_test.go`: `PROVIDER_MODE=real` tanpa `ELEVENLABS_API_KEY` → `run` mengembalikan error sebelum membuka koneksi DB/Redis (exit code 1 di `main`); `PROVIDER_MODE=fake` → tidak memanggil `ValidateReal`.
-- [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/internal/providerwire/ ./cmd/realtime/ -race -run 'ValidateReal|PlaceholderVoice|Realtime'`; `go test -tags integration ./internal/postgres/ -race -run VoiceCheck`. Expected: FAIL.
-- [ ] **Step 3: Implement** query sqlc `-- name: PlaceholderVoices :many` (JOIN `voice_profiles` untuk `code`, `provider = ANY($1)`, `status='ACTIVE'`, `provider_voice_id LIKE 'PLACEHOLDER\_%'`); `make sqlc`. Wiring: `cmd/realtime` & `cmd/worker` memanggil `ValidateReal` setelah config parse (sebelum koneksi apa pun), lalu `Build`, lalu mengisi `RouterDeps` per kapabilitas; `cmd/realtime` dan `cmd/api` memanggil `ValidateVoices` setelah pool siap (api memakai pool-nya sendiri; worker tidak memakai TTS). Kegagalan → log ERROR tanpa secret + exit code 1.
+Integration (`-tags integration`): `TestVoiceCheckRepoFindsPlaceholders` — `testutil.NewPostgres(t)` + apply `seed/*.sql` (helper seed M3 `testutil.ApplySeed(t, pool)`; jika tidak ada, jalankan file seed lewat `pool.Exec`): `PlaceholderVoices(ctx, []string{"ELEVENLABS","DEEPGRAM"})` → 8 baris (4 voice × 2 vendor); setelah `UPDATE … SET provider_voice_id='real-1'` untuk semua ELEVENLABS & status DISABLED untuk satu DEEPGRAM → hanya 3 baris DEEPGRAM tersisa; vendor `OPENAI` → 0 baris (voice bawaan valid). `cmd/realtime/main_test.go`: `TestRealtimeRejectsRealModeWithoutKeys` — `PROVIDER_MODE=real` tanpa `ELEVENLABS_API_KEY` → `run` mengembalikan error sebelum membuka koneksi DB/Redis (exit code 1 di `main`); `PROVIDER_MODE=fake` → tidak memanggil `ValidateReal`.
+- [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/internal/providerwire/ ./cmd/realtime/ ./internal/content/ -race -run 'ValidateReal|PlaceholderVoice|Realtime'`; `go test -tags integration ./internal/postgres/ -race -run VoiceCheck`. Expected: FAIL.
+- [ ] **Step 3: Implement** query sqlc `-- name: PlaceholderVoices :many` (JOIN `voice_profiles` untuk `code`, `provider = ANY($1)`, `status='ACTIVE'`, `provider_voice_id LIKE 'PLACEHOLDER\_%'`); `make sqlc`. Wiring (`cmd/realtime/providers.go`, `cmd/worker`): panggil `providerwire.ValidateReal` setelah config parse (sebelum koneksi apa pun), lalu `Build` untuk kapabilitas mode real dan `BuildFake` untuk sisanya, gabungkan ke `RouterDeps` per kapabilitas; `cmd/realtime` dan `cmd/api` memanggil `content.ValidateVoices` setelah pool siap (api memakai pool-nya sendiri; worker tidak memakai TTS). Kegagalan → log ERROR tanpa secret + exit code 1.
 - [ ] **Step 4: Run tests to verify they pass** — perintah Step 2 → PASS; `make sqlc-check lint arch-check` → exit 0; `PROVIDER_MODE=fake make run-realtime` masih start (smoke manual 5 detik).
 - [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(cmd): validasi startup mode real, tolak voice ID placeholder, wiring adapter"`
 
@@ -519,7 +520,7 @@ Integration (`-tags integration`): `TestVoiceCheckRepoFindsPlaceholders` — `te
 - Test: file yang sama; **butuh**: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, `DEEPGRAM_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_ENDPOINT`, `LIVE_ELEVENLABS_VOICE_ID`, `LIVE_DEEPGRAM_VOICE` (mis. `aura-2-izanami-ja`), `LIVE_LLM_MODEL_OPENAI`, `LIVE_LLM_MODEL_GEMINI`, `LIVE_TTS_MODEL_ELEVENLABS`, `LIVE_STT_MODEL_DEEPGRAM`, `LIVE_STT_MODEL_ELEVENLABS` — dibaca hanya lewat `testutil.RequireEnv`.
 
 **Interfaces:**
-- Consumes: Task 2–11, `testutil.RequireEnv`, `testdata/audio/{ja_greeting_short,ja_self_intro,ja_question,ja_filler_pause,ja_long_utterance}.wav+.txt` (M5/§14.5; resample 48→16 kHz dengan `provider.ResamplePCM16`; **bila fixture belum direkam penutur asli → MANUAL GATE: rekam ≥ 4 fixture asli**), flag test `-record` (`flag.Bool("record", false, …)` di `live_helpers_test.go`; bila true, `replay.NewRecorder` dipasang ke `http.Client.Transport`/`Config.Tap` dan menulis ke `testdata/recordings/<cap>_<case>.jsonl` dengan `meta.verified=true`).
+- Consumes: Task 2–11, `testutil.RequireEnv`, `testdata/audio/{ja_greeting_short,ja_self_intro,ja_question,ja_filler_pause,ja_long_utterance}.wav+.txt` — HANYA rekaman penutur asli di `testdata/audio/` (M5 menyimpan WAV sintetis di `testdata/audio/synth/`; test live TIDAK memakai `synth/` dan task ini TIDAK menimpa/mengubah isinya) (§14.5; resample 48→16 kHz dengan `provider.ResamplePCM16`; **bila fixture belum direkam penutur asli → MANUAL GATE: rekam ≥ 4 fixture asli**), flag test `-record` (`flag.Bool("record", false, …)` di `live_helpers_test.go`; bila true, `replay.NewRecorder` dipasang ke `http.Client.Transport`/`Config.Tap` dan menulis ke `testdata/recordings/<cap>_<case>.jsonl` dengan `meta.verified=true`).
 - Produces: kriteria §14.6 sebagai test: STT (ElevenLabs & Deepgram) CER ≤ 0,15 untuk 5 fixture (CER = Levenshtein rune setelah membuang spasi & `。、？！?!,.・「」`; helper `cer(a,b string) float64` di test, diuji `TestCER`); LLM (OpenAI & Gemini) 10 prompt golden → teks Jepang, ≥ 90% kalimat berformat tag `<e:NAME>` D-081, first token < 2 s; TTS (ElevenLabs & Deepgram) kalimat 30 karakter → ≥ 0,5 s PCM16 24 kHz per voice; embedding dimensi 1536; Azure skor terisi untuk `ja_self_intro`; evaluation OpenAI & Gemini: skema kecil → JSON valid; satu run < 5 menit.
 
 - [ ] **Step 1: Write the failing test**
@@ -549,7 +550,7 @@ Tambah: satu test live per baris kriteria di atas (`TestLiveDeepgramSTT`, `TestL
 - Test: `test/e2e/real/real_test.go`
 
 **Interfaces:**
-- Consumes: M5 `bin/realtime`, `bin/api`, `bin/kaiwa-cli converse` (flag §14.11.2), `testdata/audio/ja_self_intro.wav`; Task 13–14; voice ID nyata dari Task 22 (sebelum itu gunakan voice ID sementara di `seed/env/local/0900_voice_ids.sql` dari akun operator, tidak di-commit).
+- Consumes: M5 `bin/realtime`, `bin/api`, `bin/kaiwa-cli converse` (flag §14.11.2), `testdata/audio/ja_self_intro.wav` (rekaman asli, bukan `synth/`); Task 13–14; voice ID nyata dari Task 22 (sebelum itu gunakan voice ID sementara di `seed/env/local/0900_voice_ids.sql` dari akun operator, tidak di-commit).
 - Produces: `make e2e-real` = `test/e2e/real/run.sh`: start Postgres/Redis/RabbitMQ (`docker compose up -d --wait`), `make migrate-up seed`, `seed/env/local/0900_voice_ids.sql`, jalankan `bin/api` & `bin/realtime` dengan `PROVIDER_MODE=real`, `kaiwa-cli register/login`, `kaiwa-cli converse --wav testdata/audio/ja_self_intro.wav --duration 300 --end after-last --out-dir out/e2e-real`, lalu cek keluaran; exit 2 bila kunci hilang (pesan menyebut variabel, bukan nilainya).
 
 - [ ] **Step 1: Write the failing test**
@@ -623,7 +624,7 @@ func TestRunLLMMeasuresFirstSentence(t *testing.T) {
 	rs := bench.RunLLM(ctx, l, bench.Candidate{Provider: provider.FakePrimary, Model: "fake"}, []bench.Item{{ID: "c1", Set: "LLM-context", Messages: msgs}}, 2)
 	require.Len(t, rs, 2); require.Greater(t, rs[0].Values["first_sentence_ms"], 0.0); require.True(t, rs[0].Flags["format_ok"])
 }
-func TestRunSTTComputesCERAndFinalLatency(t *testing.T) { /* fake STT mode fixture dengan testdata/audio WAV+txt → CER 0 untuk item yang cocok; final_after_finalize_ms terisi */ }
+func TestRunSTTComputesCERAndFinalLatency(t *testing.T) { /* fake STT mode fixture dengan `testdata/audio/synth/` WAV+txt (sintetis M5; hanya dibaca) → CER 0 untuk item yang cocok; final_after_finalize_ms terisi */ }
 func TestWriteProfileEnvFormat(t *testing.T) { /* golden: baris "PROVIDER_PROFILE_STANDARD_LLM_MODEL=<m>", "PROVIDER_STT_ELEVENLABS_MODEL=…", komentar "# limit plan akun: …"; tanpa secret; tidak memuat kunci ELEVENLABS_API_KEY */ }
 func TestConcurrencyRamp(t *testing.T) { /* call mengembalikan *provider.Error{KindRateLimited} untuk 30% → rate_limited_pct≈30 (±1) pada step 100 */ }
 ```
@@ -670,7 +671,7 @@ Integration `TestQueryGroupsByStack`: `testutil.NewPostgres` + helper insert ses
 
 **Interfaces:**
 - Consumes: `bench.LoadManifest`, `bench.LoadModels` (Task 17); bucket privat `s3://kaiwa-benchmark/v1/` (§8.10.2); CONVERSATION prompt nyata dari seed (`prompt.Render` pada 30 konteks).
-- Produces: dataset sesuai §8.10.2: STT-native ≥ 40 (jawaban pendek `はい`/`そうですね`, kalimat 8–15 s, angka/tanggal/harga, katakana serapan, nama tempat), STT-learner ≥ 40 (pelajar Indonesia N5–N3; filler, jeda, salah ucap), STT-noise 10 (noise kafe/jalan SNR 10 dB), LLM-context 30 (3–8 turn riwayat; field `messages` berisi system prompt CONVERSATION nyata hasil render + riwayat), TTS-sentences 50 (pendek, tanya, emosi, kanji sulit, angka; `expression` terisi); subset 10 file berlisensi bebas di `testdata/audio/` untuk fake-STT CI; `bench/models.yaml` kandidat: LLM 2–3 model OpenAI + 2 model Gemini (`role` PRIMARY/FALLBACK), TTS 3 model ElevenLabs × voice kandidat + 2 suara Aura-2 ja (`aura-2-fujin-ja`, `aura-2-izanami-ja`, `aura-2-uzume-ja`, `aura-2-ebisu-ja`, `aura-2-ama-ja` dipilih 2), STT `scribe_v2_realtime`, `nova-3`, `nova-2`.
+- Produces: dataset sesuai §8.10.2: STT-native ≥ 40 (jawaban pendek `はい`/`そうですね`, kalimat 8–15 s, angka/tanggal/harga, katakana serapan, nama tempat), STT-learner ≥ 40 (pelajar Indonesia N5–N3; filler, jeda, salah ucap), STT-noise 10 (noise kafe/jalan SNR 10 dB), LLM-context 30 (3–8 turn riwayat; field `messages` berisi system prompt CONVERSATION nyata hasil render + riwayat), TTS-sentences 50 (pendek, tanya, emosi, kanji sulit, angka; `expression` terisi); subset 10 file berlisensi bebas di `testdata/audio/bench-free/` (+`.txt`) untuk fake-STT CI (tidak menyentuh `testdata/audio/synth/` milik M5); `bench/models.yaml` kandidat: LLM 2–3 model OpenAI + 2 model Gemini (`role` PRIMARY/FALLBACK), TTS 3 model ElevenLabs × voice kandidat + 2 suara Aura-2 ja (`aura-2-fujin-ja`, `aura-2-izanami-ja`, `aura-2-uzume-ja`, `aura-2-ebisu-ja`, `aura-2-ama-ja` dipilih 2), STT `scribe_v2_realtime`, `nova-3`, `nova-2`.
 
 - [ ] **Step 1: Write the failing test**
 ```go
@@ -683,9 +684,9 @@ func TestRepoManifestValid(t *testing.T) { // memuat testdata/benchmark/manifest
 }
 ```
 - [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/kaiwa-cli/internal/bench/ -race -run TestRepoManifestValid`. Expected: FAIL (manifest belum ada).
-- [ ] **Step 3: Checklist MANUAL GATE** (selesai bila Step 4 lulus): (1) rekrut penutur asli + pelajar Indonesia, persetujuan tertulis tersimpan di luar repo; (2) rekam WAV 16 kHz mono (STT-noise: campur noise SNR 10 dB), upload ke `s3://kaiwa-benchmark/v1/`, isi `audio_uri`, `reference_text` diverifikasi dua orang; (3) tulis 30 konteks LLM (render CONVERSATION prompt nyata); (4) tulis 50 kalimat TTS + label ekspresi; (5) pilih 10 file berlisensi bebas ke `testdata/audio/` (`.txt` sidecar); (6) tulis `bench/models.yaml` (kandidat, role, voice) dari daftar model yang tersedia di akun saat ini (verifikasi di dokumentasi vendor, jangan menebak nama model); (7) tetapkan 2 reviewer berbahasa Jepang untuk penilaian 1–5 (naturalness, kesesuaian level, konsistensi karakter) dan MOS TTS; format lembar penilaian: CSV `item_id,reviewer,candidate,score_naturalness,score_level,score_character,mos,kanji_misread(0|1)` disimpan di `bench/results/<tanggal>/human.csv`.
+- [ ] **Step 3: Checklist MANUAL GATE** (selesai bila Step 4 lulus): (1) rekrut penutur asli + pelajar Indonesia, persetujuan tertulis tersimpan di luar repo; (2) rekam WAV 16 kHz mono (STT-noise: campur noise SNR 10 dB), upload ke `s3://kaiwa-benchmark/v1/`, isi `audio_uri`, `reference_text` diverifikasi dua orang; (3) tulis 30 konteks LLM (render CONVERSATION prompt nyata); (4) tulis 50 kalimat TTS + label ekspresi; (5) pilih 10 file berlisensi bebas ke `testdata/audio/bench-free/` (`.txt` sidecar; jangan menimpa `testdata/audio/synth/`); (6) tulis `bench/models.yaml` (kandidat, role, voice) dari daftar model yang tersedia di akun saat ini (verifikasi di dokumentasi vendor, jangan menebak nama model); (7) tetapkan 2 reviewer berbahasa Jepang untuk penilaian 1–5 (naturalness, kesesuaian level, konsistensi karakter) dan MOS TTS; format lembar penilaian: CSV `item_id,reviewer,candidate,score_naturalness,score_level,score_character,mos,kanji_misread(0|1)` disimpan di `bench/results/<tanggal>/human.csv`.
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./cmd/kaiwa-cli/internal/bench/ -race -run TestRepoManifestValid` → PASS; `aws s3 ls s3://kaiwa-benchmark/v1/ | wc -l` ≥ 90 objek audio.
-- [ ] **Step 5: Commit** — `git add testdata/benchmark bench/models.yaml testdata/audio && git commit -m "test(benchmark): dataset golden Jepang (manifest) dan kandidat model"`
+- [ ] **Step 5: Commit** — `git add testdata/benchmark bench/models.yaml testdata/audio/bench-free && git commit -m "test(benchmark): dataset golden Jepang (manifest) dan kandidat model"`
 
 ---
 
@@ -730,14 +731,14 @@ func TestShippedPricesNonZeroForSelectedModels(t *testing.T) { // membaca deploy
 - Test: `internal/postgres/voicecheck_repo_integration_test.go` (menambah `TestEnvVoiceSeedClearsPlaceholders`, tag `integration`)
 
 **Interfaces:**
-- Consumes: Task 14 `PlaceholderVoices`, hasil Task 21 (model & vendor terpilih), seed §6.13.4 (4 voice profile: `JA_F_KANTO_PREMIUM_01`, `JA_M_KANTO_PREMIUM_01`, `JA_F_KANSAI_STANDARD_01`, `JA_M_KANTO_STANDARD_01`; config id `01920000-0009-7000-8000-00000000000N`).
+- Consumes: Task 14 `content.VoiceChecker`/`PlaceholderVoices`, hasil Task 21 (model & vendor terpilih), seed §6.13.4 (4 voice profile: `JA_F_KANTO_PREMIUM_01`, `JA_M_KANTO_PREMIUM_01`, `JA_F_KANSAI_STANDARD_01`, `JA_M_KANTO_STANDARD_01`; config id `01920000-0009-7000-8000-00000000000N`).
 - Produces: `0900_voice_ids.sql` berformat §6.13.3 (`BEGIN; UPDATE voice_provider_configs SET provider_voice_id='<id nyata>', updated_at=now() WHERE id='<id>' AND provider_voice_id LIKE 'PLACEHOLDER\_%'; … COMMIT;`) satu baris per config ELEVENLABS dan DEEPGRAM (8 baris); `0910_voice_caps.sql` yang menambah `AUDIO_TAGS` (hanya bila model efektif ElevenLabs mendukung audio tag) dan `KANSAI_DIALECT` (hanya untuk voice Kansai setelah verifikasi manusia) — `SPEED` Deepgram hanya bila Task 10 Step 0(c) membuktikan `speed` berlaku untuk Aura-2 Jepang.
 
 - [ ] **Step 1: Write the failing test**
 ```go
 func TestEnvVoiceSeedClearsPlaceholders(t *testing.T) { // integration; env dari KAIWA_SEED_ENV via testutil (staging)
 	pool := testutil.NewPostgres(t); applySeed(t, pool); applyEnvSeed(t, pool, "staging")
-	got, err := postgres.NewVoiceCheckRepo(pool).PlaceholderVoices(ctx, []provider.Name{provider.ElevenLabs, provider.Deepgram})
+	got, err := postgres.NewVoiceCheckRepo(pool).PlaceholderVoices(ctx, []string{"ELEVENLABS", "DEEPGRAM"})
 	require.NoError(t, err); require.Empty(t, got)
 }
 ```

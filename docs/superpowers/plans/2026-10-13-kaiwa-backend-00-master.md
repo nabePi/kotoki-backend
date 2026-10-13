@@ -47,7 +47,7 @@ Kondisi yang tersirat spec tetapi paling mungkin menggigit pengguna, dan milesto
 | `…-00-master.md` (ini) | Urutan milestone, batas, kontrak antar-milestone, aturan eksekusi |
 | `…-M1-foundation-schema.md` … `…-M10-hardening.md` | Satu rencana per milestone, task berurut, siap dieksekusi agent |
 
-Eksekusi **berurutan** M1 → M10 kecuali tabel dependensi di bawah mengizinkan paralel. Satu milestone selesai bila semua task-nya DONE **dan** gerbang milestone (di akhir plan-nya) lulus. Jangan mulai milestone berikutnya sebelum gerbang lulus.
+Urutan eksekusi yang aman: **M1 → M2 → M4 → M3 → M5 → M6 → M7 → M8 → M9 → M10** (M4 boleh paralel dengan M2; M6 boleh paralel dengan M5; M9 boleh paralel dengan M7–M8). Jumlah task per plan: M1 25, M2 25, M3 24, M4 25, M5 30, M6 24, M7 21, M8 22, M9 23, M10 24 (total 243). Plan ditulis sebelum kode ada: nama yang disebut "(nama dari plan)" dan asumsi antar-plan sudah direkonsiliasi, tetapi setiap plan memuat task preflight yang memeriksa simbol milestone sebelumnya; jika berbeda, sesuaikan dan catat di `docs/implementation-deviations.md`. Satu milestone selesai bila semua task-nya DONE **dan** gerbang milestone (di akhir plan-nya) lulus. Jangan mulai milestone berikutnya sebelum gerbang lulus.
 
 ## Daftar milestone
 
