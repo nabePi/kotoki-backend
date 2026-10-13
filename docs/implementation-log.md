@@ -55,3 +55,16 @@ Tanggal: 2026-10-13
 - Tidak ada
 ### Sisa / blocker
 - Tidak ada
+
+## M1-T4 — internal/platform/config
+Status: DONE
+Tanggal: 2026-10-13
+### Implementasi
+- `secret.go` (`Secret` redacted di String/LogValue), `config.go` (struct Common/DB/Redis/OTel + API/Realtime/Worker, default per binary via prefill, `LoadAPI/LoadRealtime/LoadWorker` + varian `loadX(map)`), `validate.go` (aturan §13.2.13, error digabung `errors.Join`, tiap pesan diawali nama variabel), `handlers.go` (`ParseWorkerHandlers`)
+- `internal/testutil/env.go`: `MinimalEnv`, `ApplyEnv` (satu-satunya daftar env wajib); dependensi `github.com/caarlos0/env/v11`
+### Test
+- go test ./internal/platform/config/... -race -cover — PASS, coverage 88.7%
+### Penyimpangan
+- Tidak ada (default `WS_ALLOWED_ORIGINS=http://localhost:3000` dipilih agar realtime lolos MinimalEnv; spec menandainya wajib di prod, yang ditegakkan oleh validasi https)
+### Sisa / blocker
+- Tidak ada
