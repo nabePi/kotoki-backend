@@ -82,3 +82,16 @@ Tanggal: 2026-10-13
 - Tidak ada
 ### Sisa / blocker
 - `trace_id`/`span_id` ditambahkan di Handle sehingga bila logger memakai `WithGroup`, keduanya berada di dalam grup tersebut (perilaku slog standar)
+
+## M1-T6 — internal/testutil dasar
+Status: DONE
+Tanggal: 2026-10-13
+### Implementasi
+- `testdata.go` (`ModuleRoot`, `TestdataPath`, stdlib saja), `trace.go` (`NewTraceRecorder` dengan `tracetest` in-memory exporter, provider global dipulihkan di cleanup), `fakes/failinjector.go` (`FailInjector` sekali pakai, aman konkuren), `repotest/repotest.go` (`Case[T]`, `Each[T]`), `testdata/api/rest/.gitkeep`
+- `go.opentelemetry.io/otel` menjadi dependensi langsung (versi v1.38.0 tetap)
+### Test
+- go test ./internal/testutil/... ./internal/platform/logging/... -race — PASS
+### Penyimpangan
+- Tidak ada
+### Sisa / blocker
+- Tidak ada
