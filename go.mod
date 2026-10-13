@@ -2,7 +2,10 @@ module github.com/nabePi/kotoki-backend
 
 go 1.25
 
-require github.com/stretchr/testify v1.12.1
+require (
+	github.com/google/uuid v1.6.0
+	github.com/stretchr/testify v1.12.1
+)
 
 require (
 	cel.dev/expr v0.19.1 // indirect
@@ -14,7 +17,6 @@ require (
 	github.com/fatih/structtag v1.2.0 // indirect
 	github.com/go-sql-driver/mysql v1.9.2 // indirect
 	github.com/google/cel-go v0.24.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

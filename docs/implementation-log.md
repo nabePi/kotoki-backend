@@ -42,3 +42,16 @@ Tanggal: 2026-10-13
 - Tidak ada
 ### Sisa / blocker
 - Tidak ada
+
+## M1-T3 — internal/platform/clock dan idgen
+Status: DONE
+Tanggal: 2026-10-13
+### Implementasi
+- `clock`: `Clock`, `System` (UTC), `Fake` (NewFake/Now/Advance/Set, aman konkuren)
+- `idgen`: `Generator`, `NewV7` (UUIDv7 acak), `NewSequence(t)` (deterministik, naik, UUIDv7 valid); `github.com/google/uuid` dijadikan dependensi langsung di go.mod
+### Test
+- go test ./internal/platform/clock/... ./internal/platform/idgen/... -race — PASS
+### Penyimpangan
+- Tidak ada
+### Sisa / blocker
+- Tidak ada
