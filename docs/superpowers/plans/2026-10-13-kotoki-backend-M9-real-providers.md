@@ -1,13 +1,13 @@
-# Kaiwa Backend — M9 Real Providers & Benchmark Implementation Plan
+# Kotoki Backend — M9 Real Providers & Benchmark Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Mengganti provider fake dengan adapter vendor nyata (ElevenLabs, Deepgram, OpenAI, Gemini, Azure) yang lulus recorded-fixture test + `providertest`, men-wire `PROVIDER_MODE=real` dengan validasi startup, dan menyediakan `kaiwa-cli provider-bench`/`provider-report` untuk menetapkan model & voice ID awal berdasarkan benchmark terukur.
-**Architecture:** Satu paket per vendor `internal/provider/<vendor>` (`net/http` + `coder/websocket`, tanpa SDK) yang hanya mengimpor `provider`, `provider/httpx`, `platform/otel`, stdlib; tidak mengimpor `conversation/audio`, `fake`, `pricing`, vendor lain (resample/WAV lewat `provider/pcm.go`). Adapter dirakit hanya di `cmd/internal/providerwire` (dipakai `cmd/realtime`, `cmd/worker`, `cmd/kaiwa-cli`); tool benchmark hidup di `cmd/kaiwa-cli/internal/{bench,report}` dan bergantung pada port (bukan vendor) sehingga teruji dengan `fake`. Fixture recorded dimainkan oleh simulator vendor di `internal/testutil/replay`; semua yang butuh kunci/akun/penilaian manusia ditandai **MANUAL GATE**.
+**Goal:** Mengganti provider fake dengan adapter vendor nyata (ElevenLabs, Deepgram, OpenAI, Gemini, Azure) yang lulus recorded-fixture test + `providertest`, men-wire `PROVIDER_MODE=real` dengan validasi startup, dan menyediakan `kotoki-cli provider-bench`/`provider-report` untuk menetapkan model & voice ID awal berdasarkan benchmark terukur.
+**Architecture:** Satu paket per vendor `internal/provider/<vendor>` (`net/http` + `coder/websocket`, tanpa SDK) yang hanya mengimpor `provider`, `provider/httpx`, `platform/otel`, stdlib; tidak mengimpor `conversation/audio`, `fake`, `pricing`, vendor lain (resample/WAV lewat `provider/pcm.go`). Adapter dirakit hanya di `cmd/internal/providerwire` (dipakai `cmd/realtime`, `cmd/worker`, `cmd/kotoki-cli`); tool benchmark hidup di `cmd/kotoki-cli/internal/{bench,report}` dan bergantung pada port (bukan vendor) sehingga teruji dengan `fake`. Fixture recorded dimainkan oleh simulator vendor di `internal/testutil/replay`; semua yang butuh kunci/akun/penilaian manusia ditandai **MANUAL GATE**.
 **Tech Stack:** Go 1.25, `net/http`, `github.com/coder/websocket`, `encoding/json`, `otelhttp`/`platform/otel` (trace), `prometheus/client_golang` (hanya gauge rate-limit adapter), `gopkg.in/yaml.v3` (hanya `provider/pricing`, sudah ada), `pgx/v5` (hanya `provider-report`), testify, testcontainers-postgres (integration). Tanpa SDK vendor, tanpa library baru (D-003).
-**Spec:** docs/superpowers/specs/2026-10-12-kaiwa-backend-design.md — Bab 8 §8.4.0–8.4.11 (adapter), §8.5.1 (env & validasi startup), §8.8.3 (`provider-report`), §8.10 (benchmark), §8.11 + §14.6 (test adapter), §6.3.5/§6.13.3 (voice ID), D-040, D-041, D-NEW-8-1…8-31.
-**Master plan:** docs/superpowers/plans/2026-10-13-kaiwa-backend-00-master.md (Global Constraints di sana berlaku untuk semua task)
-**Depends on:** M4 (port & tipe `provider.*`, `provider.Error/KindOf`, `httpx.NewClient/ClassifyHTTP/ClassifyError/ClassifyWSClose/SSEReader`, `providertest.{LLM,TTS,STT,Evaluation,Embedding,Pronunciation}Suite`, `provider.RouterConfig`, `ResolveTTSParams`, `ExpressionCatalog`, `PriceTable`, `pricing.Load`, `fake.*`, `provider.NormalizeJA/WAVDurationMs/EncodeWAV/DecodeWAV/ResamplePCM16`); M5 (`cmd/realtime` wiring fake, `kaiwaclient`, `kaiwa-cli converse`, `testdata/audio/*.wav` §14.5, harness e2e) untuk Task 17 dan Task 20; M7 (worker evaluasi memakai `AsyncRouter`) untuk gate real-mode worker; M3 (`voice_provider_configs`, seed §6.13).
+**Spec:** docs/superpowers/specs/2026-10-12-kotoki-backend-design.md — Bab 8 §8.4.0–8.4.11 (adapter), §8.5.1 (env & validasi startup), §8.8.3 (`provider-report`), §8.10 (benchmark), §8.11 + §14.6 (test adapter), §6.3.5/§6.13.3 (voice ID), D-040, D-041, D-NEW-8-1…8-31.
+**Master plan:** docs/superpowers/plans/2026-10-13-kotoki-backend-00-master.md (Global Constraints di sana berlaku untuk semua task)
+**Depends on:** M4 (port & tipe `provider.*`, `provider.Error/KindOf`, `httpx.NewClient/ClassifyHTTP/ClassifyError/ClassifyWSClose/SSEReader`, `providertest.{LLM,TTS,STT,Evaluation,Embedding,Pronunciation}Suite`, `provider.RouterConfig`, `ResolveTTSParams`, `ExpressionCatalog`, `PriceTable`, `pricing.Load`, `fake.*`, `provider.NormalizeJA/WAVDurationMs/EncodeWAV/DecodeWAV/ResamplePCM16`); M5 (`cmd/realtime` wiring fake, `kotokiclient`, `kotoki-cli converse`, `testdata/audio/*.wav` §14.5, harness e2e) untuk Task 17 dan Task 20; M7 (worker evaluasi memakai `AsyncRouter`) untuk gate real-mode worker; M3 (`voice_provider_configs`, seed §6.13).
 
 ## Global Constraints
 
@@ -51,7 +51,7 @@ internal/content/voicecheck.go                                                  
 internal/postgres/voicecheck_repo.go + db/queries/voicecheck.sql                                  # T14
 cmd/realtime, cmd/worker (ubah wiring); cmd/api (validasi voice)                                  # T14
 test/e2e/real/{run.sh,real_test.go}; Makefile (e2e-real, bench)                                   # T16
-cmd/kaiwa-cli/{provider_bench.go,provider_report.go}; cmd/kaiwa-cli/internal/{bench,report}/       # T17–T19
+cmd/kotoki-cli/{provider_bench.go,provider_report.go}; cmd/kotoki-cli/internal/{bench,report}/       # T17–T19
 testdata/benchmark/manifest.jsonl, bench/models.yaml, bench/README (format); docs/provider-benchmark.md; deploy/config/provider-profile.env; seed/env/<env>/0900_voice_ids.sql   # T20–T22 (manual)
 ```
 
@@ -101,7 +101,7 @@ Tambah: `TestWSSimReactiveRule` (aturan `on` dengan `match:{"commit":true}` memb
 
 **Interfaces:**
 - Consumes: Task 1 (`replay.*`, `httpx.StartSpan`); M4 `httpx.NewSSEReader/ClassifyHTTP/ClassifyError`, `provider.LLMProvider`, `provider.EstimateUsage` TIDAK ada → adapter menghitung estimasi sendiri (`ceil(rune semua Messages × 1,0)` §8.7.3; fungsi tak-ekspor `estimateTokens`).
-- Produces: `openai.Config{APIKey, BaseURL string; OmitSampling bool; ReasoningEffort string; Tap func(dir string, text bool, data []byte)}` (secret tidak pernah di-`String()`); `openai.NewLLM(cfg Config, hc *http.Client, log *slog.Logger) (*LLM, error)` (error bila `APIKey` atau `BaseURL` kosong); `(*LLM).Name() provider.Name == provider.OpenAI`; `Stream(ctx, provider.LLMRequest) (provider.LLMStream, error)`; helper paket `classify(resp, body) *provider.Error` + `(*client).publishRateLimit` (gauge `kaiwa_provider_ratelimit_remaining{provider,capability,kind}` dari header `x-ratelimit-remaining-requests/-tokens`).
+- Produces: `openai.Config{APIKey, BaseURL string; OmitSampling bool; ReasoningEffort string; Tap func(dir string, text bool, data []byte)}` (secret tidak pernah di-`String()`); `openai.NewLLM(cfg Config, hc *http.Client, log *slog.Logger) (*LLM, error)` (error bila `APIKey` atau `BaseURL` kosong); `(*LLM).Name() provider.Name == provider.OpenAI`; `Stream(ctx, provider.LLMRequest) (provider.LLMStream, error)`; helper paket `classify(resp, body) *provider.Error` + `(*client).publishRateLimit` (gauge `kotoki_provider_ratelimit_remaining{provider,capability,kind}` dari header `x-ratelimit-remaining-requests/-tokens`).
 
 - [ ] **Step 0 (verifikasi di task adapter):** buka https://platform.openai.com/docs/api-reference/chat/create, /chat-streaming, /guides/rate-limits; catat: nama header rate-limit, parameter yang ditolak model reasoning (`temperature`/`stop`/`max_completion_tokens`), bentuk `error.code` `insufficient_quota` & `content_policy_violation`. Salin payload contoh ke fixture dengan `meta.source`.
 - [ ] **Step 1: Write the failing test**
@@ -145,11 +145,11 @@ Tambah: `TestOpenAILLMFinishLength` → `FinishMaxTokens`; `TestOpenAILLMContent
 - [ ] **Step 1: Write the failing test**
 ```go
 func TestOpenAIEvalRequestAndResult(t *testing.T) { // fixture eval_basic
-	res, err := ev.GenerateJSON(ctx, provider.StructuredRequest{Task: "EVALUATION", Model: "m", SchemaName: "kaiwa_evaluation_rubric_v1",
+	res, err := ev.GenerateJSON(ctx, provider.StructuredRequest{Task: "EVALUATION", Model: "m", SchemaName: "kotoki_evaluation_rubric_v1",
 		JSONSchema: json.RawMessage(`{"type":"object","properties":{"s":{"type":"integer"}},"required":["s"],"additionalProperties":false}`),
 		Messages: msgs, MaxOutputTokens: 800, Temperature: 0})
 	require.NoError(t, err); require.JSONEq(t, `{"s":77}`, string(res.JSON))
-	require.JSONEq(t, `{"type":"json_schema","json_schema":{"name":"kaiwa_evaluation_rubric_v1","strict":true,"schema":{"type":"object","properties":{"s":{"type":"integer"}},"required":["s"],"additionalProperties":false}}}`, requestField(srv, "response_format"))
+	require.JSONEq(t, `{"type":"json_schema","json_schema":{"name":"kotoki_evaluation_rubric_v1","strict":true,"schema":{"type":"object","properties":{"s":{"type":"integer"}},"required":["s"],"additionalProperties":false}}}`, requestField(srv, "response_format"))
 	require.Equal(t, provider.FinishStop, res.FinishReason); require.Equal(t, provider.OpenAI, res.Provider)
 }
 func TestOpenAIEmbedBodyAndOrder(t *testing.T) { // fixture embed_basic: respons index [1,0] → hasil diurutkan; body tanpa "dimensions"
@@ -475,7 +475,7 @@ func TestBuildSwappedFallbackTTSOpenAI(t *testing.T) { /* TTSFallback=OPENAI →
 func TestBuildPronunciationNone(t *testing.T) { /* PronunciationPrimary=NONE → d.Pron nil tanpa error walau AZURE_* kosong */ }
 ```
 - [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/internal/providerwire/ -race -run TestBuild`. Expected: FAIL.
-- [ ] **Step 3: Implement** `Build` dengan `switch name` per kapabilitas; konfigurasi adapter dari `RouterConfig` (model STT ke `STTModel`); error tak dikenal → `fmt.Errorf` menyebut env var. `cmd/api` TIDAK mengimpor paket ini (hanya `cmd/realtime`, `cmd/worker`, `cmd/kaiwa-cli`).
+- [ ] **Step 3: Implement** `Build` dengan `switch name` per kapabilitas; konfigurasi adapter dari `RouterConfig` (model STT ke `STTModel`); error tak dikenal → `fmt.Errorf` menyebut env var. `cmd/api` TIDAK mengimpor paket ini (hanya `cmd/realtime`, `cmd/worker`, `cmd/kotoki-cli`).
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./cmd/internal/providerwire/ ./internal/provider/ -race` → PASS; `make arch-check` → exit 0 (api/worker `CGO_ENABLED=0`; worker memuat adapter tanpa `conversation/audio`).
 - [ ] **Step 5: Commit** — `git add cmd/internal internal/provider/config.go .env.example deploy && git commit -m "feat(cmd): providerwire.Build merakit adapter vendor nyata per kapabilitas"`
 
@@ -550,8 +550,8 @@ Tambah: satu test live per baris kriteria di atas (`TestLiveDeepgramSTT`, `TestL
 - Test: `test/e2e/real/real_test.go`
 
 **Interfaces:**
-- Consumes: M5 `bin/realtime`, `bin/api`, `bin/kaiwa-cli converse` (flag §14.11.2), `testdata/audio/ja_self_intro.wav` (rekaman asli, bukan `synth/`); Task 13–14; voice ID nyata dari Task 22 (sebelum itu gunakan voice ID sementara di `seed/env/local/0900_voice_ids.sql` dari akun operator, tidak di-commit).
-- Produces: `make e2e-real` = `test/e2e/real/run.sh`: start Postgres/Redis/RabbitMQ (`docker compose up -d --wait`), `make migrate-up seed`, `seed/env/local/0900_voice_ids.sql`, jalankan `bin/api` & `bin/realtime` dengan `PROVIDER_MODE=real`, `kaiwa-cli register/login`, `kaiwa-cli converse --wav testdata/audio/ja_self_intro.wav --duration 300 --end after-last --out-dir out/e2e-real`, lalu cek keluaran; exit 2 bila kunci hilang (pesan menyebut variabel, bukan nilainya).
+- Consumes: M5 `bin/realtime`, `bin/api`, `bin/kotoki-cli converse` (flag §14.11.2), `testdata/audio/ja_self_intro.wav` (rekaman asli, bukan `synth/`); Task 13–14; voice ID nyata dari Task 22 (sebelum itu gunakan voice ID sementara di `seed/env/local/0900_voice_ids.sql` dari akun operator, tidak di-commit).
+- Produces: `make e2e-real` = `test/e2e/real/run.sh`: start Postgres/Redis/RabbitMQ (`docker compose up -d --wait`), `make migrate-up seed`, `seed/env/local/0900_voice_ids.sql`, jalankan `bin/api` & `bin/realtime` dengan `PROVIDER_MODE=real`, `kotoki-cli register/login`, `kotoki-cli converse --wav testdata/audio/ja_self_intro.wav --duration 300 --end after-last --out-dir out/e2e-real`, lalu cek keluaran; exit 2 bila kunci hilang (pesan menyebut variabel, bukan nilainya).
 
 - [ ] **Step 1: Write the failing test**
 ```go
@@ -577,8 +577,8 @@ func TestRealProviderSingleSession(t *testing.T) {
 ### Task 17: `provider-bench` — inti metrik, gate, dan seleksi model (pure unit)
 
 **Files:**
-- Create: `cmd/kaiwa-cli/internal/bench/{manifest.go,metrics.go,gates.go,select.go,models.go}`
-- Test: `cmd/kaiwa-cli/internal/bench/{metrics_test.go,gates_test.go,select_test.go,manifest_test.go}`
+- Create: `cmd/kotoki-cli/internal/bench/{manifest.go,metrics.go,gates.go,select.go,models.go}`
+- Test: `cmd/kotoki-cli/internal/bench/{metrics_test.go,gates_test.go,select_test.go,manifest_test.go}`
 
 **Interfaces:**
 - Consumes: `provider.TokenUsage`, `provider.PriceTable`.
@@ -599,23 +599,23 @@ func TestGatesPrimaryVsFallback(t *testing.T) {
 func TestSelectProfiles(t *testing.T) { /* A cost 1 quality 4.1, B cost 2.5 quality 4.6, C cost 4 quality 4.9 (>3x), D gagal gate → STANDARD=A, PREMIUM=B */ }
 ```
 Ganti baris kedua `TestCER` dengan nilai tetap: `CER("今日は雨", "今日は雪") == 0.25`. Tambah: `TestPercentileNearestRank` (`[1..100]`, p95 → 95); `TestLoadManifestRejectsBadSet`; `TestFormatOK` (tag valid lolos; teks berisi `**` / JSON / Inggris murni gagal); `TestCostPerMinuteUsesAssumptions` (harga uji LLM 1 USD/1M input & 2 USD/1M output, TTS 10 USD/1M char, STT 0,6 USD/jam → `6×(400/1e6×1+80/1e6×2)+6×60/1e6×10+60/3600×0.6`); `TestSelectNoneQualifies` (notes menyebut "gate tidak diturunkan"); `TestSelectFallbackModelCheapestPassing`.
-- [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/kaiwa-cli/internal/bench/ -race`. Expected: FAIL.
+- [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/kotoki-cli/internal/bench/ -race`. Expected: FAIL.
 - [ ] **Step 3: Implement** murni (tanpa jaringan/waktu). `models.go`: parser `bench/models.yaml` memakai `gopkg.in/yaml.v3` (`candidates: [{capability, provider, model, voice, role}]`, `KnownFields(true)`, `provider`/`capability` UPPERCASE).
-- [ ] **Step 4: Run tests to verify they pass** — `go test ./cmd/kaiwa-cli/internal/bench/ -race -cover` → PASS, cover ≥ 85%.
-- [ ] **Step 5: Commit** — `git add cmd/kaiwa-cli/internal/bench && git commit -m "feat(kaiwa-cli): inti benchmark provider (CER, gate, seleksi STANDARD/PREMIUM)"`
+- [ ] **Step 4: Run tests to verify they pass** — `go test ./cmd/kotoki-cli/internal/bench/ -race -cover` → PASS, cover ≥ 85%.
+- [ ] **Step 5: Commit** — `git add cmd/kotoki-cli/internal/bench && git commit -m "feat(kotoki-cli): inti benchmark provider (CER, gate, seleksi STANDARD/PREMIUM)"`
 
 ---
 
 ### Task 18: `provider-bench` — runner suite, pencatat hasil, output file config
 
 **Files:**
-- Create: `cmd/kaiwa-cli/internal/bench/{runner_stt.go,runner_llm.go,runner_tts.go,runner_e2e.go,runner_conc.go,output.go}`, `cmd/kaiwa-cli/provider_bench.go`
-- Modify: `cmd/kaiwa-cli/main.go` (daftarkan subcommand `provider-bench`, `provider-report`)
-- Test: `cmd/kaiwa-cli/internal/bench/runner_test.go`, `output_test.go`, `cmd/kaiwa-cli/provider_bench_test.go`
+- Create: `cmd/kotoki-cli/internal/bench/{runner_stt.go,runner_llm.go,runner_tts.go,runner_e2e.go,runner_conc.go,output.go}`, `cmd/kotoki-cli/provider_bench.go`
+- Modify: `cmd/kotoki-cli/main.go` (daftarkan subcommand `provider-bench`, `provider-report`)
+- Test: `cmd/kotoki-cli/internal/bench/runner_test.go`, `output_test.go`, `cmd/kotoki-cli/provider_bench_test.go`
 
 **Interfaces:**
 - Consumes: Task 17, M4 `fake.*` (di test), `providerwire.Build` (di `provider_bench.go`), `objectstore`-free: audio dibaca dari `file://`/path lokal atau `s3://` lewat `objectstore` bila `--audio-root` bukan lokal (gunakan `--audio-root <dir>` hasil `aws s3 sync`; `objectstore` tidak diimpor).
-- Produces: CLI `kaiwa-cli provider-bench --suite stt|llm|tts|e2e|concurrency|all --dataset testdata/benchmark --models-file bench/models.yaml --out bench/results/<tanggal>/ --repeat 3 [--audio-root DIR] [--turn-end-ms 0] [--concurrency-steps 10,50,100,200]`; fungsi `RunSTT(ctx, p provider.STTProvider, c Candidate, items []Item, audio AudioSource, repeat int, clk clock.Clock) []Result` (connect/first-partial/final-after-Finalize/CER/jumlah revisi partial; audio dikirim 20 ms-paced bila `Pacing=true`), `RunLLM(ctx, p provider.LLMProvider, …)` (TTFT, time-to-first-sentence sampai `。！？`, total, `FormatOK`, panjang rune), `RunTTS(ctx, p provider.TTSProvider, …)` (TTFA, RTF = waktu total/durasi audio, bytes), `RunE2E(...)` (komposisi STT→LLM→TTS in-process; `turn_end_to_first_audio_ms = stt_final + llm_first_sentence + tts_first_audio + turn_end_ms` — **penyimpangan dari §8.10.3** (tanpa VAD/turn engine nyata): dicatat di `docs/implementation-deviations.md`), `RunConcurrency(ctx, steps []int, call func(ctx) error, clk)` (ramp bertahap; P95, % `KindRateLimited`, % error); `WriteResults(dir string, rs []Result) error` (`results.jsonl` satu baris per percobaan, `summary.csv` per kandidat+suite berisi metrik & hasil gate), `WriteProfileEnv(path string, std, prem, fb *ScoredCandidate, sttModels map[provider.Name]string, evalModels map[provider.Name]string, concurrencyComments map[string]string) error` (format §8.10.5: hanya variabel `PROVIDER_PROFILE_*`, `PROVIDER_STT_*_MODEL`, `PROVIDER_EVALUATION_*_MODEL`, `PROVIDER_CONCURRENCY_*` + komentar limit plan akun), `UpdatePricesYAML` TIDAK ditulis otomatis (manual, Task 21).
+- Produces: CLI `kotoki-cli provider-bench --suite stt|llm|tts|e2e|concurrency|all --dataset testdata/benchmark --models-file bench/models.yaml --out bench/results/<tanggal>/ --repeat 3 [--audio-root DIR] [--turn-end-ms 0] [--concurrency-steps 10,50,100,200]`; fungsi `RunSTT(ctx, p provider.STTProvider, c Candidate, items []Item, audio AudioSource, repeat int, clk clock.Clock) []Result` (connect/first-partial/final-after-Finalize/CER/jumlah revisi partial; audio dikirim 20 ms-paced bila `Pacing=true`), `RunLLM(ctx, p provider.LLMProvider, …)` (TTFT, time-to-first-sentence sampai `。！？`, total, `FormatOK`, panjang rune), `RunTTS(ctx, p provider.TTSProvider, …)` (TTFA, RTF = waktu total/durasi audio, bytes), `RunE2E(...)` (komposisi STT→LLM→TTS in-process; `turn_end_to_first_audio_ms = stt_final + llm_first_sentence + tts_first_audio + turn_end_ms` — **penyimpangan dari §8.10.3** (tanpa VAD/turn engine nyata): dicatat di `docs/implementation-deviations.md`), `RunConcurrency(ctx, steps []int, call func(ctx) error, clk)` (ramp bertahap; P95, % `KindRateLimited`, % error); `WriteResults(dir string, rs []Result) error` (`results.jsonl` satu baris per percobaan, `summary.csv` per kandidat+suite berisi metrik & hasil gate), `WriteProfileEnv(path string, std, prem, fb *ScoredCandidate, sttModels map[provider.Name]string, evalModels map[provider.Name]string, concurrencyComments map[string]string) error` (format §8.10.5: hanya variabel `PROVIDER_PROFILE_*`, `PROVIDER_STT_*_MODEL`, `PROVIDER_EVALUATION_*_MODEL`, `PROVIDER_CONCURRENCY_*` + komentar limit plan akun), `UpdatePricesYAML` TIDAK ditulis otomatis (manual, Task 21).
 
 - [ ] **Step 1: Write the failing test** (runner diuji dengan `fake` + `clock.NewFake`, tanpa jaringan)
 ```go
@@ -629,22 +629,22 @@ func TestWriteProfileEnvFormat(t *testing.T) { /* golden: baris "PROVIDER_PROFIL
 func TestConcurrencyRamp(t *testing.T) { /* call mengembalikan *provider.Error{KindRateLimited} untuk 30% → rate_limited_pct≈30 (±1) pada step 100 */ }
 ```
 Tambah: `TestWriteResultsJSONLAndCSV` (jumlah baris = percobaan; kolom CSV tetap: `suite,capability,provider,model,voice,metric,p50,p95,gate,pass`); `TestProviderBenchFlagValidation` (`--suite x` → exit 2; `--out` kosong → exit 2; `--repeat 0` → exit 2; kandidat dengan vendor tak punya key → pesan menyebut env var); `TestProviderBenchDryRunWithFake` (`PROVIDER_MODE=fake` + `--models-file` berisi `FAKE_PRIMARY` → `results.jsonl` terisi; tanpa jaringan); `TestBenchDoesNotLogTextOrKeys`.
-- [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/kaiwa-cli/... -race -run 'RunLLM|RunSTT|WriteProfileEnv|Concurrency|WriteResults|ProviderBench|BenchDoesNot'`. Expected: FAIL.
-- [ ] **Step 3: Implement.** Setiap runner menerima port (bukan vendor); percobaan ke-`repeat` berurutan; error vendor dicatat sebagai baris `error_kind` (bukan abort); `--suite all` urut stt→llm→tts→e2e→concurrency; gate dievaluasi per kandidat sesuai `role` (PRIMARY/FALLBACK) di `bench/models.yaml`; ringkasan cetak ke stdout (tanpa teks dataset, hanya id & angka); `cmd/kaiwa-cli` membangun adapter lewat `providerwire.Build` dengan `RouterConfig` override per kandidat (model/voice dari YAML).
-- [ ] **Step 4: Run tests to verify they pass** — `go test ./cmd/kaiwa-cli/... -race` → PASS; `CGO_ENABLED=1 go build ./cmd/kaiwa-cli`; `./bin/kaiwa-cli provider-bench --help` mencantumkan semua flag.
-- [ ] **Step 5: Commit** — `git add cmd/kaiwa-cli && git commit -m "feat(kaiwa-cli): provider-bench (runner stt/llm/tts/e2e/concurrency, hasil, provider-profile.env)"`
+- [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/kotoki-cli/... -race -run 'RunLLM|RunSTT|WriteProfileEnv|Concurrency|WriteResults|ProviderBench|BenchDoesNot'`. Expected: FAIL.
+- [ ] **Step 3: Implement.** Setiap runner menerima port (bukan vendor); percobaan ke-`repeat` berurutan; error vendor dicatat sebagai baris `error_kind` (bukan abort); `--suite all` urut stt→llm→tts→e2e→concurrency; gate dievaluasi per kandidat sesuai `role` (PRIMARY/FALLBACK) di `bench/models.yaml`; ringkasan cetak ke stdout (tanpa teks dataset, hanya id & angka); `cmd/kotoki-cli` membangun adapter lewat `providerwire.Build` dengan `RouterConfig` override per kandidat (model/voice dari YAML).
+- [ ] **Step 4: Run tests to verify they pass** — `go test ./cmd/kotoki-cli/... -race` → PASS; `CGO_ENABLED=1 go build ./cmd/kotoki-cli`; `./bin/kotoki-cli provider-bench --help` mencantumkan semua flag.
+- [ ] **Step 5: Commit** — `git add cmd/kotoki-cli && git commit -m "feat(kotoki-cli): provider-bench (runner stt/llm/tts/e2e/concurrency, hasil, provider-profile.env)"`
 
 ---
 
-### Task 19: `kaiwa-cli provider-report` (§8.8.3)
+### Task 19: `kotoki-cli provider-report` (§8.8.3)
 
 **Files:**
-- Create: `cmd/kaiwa-cli/internal/report/{aggregate.go,query.go,csv.go}`, `cmd/kaiwa-cli/provider_report.go`
-- Test: `cmd/kaiwa-cli/internal/report/aggregate_test.go`, `query_integration_test.go` (tag `integration`), `provider_report_test.go`
+- Create: `cmd/kotoki-cli/internal/report/{aggregate.go,query.go,csv.go}`, `cmd/kotoki-cli/provider_report.go`
+- Test: `cmd/kotoki-cli/internal/report/aggregate_test.go`, `query_integration_test.go` (tag `integration`), `provider_report_test.go`
 
 **Interfaces:**
 - Consumes: `pricing.Load`, `provider.PriceTable`, `testutil.NewPostgres`, DDL `session_turns` (§5), `evaluations` bila ada (kolom `overall_score` Bab 10; **bila M7 belum ada, kolom `avg_eval_*` kosong, bukan error**).
-- Produces: `kaiwa-cli provider-report --from 2026-10-01 --to 2026-10-08 --format csv --prices prices.yaml` (membaca `DATABASE_URL`; koneksi `default_transaction_read_only=on`; `--format csv|json`); `type TurnAgg struct{ SttProvider, LLMProvider, LLMModel, TTSProvider, TTSModel string; Turns int; P50,P95,P99TurnEndToFirstAudioMs, P95SttFinalMs, P95LLMFirstTokenMs, P95TTSFirstAudioMs float64; FailedRate, InterruptedRate, FallbackRate float64; InputTokens, OutputTokens, TTSCharacters, STTAudioMs int64 }`; `Query(ctx, db Querier, from, to time.Time) ([]TurnAgg, error)` (SQL sketsa §8.8.3, `status IN ('COMPLETED','INTERRUPTED','FAILED')`, `percentile_cont`); `Build(aggs []TurnAgg, p provider.PriceTable) []Row` menambah `avg_cost_usd_per_turn` dan `cost_usd_per_active_minute` (menit aktif = `Σ stt_audio_ms`/60000 sebagai pendekatan; dicatat di header CSV komentar) ; `WriteCSV(w io.Writer, rows []Row) error` dengan kolom persis daftar §8.8.3.
+- Produces: `kotoki-cli provider-report --from 2026-10-01 --to 2026-10-08 --format csv --prices prices.yaml` (membaca `DATABASE_URL`; koneksi `default_transaction_read_only=on`; `--format csv|json`); `type TurnAgg struct{ SttProvider, LLMProvider, LLMModel, TTSProvider, TTSModel string; Turns int; P50,P95,P99TurnEndToFirstAudioMs, P95SttFinalMs, P95LLMFirstTokenMs, P95TTSFirstAudioMs float64; FailedRate, InterruptedRate, FallbackRate float64; InputTokens, OutputTokens, TTSCharacters, STTAudioMs int64 }`; `Query(ctx, db Querier, from, to time.Time) ([]TurnAgg, error)` (SQL sketsa §8.8.3, `status IN ('COMPLETED','INTERRUPTED','FAILED')`, `percentile_cont`); `Build(aggs []TurnAgg, p provider.PriceTable) []Row` menambah `avg_cost_usd_per_turn` dan `cost_usd_per_active_minute` (menit aktif = `Σ stt_audio_ms`/60000 sebagai pendekatan; dicatat di header CSV komentar) ; `WriteCSV(w io.Writer, rows []Row) error` dengan kolom persis daftar §8.8.3.
 
 - [ ] **Step 1: Write the failing test**
 ```go
@@ -656,10 +656,10 @@ func TestBuildCost(t *testing.T) {
 func TestCSVColumns(t *testing.T) { /* header persis: stt_provider,llm_provider,llm_model,tts_provider,tts_model,turns,p50_turn_end_to_first_audio_ms,p95_…,p99_…,p95_stt_final_ms,p95_llm_first_token_ms,p95_tts_first_audio_ms,failed_rate,interrupted_rate,fallback_rate,avg_cost_usd_per_turn,cost_usd_per_active_minute,avg_eval_overall_score */ }
 ```
 Integration `TestQueryGroupsByStack`: `testutil.NewPostgres` + helper insert sesi & `session_turns` (3 kombinasi stack, status campur COMPLETED/INTERRUPTED/FAILED/DISCARDED, `created_at` dalam/di luar rentang) → baris = 3 kombinasi; DISCARDED & di luar rentang tidak dihitung; `failed_rate` = FAILED/total; P95 `turn_end_to_first_audio_ms` sesuai `percentile_cont`. `TestReportRefusesWrites` (koneksi read-only: `INSERT` gagal). `TestProviderReportFlags` (`--from` > `--to` → exit 2; `DATABASE_URL` kosong → exit 2 menyebut nama variabel).
-- [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/kaiwa-cli/... -race -run 'BuildCost|CSVColumns|ProviderReportFlags'`; `go test -tags integration ./cmd/kaiwa-cli/... -race -run 'QueryGroups|RefusesWrites'`. Expected: FAIL.
+- [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/kotoki-cli/... -race -run 'BuildCost|CSVColumns|ProviderReportFlags'`; `go test -tags integration ./cmd/kotoki-cli/... -race -run 'QueryGroups|RefusesWrites'`. Expected: FAIL.
 - [ ] **Step 3: Implement.** Query memakai `pgx` langsung (bukan sqlc: tool, bukan repository fitur; lisan di `docs/implementation-log.md`); `avg_eval_*` di-join hanya bila tabel `evaluations` ada (`to_regclass`).
-- [ ] **Step 4: Run tests to verify they pass** — kedua perintah → PASS; `./bin/kaiwa-cli provider-report --help`.
-- [ ] **Step 5: Commit** — `git add cmd/kaiwa-cli && git commit -m "feat(kaiwa-cli): provider-report (stack × latency/failed/fallback/biaya)"`
+- [ ] **Step 4: Run tests to verify they pass** — kedua perintah → PASS; `./bin/kotoki-cli provider-report --help`.
+- [ ] **Step 5: Commit** — `git add cmd/kotoki-cli && git commit -m "feat(kotoki-cli): provider-report (stack × latency/failed/fallback/biaya)"`
 
 ---
 
@@ -667,10 +667,10 @@ Integration `TestQueryGroupsByStack`: `testutil.NewPostgres` + helper insert ses
 
 **Files:**
 - Create: `testdata/benchmark/manifest.jsonl`, `testdata/benchmark/README` (format & aturan rekaman, bukan dokumentasi tambahan lain), `bench/models.yaml`
-- Test: `cmd/kaiwa-cli/internal/bench/manifest_test.go` (menambah `TestRepoManifestValid`)
+- Test: `cmd/kotoki-cli/internal/bench/manifest_test.go` (menambah `TestRepoManifestValid`)
 
 **Interfaces:**
-- Consumes: `bench.LoadManifest`, `bench.LoadModels` (Task 17); bucket privat `s3://kaiwa-benchmark/v1/` (§8.10.2); CONVERSATION prompt nyata dari seed (`prompt.Render` pada 30 konteks).
+- Consumes: `bench.LoadManifest`, `bench.LoadModels` (Task 17); bucket privat `s3://kotoki-benchmark/v1/` (§8.10.2); CONVERSATION prompt nyata dari seed (`prompt.Render` pada 30 konteks).
 - Produces: dataset sesuai §8.10.2: STT-native ≥ 40 (jawaban pendek `はい`/`そうですね`, kalimat 8–15 s, angka/tanggal/harga, katakana serapan, nama tempat), STT-learner ≥ 40 (pelajar Indonesia N5–N3; filler, jeda, salah ucap), STT-noise 10 (noise kafe/jalan SNR 10 dB), LLM-context 30 (3–8 turn riwayat; field `messages` berisi system prompt CONVERSATION nyata hasil render + riwayat), TTS-sentences 50 (pendek, tanya, emosi, kanji sulit, angka; `expression` terisi); subset 10 file berlisensi bebas di `testdata/audio/bench-free/` (+`.txt`) untuk fake-STT CI (tidak menyentuh `testdata/audio/synth/` milik M5); `bench/models.yaml` kandidat: LLM 2–3 model OpenAI + 2 model Gemini (`role` PRIMARY/FALLBACK), TTS 3 model ElevenLabs × voice kandidat + 2 suara Aura-2 ja (`aura-2-fujin-ja`, `aura-2-izanami-ja`, `aura-2-uzume-ja`, `aura-2-ebisu-ja`, `aura-2-ama-ja` dipilih 2), STT `scribe_v2_realtime`, `nova-3`, `nova-2`.
 
 - [ ] **Step 1: Write the failing test**
@@ -683,9 +683,9 @@ func TestRepoManifestValid(t *testing.T) { // memuat testdata/benchmark/manifest
 	ms, err := bench.LoadModels(testutil.TestdataPath(t, "../bench/models.yaml")); require.NoError(t, err); require.NotEmpty(t, ms)
 }
 ```
-- [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/kaiwa-cli/internal/bench/ -race -run TestRepoManifestValid`. Expected: FAIL (manifest belum ada).
-- [ ] **Step 3: Checklist MANUAL GATE** (selesai bila Step 4 lulus): (1) rekrut penutur asli + pelajar Indonesia, persetujuan tertulis tersimpan di luar repo; (2) rekam WAV 16 kHz mono (STT-noise: campur noise SNR 10 dB), upload ke `s3://kaiwa-benchmark/v1/`, isi `audio_uri`, `reference_text` diverifikasi dua orang; (3) tulis 30 konteks LLM (render CONVERSATION prompt nyata); (4) tulis 50 kalimat TTS + label ekspresi; (5) pilih 10 file berlisensi bebas ke `testdata/audio/bench-free/` (`.txt` sidecar; jangan menimpa `testdata/audio/synth/`); (6) tulis `bench/models.yaml` (kandidat, role, voice) dari daftar model yang tersedia di akun saat ini (verifikasi di dokumentasi vendor, jangan menebak nama model); (7) tetapkan 2 reviewer berbahasa Jepang untuk penilaian 1–5 (naturalness, kesesuaian level, konsistensi karakter) dan MOS TTS; format lembar penilaian: CSV `item_id,reviewer,candidate,score_naturalness,score_level,score_character,mos,kanji_misread(0|1)` disimpan di `bench/results/<tanggal>/human.csv`.
-- [ ] **Step 4: Run tests to verify they pass** — `go test ./cmd/kaiwa-cli/internal/bench/ -race -run TestRepoManifestValid` → PASS; `aws s3 ls s3://kaiwa-benchmark/v1/ | wc -l` ≥ 90 objek audio.
+- [ ] **Step 2: Run it to verify it fails** — `go test ./cmd/kotoki-cli/internal/bench/ -race -run TestRepoManifestValid`. Expected: FAIL (manifest belum ada).
+- [ ] **Step 3: Checklist MANUAL GATE** (selesai bila Step 4 lulus): (1) rekrut penutur asli + pelajar Indonesia, persetujuan tertulis tersimpan di luar repo; (2) rekam WAV 16 kHz mono (STT-noise: campur noise SNR 10 dB), upload ke `s3://kotoki-benchmark/v1/`, isi `audio_uri`, `reference_text` diverifikasi dua orang; (3) tulis 30 konteks LLM (render CONVERSATION prompt nyata); (4) tulis 50 kalimat TTS + label ekspresi; (5) pilih 10 file berlisensi bebas ke `testdata/audio/bench-free/` (`.txt` sidecar; jangan menimpa `testdata/audio/synth/`); (6) tulis `bench/models.yaml` (kandidat, role, voice) dari daftar model yang tersedia di akun saat ini (verifikasi di dokumentasi vendor, jangan menebak nama model); (7) tetapkan 2 reviewer berbahasa Jepang untuk penilaian 1–5 (naturalness, kesesuaian level, konsistensi karakter) dan MOS TTS; format lembar penilaian: CSV `item_id,reviewer,candidate,score_naturalness,score_level,score_character,mos,kanji_misread(0|1)` disimpan di `bench/results/<tanggal>/human.csv`.
+- [ ] **Step 4: Run tests to verify they pass** — `go test ./cmd/kotoki-cli/internal/bench/ -race -run TestRepoManifestValid` → PASS; `aws s3 ls s3://kotoki-benchmark/v1/ | wc -l` ≥ 90 objek audio.
 - [ ] **Step 5: Commit** — `git add testdata/benchmark bench/models.yaml testdata/audio/bench-free && git commit -m "test(benchmark): dataset golden Jepang (manifest) dan kandidat model"`
 
 ---
@@ -712,11 +712,11 @@ func TestShippedPricesNonZeroForSelectedModels(t *testing.T) { // membaca deploy
 (`selectedModels` = model LLM PREMIUM/STANDARD + fallback, TTS, STT, evaluation, embedding yang tercantum di env file; `Missing` M4 dipakai sebagai pembanding.)
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/pricing/ -race -run TestShippedPrices`. Expected: FAIL (env file belum ada / harga 0).
 - [ ] **Step 3: Checklist MANUAL GATE:**
-  1. **Verifikasi dukungan Jepang streaming (Bab 8 "Masalah", D-NEW-8-23):** jalankan `kaiwa-cli provider-bench --suite stt --models-file bench/models.yaml --out bench/results/<tanggal>/ --repeat 3`. Keluaran per kandidat: `{model, "ja" diterima? (ya/tidak + pesan error vendor), CER native, CER learner, P95 final-after-Finalize}`. Scribe `scribe_v2_realtime` gagal menerima `ja`/CER > gate → ikuti §8.10.4 butir 5 (lapor pemilik produk; boleh tukar `PROVIDER_STT_PRIMARY/FALLBACK` di config; mengubah D-040 butuh update register). Nova-3 `ja` gagal di `/v1/listen` → `PROVIDER_STT_DEEPGRAM_MODEL=nova-2`.
-  2. Jalankan `--suite llm`, `--suite tts`, `--suite e2e`, `--suite concurrency` (ramp 10→50→100→200; catat limit plan akun tiap vendor), lalu penilaian manusia (`human.csv`: kualitas LLM rata-rata, MOS TTS, kesalahan baca kanji); hitung ulang gate dengan `kaiwa-cli provider-bench --suite all --human bench/results/<tanggal>/human.csv --out …`.
+  1. **Verifikasi dukungan Jepang streaming (Bab 8 "Masalah", D-NEW-8-23):** jalankan `kotoki-cli provider-bench --suite stt --models-file bench/models.yaml --out bench/results/<tanggal>/ --repeat 3`. Keluaran per kandidat: `{model, "ja" diterima? (ya/tidak + pesan error vendor), CER native, CER learner, P95 final-after-Finalize}`. Scribe `scribe_v2_realtime` gagal menerima `ja`/CER > gate → ikuti §8.10.4 butir 5 (lapor pemilik produk; boleh tukar `PROVIDER_STT_PRIMARY/FALLBACK` di config; mengubah D-040 butuh update register). Nova-3 `ja` gagal di `/v1/listen` → `PROVIDER_STT_DEEPGRAM_MODEL=nova-2`.
+  2. Jalankan `--suite llm`, `--suite tts`, `--suite e2e`, `--suite concurrency` (ramp 10→50→100→200; catat limit plan akun tiap vendor), lalu penilaian manusia (`human.csv`: kualitas LLM rata-rata, MOS TTS, kesalahan baca kanji); hitung ulang gate dengan `kotoki-cli provider-bench --suite all --human bench/results/<tanggal>/human.csv --out …`.
   3. TTS fallback: bila Aura-2 gagal `TTS_FALLBACK_JA_QUALITY` (MOS ≥ 3,5 & kanji ≤ 5%) → `PROVIDER_TTS_FALLBACK=OPENAI`, kerjakan Task 23, ulangi suite TTS untuk OpenAI.
   4. Seleksi otomatis (`SelectProfiles`): STANDARD termurah lolos gate primary; PREMIUM kualitas tertinggi lolos gate primary dengan biaya ≤ 3× STANDARD; model fallback per profile = termurah vendor fallback lolos gate fallback. Tidak ada yang lolos → laporkan angka aktual, JANGAN turunkan gate.
-  5. Isi `prices.yaml` dari halaman harga resmi (komentar: tanggal + URL), `version` = tanggal; jalankan `kaiwa-cli provider-bench` biaya per menit untuk keputusan.
+  5. Isi `prices.yaml` dari halaman harga resmi (komentar: tanggal + URL), `version` = tanggal; jalankan `kotoki-cli provider-bench` biaya per menit untuk keputusan.
   6. Tulis `deploy/config/provider-profile.env` (`WriteProfileEnv`) dan `docs/provider-benchmark.md` dengan format: (a) ringkasan & tanggal & region; (b) tabel gate per kandidat (`kandidat | metrik | nilai | batas | lulus`); (c) tabel keputusan (`profil/peran | model | vendor | biaya per menit`); (d) hasil verifikasi dukungan Jepang Scribe/Nova (ya/tidak + bukti); (e) daftar semua item "verifikasi di task adapter" beserta hasil (Task 2–11 Step 0); (f) limit plan akun per vendor → nilai `PROVIDER_CONCURRENCY_*` = `floor(limit × 0,9 / replika)`; (g) penyimpangan & rekomendasi ke pemilik produk. Perbarui spec Bab 8 bila ada perbedaan; `docs/implementation-deviations.md` untuk lokasi dokumen (`docs/provider-benchmark.md` menggantikan `docs/benchmarks/provider-benchmark-<tanggal>.md` pada §8.10.5 butir 4).
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/pricing/ ./internal/platform/config/ -race` → PASS; `make modelname-check` → exit 0; `test -s docs/provider-benchmark.md && grep -c 'lulus' docs/provider-benchmark.md` > 0; `make test` → PASS.
 - [ ] **Step 5: Commit** — `git add docs deploy bench internal/provider/pricing internal/platform/config .env.example && git commit -m "docs(provider): hasil benchmark, model awal, harga resmi, provider-profile.env"`
@@ -736,15 +736,15 @@ func TestShippedPricesNonZeroForSelectedModels(t *testing.T) { // membaca deploy
 
 - [ ] **Step 1: Write the failing test**
 ```go
-func TestEnvVoiceSeedClearsPlaceholders(t *testing.T) { // integration; env dari KAIWA_SEED_ENV via testutil (staging)
+func TestEnvVoiceSeedClearsPlaceholders(t *testing.T) { // integration; env dari KOTOKI_SEED_ENV via testutil (staging)
 	pool := testutil.NewPostgres(t); applySeed(t, pool); applyEnvSeed(t, pool, "staging")
 	got, err := postgres.NewVoiceCheckRepo(pool).PlaceholderVoices(ctx, []string{"ELEVENLABS", "DEEPGRAM"})
 	require.NoError(t, err); require.Empty(t, got)
 }
 ```
 - [ ] **Step 2: Run it to verify it fails** — `go test -tags integration ./internal/postgres/ -race -run TestEnvVoiceSeed`. Expected: FAIL (8 placeholder tersisa).
-- [ ] **Step 3: Checklist MANUAL GATE:** (1) pilih voice ElevenLabs untuk 4 voice profile (kriteria: dialek sesuai `accent` — KANTO standar Tokyo, KANSAI Osaka; gender; tier PREMIUM vs STANDARD; lulus gate TTS Task 21); (2) **Kansai (`JA_F_KANSAI_STANDARD_01`)**: dua penutur Kansai asli mendengarkan ≥ 10 kalimat sampel dan menyatakan "terdengar Kansai: ya/tidak" (format: CSV `voice,vendor,sample_id,reviewer,kansai_ok`); `KANSAI_DIALECT` hanya diset bila kedua reviewer ya, kalau tidak: voice Kansai tetap tanpa kapabilitas itu dan (opsi) `instructions` OpenAI dicatat sebagai satu-satunya dukungan dialek; (3) pilih 4 suara Aura-2 (`aura-2-*-ja`) untuk DEEPGRAM, satu per voice profile, sesuai gender; (4) tulis dua file SQL per env; (5) jalankan `make seed KAIWA_ENV=staging`, lalu `kaiwa-cli provider-bench --suite tts` ulang dengan voice final untuk memastikan gate lulus; (6) catat voice ID & verdict di `docs/provider-benchmark.md` (bagian "Voice").
-- [ ] **Step 4: Run tests to verify they pass** — `go test -tags integration ./internal/postgres/ -race -run 'VoiceCheck|TestEnvVoiceSeed'` → PASS; `make seed KAIWA_ENV=staging && psql "$DATABASE_URL" -tAc "select count(*) from voice_provider_configs where provider_voice_id like 'PLACEHOLDER\_%' and provider in ('ELEVENLABS','DEEPGRAM')"` → `0`; `TestSeedContentIsValid` (M3) tetap PASS dengan `PROVIDER_MODE=real` di env uji.
+- [ ] **Step 3: Checklist MANUAL GATE:** (1) pilih voice ElevenLabs untuk 4 voice profile (kriteria: dialek sesuai `accent` — KANTO standar Tokyo, KANSAI Osaka; gender; tier PREMIUM vs STANDARD; lulus gate TTS Task 21); (2) **Kansai (`JA_F_KANSAI_STANDARD_01`)**: dua penutur Kansai asli mendengarkan ≥ 10 kalimat sampel dan menyatakan "terdengar Kansai: ya/tidak" (format: CSV `voice,vendor,sample_id,reviewer,kansai_ok`); `KANSAI_DIALECT` hanya diset bila kedua reviewer ya, kalau tidak: voice Kansai tetap tanpa kapabilitas itu dan (opsi) `instructions` OpenAI dicatat sebagai satu-satunya dukungan dialek; (3) pilih 4 suara Aura-2 (`aura-2-*-ja`) untuk DEEPGRAM, satu per voice profile, sesuai gender; (4) tulis dua file SQL per env; (5) jalankan `make seed KOTOKI_ENV=staging`, lalu `kotoki-cli provider-bench --suite tts` ulang dengan voice final untuk memastikan gate lulus; (6) catat voice ID & verdict di `docs/provider-benchmark.md` (bagian "Voice").
+- [ ] **Step 4: Run tests to verify they pass** — `go test -tags integration ./internal/postgres/ -race -run 'VoiceCheck|TestEnvVoiceSeed'` → PASS; `make seed KOTOKI_ENV=staging && psql "$DATABASE_URL" -tAc "select count(*) from voice_provider_configs where provider_voice_id like 'PLACEHOLDER\_%' and provider in ('ELEVENLABS','DEEPGRAM')"` → `0`; `TestSeedContentIsValid` (M3) tetap PASS dengan `PROVIDER_MODE=real` di env uji.
 - [ ] **Step 5: Commit** — `git add seed && git commit -m "feat(seed): voice ID nyata dan kapabilitas hasil verifikasi per env"`
 
 ---

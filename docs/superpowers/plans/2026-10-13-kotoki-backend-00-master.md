@@ -1,14 +1,14 @@
-# Kaiwa Backend — Master Implementation Plan
+# Kotoki Backend — Master Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement each milestone plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Membangun backend Kaiwa (latihan percakapan bahasa Jepang realtime dengan AI: STT → LLM → TTS streaming, balance server-authoritative, evaluasi/memory/learner pasca-sesi) sampai siap produksi untuk 1.000 sesi bersamaan.
+**Goal:** Membangun backend Kotoki (latihan percakapan bahasa Jepang realtime dengan AI: STT → LLM → TTS streaming, balance server-authoritative, evaluasi/memory/learner pasca-sesi) sampai siap produksi untuk 1.000 sesi bersamaan.
 
-**Architecture:** Monolit modular Go dengan layout per-fitur (spec §2.2): paket fitur berisi domain + service + port; adapter (`postgres`, `redisstore`, `amqp`, `objectstore`, `mailer`, `provider/<vendor>`) mengimplementasikan port; handler (`httpapi`, `wsgateway`) tipis; wiring manual di `cmd/*/main.go`. Tiga binary (`api`, `realtime`, `worker`) + `kaiwa-cli`. PostgreSQL = sumber kebenaran, Redis = state runtime, RabbitMQ = pengiriman async via transactional outbox.
+**Architecture:** Monolit modular Go dengan layout per-fitur (spec §2.2): paket fitur berisi domain + service + port; adapter (`postgres`, `redisstore`, `amqp`, `objectstore`, `mailer`, `provider/<vendor>`) mengimplementasikan port; handler (`httpapi`, `wsgateway`) tipis; wiring manual di `cmd/*/main.go`. Tiga binary (`api`, `realtime`, `worker`) + `kotoki-cli`. PostgreSQL = sumber kebenaran, Redis = state runtime, RabbitMQ = pengiriman async via transactional outbox.
 
 **Tech Stack:** Go 1.25, chi, pgx + sqlc, golang-migrate, coder/websocket, go-redis v9, amqp091, aws-sdk-go-v2 (S3/MinIO), golang-jwt, argon2id, hraban/opus (cgo), go-webrtcvad (cgo), OpenTelemetry (trace) + Prometheus client (metrik), caarlos0/env, testify, testcontainers. Daftar lengkap & versi: spec D-003 (allowlist; library di luar daftar = ubah register dulu).
 
-**Spec (sumber kebenaran, wajib dibaca bersama rencana ini):** `docs/superpowers/specs/2026-10-12-kaiwa-backend-design.md`. Rencana mengacu ke bab/§ spec (nomor § stabil; nomor baris tidak). Jika rencana dan spec berbeda, **spec menang**; catat di `docs/implementation-deviations.md`.
+**Spec (sumber kebenaran, wajib dibaca bersama rencana ini):** `docs/superpowers/specs/2026-10-12-kotoki-backend-design.md`. Rencana mengacu ke bab/§ spec (nomor § stabil; nomor baris tidak). Jika rencana dan spec berbeda, **spec menang**; catat di `docs/implementation-deviations.md`.
 
 ## Global Constraints
 
@@ -16,7 +16,7 @@ Berlaku untuk setiap task di semua milestone (nilai disalin dari spec):
 
 - Go **1.25**, module path `github.com/nabePi/kotoki-backend`, module di root repo, satu `go.mod` (D-001, D-002).
 - Layout & aturan paket spec §2.2 + D-005: paket fitur **tidak** mengimpor adapter/library infrastruktur; dependensi antar fitur asiklik sesuai graf §2.2 butir 3; nama paket huruf kecil tanpa underscore; wiring hanya di `cmd/*/main.go` (D-004); tanpa ORM, tanpa DI framework.
-- `cmd/api` dan `cmd/worker` MUST dapat di-build `CGO_ENABLED=0`; hanya `internal/conversation/audio` dan `cmd/realtime`/`kaiwa-cli` memakai cgo (D-NEW-14-6, `make arch-check`).
+- `cmd/api` dan `cmd/worker` MUST dapat di-build `CGO_ENABLED=0`; hanya `internal/conversation/audio` dan `cmd/realtime`/`kotoki-cli` memakai cgo (D-NEW-14-6, `make arch-check`).
 - Semua PK `UUID` UUIDv7 dari port `idgen.Generator`; waktu dari `clock.Clock`; paket fitur dilarang `time.Now()`/`uuid.New*()` langsung (D-010, §2.2 butir 7).
 - Timestamp `TIMESTAMPTZ` UTC; durasi **detik integer**; enum = `TEXT` + `CHECK`, nilai UPPER_SNAKE_CASE (D-010, D-011).
 - Format error tetap `{"error":{"code","message","request_id","details"}}`, `message` bahasa Indonesia tetap per kode, ditulis hanya lewat `httpapi.WriteError` (D-013, §5.8.2); kode hanya dari katalog §5.10 (REST) / §7.4.8 (WS).
@@ -57,11 +57,11 @@ Urutan eksekusi yang aman: **M1 → M2 → M4 → M3 → M5 → M6 → M7 → M8
 | **M2** | Identity, Auth & Admin | Register/login/refresh/logout/reset password, JWT, ticket WS, rate limit, consent, hapus akun, `balance_accounts`, endpoint admin (grant/adjust, audit) | Bab 3, §4 (grant/adjust), §5.8 | M1 |
 | **M3** | Content, Balance & Session lifecycle | Konten + seed + resolver + katalog REST; reservasi/ledger/settlement; `POST /sessions`, cancel, state machine, `RuntimeService`, transcript/query, sweeper rules (tanpa runtime) | Bab 4, 5, 6 | M2, **M4** (paket `prompt` + `provider` ports) |
 | **M4** | Provider layer, Prompt & Fakes | Port provider, router + breaker + fallback, `prompt` (Render, tokens, parser kalimat), fake STT/LLM/TTS/Evaluation/Embedding/Pronunciation, cost metering | Bab 8, §6.8 | M1 |
-| **M5** | Realtime core (**demo pertama**) | `conversation` (turn engine, VAD, barge-in, context builder), protokol WS, `wsgateway`, Redis state, reconnect/takeover, drain, `kaiwaclient` + `kaiwa-cli`, e2e dengan fake provider | Bab 7 | M3, M4 |
+| **M5** | Realtime core (**demo pertama**) | `conversation` (turn engine, VAD, barge-in, context builder), protokol WS, `wsgateway`, Redis state, reconnect/takeover, drain, `kotokiclient` + `kotoki-cli`, e2e dengan fake provider | Bab 7 | M3, M4 |
 | **M6** | Async backbone & jobs | Outbox + publisher, topologi RabbitMQ, consumer framework (retry/DLQ/idempotency), `jobs` scheduler + semua job terjadwal (sweeper, cleanup, partition, reconcile, purge) | Bab 9 | M3 (M5 untuk e2e penutup) |
 | **M7** | Evaluation & Summary | Worker evaluasi (rubric, JSON schema, pronunciation), `GET /sessions/{id}/evaluation`, summary worker | Bab 10, §9.9.6 | M6, M4 |
 | **M8** | Memory & Learner | Ekstraksi/dedup/retrieval memory, learner worker (proficiency), adaptive difficulty terhubung ke `POST /sessions` & prompt, endpoint profile/memory | Bab 11, 12 | M7, M5 |
-| **M9** | Real providers & benchmark | Adapter ElevenLabs, Deepgram, OpenAI, Gemini, Azure; contract test `-tags live`; `kaiwa-cli provider-bench`; penetapan model & voice ID | Bab 8 §8.4, §8.10 | M5, M7 |
+| **M9** | Real providers & benchmark | Adapter ElevenLabs, Deepgram, OpenAI, Gemini, Azure; contract test `-tags live`; `kotoki-cli provider-bench`; penetapan model & voice ID | Bab 8 §8.4, §8.10 | M5, M7 |
 | **M10** | Hardening & operasi | Manifest k8s, dashboard/alert, load test gate G1–G4, failure injection, checklist produksi | Bab 13 | M8, M9 |
 
 Paralel yang diizinkan: **M4 paralel dengan M2** (hanya butuh M1; **M4 harus selesai sebelum M3** karena M3 memakai `prompt.Render/Template`); **M6 paralel dengan M5** setelah M3; **M9 paralel dengan M7–M8** setelah M5. Selain itu berurutan.
@@ -77,7 +77,7 @@ Nama persis ada di spec; tabel ini hanya menunjuk pemilik agar plan tidak mendef
 | `auth.Principal`, `auth.Service`, ticket WS (`auth` + `redisstore`) | M2 | M3, M5 |
 | `balance.Service` (reserve/settle/release, `ComputeCharge`), `session.Service`, `session.RuntimeService` (§7.13.1 signature), `content.Resolver` | M3 | M5, M6 |
 | `provider.Router`, port STT/LLM/TTS/…, `prompt.Render/EstimateTokens/SentenceParser`, `provider/fake` | M4 | M5, M7, M8, M9 |
-| `conversation.Manager`, protokol WS v1, `kaiwaclient` | M5 | M8 (adaptive), M10 (load) |
+| `conversation.Manager`, protokol WS v1, `kotokiclient` | M5 | M8 (adaptive), M10 (load) |
 | `events.OutboxWriter`, `amqp` consumer framework, `jobs` scheduler | M6 | M7, M8 |
 | `evaluation.Service` + event `evaluation.completed` | M7 | M8 (learner) |
 | `memory.RetrievalService`, `learner.Service.PromptContext`, `ComputeAdaptiveDifficulty` | M8 | M5 (ports sudah ada di M5 dengan fake, diganti implementasi nyata di M8) |

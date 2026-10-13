@@ -1,4 +1,4 @@
-# Kaiwa Backend — Design Specification (Source of Truth)
+# Kotoki Backend — Design Specification (Source of Truth)
 
 **Tanggal:** 2026-10-12
 **Status:** Draft untuk persetujuan
@@ -9,7 +9,7 @@
 
 ## 0. Cara membaca dokumen ini
 
-- Dokumen ini adalah **satu-satunya** sumber kebenaran untuk backend Kaiwa.
+- Dokumen ini adalah **satu-satunya** sumber kebenaran untuk backend Kotoki.
 - Setiap keputusan punya ID `D-xxx` di register (§2). Bab lain merujuk ID ini.
 - Keputusan yang ditandai **[builder call]** dibuat saat merapikan dokumen lama (bukan dari diskusi produk). Boleh diubah oleh pemilik produk; jika diubah, update register terlebih dahulu.
 - Kata **MUST / MUST NOT / SHOULD** dipakai dengan arti RFC 2119.
@@ -53,12 +53,13 @@ Platform latihan **kaiwa (percakapan) bahasa Jepang** dengan AI secara real-time
 | ID | Keputusan |
 |---|---|
 | D-001 | Repo ini **hanya backend**. Go module di root repo (tidak ada subfolder `backend/`). Module path `github.com/nabePi/kotoki-backend`. [builder call] |
-| D-002 | Go **1.25**. Satu `go.mod`. Tiga binary: `cmd/api`, `cmd/realtime`, `cmd/worker`, plus tool `cmd/kaiwa-cli` (test client). Tidak ada `cmd/migrate`: migration dijalankan dengan CLI `migrate` dari golang-migrate (target Makefile `migrate-up`/`migrate-down`, Job migration di Kubernetes). [builder call] |
+| D-002 | Go **1.25**. Satu `go.mod`. Tiga binary: `cmd/api`, `cmd/realtime`, `cmd/worker`, plus tool `cmd/kotoki-cli` (test client). Tidak ada `cmd/migrate`: migration dijalankan dengan CLI `migrate` dari golang-migrate (target Makefile `migrate-up`/`migrate-down`, Job migration di Kubernetes). [builder call] |
 | D-003 | Library baseline (allowlist; library di luar daftar ini butuh perubahan register) [builder call]: HTTP router `github.com/go-chi/chi/v5`; PostgreSQL `github.com/jackc/pgx/v5` (pgxpool) + **sqlc** untuk query type-safe; pgvector `github.com/pgvector/pgvector-go`; YAML `gopkg.in/yaml.v3` (hanya `prices.yaml`); Unicode normalisasi `golang.org/x/text/unicode/norm` (NFC/NFKC password & nickname); JSON Schema validator `github.com/santhosh-tekuri/jsonschema/v6` (validasi `output_schema` prompt & output LLM); migration **golang-migrate** (file `migrations/000001_name.up.sql` / `.down.sql`, 6 digit; library-nya boleh dipakai di test); WebSocket `github.com/coder/websocket`; Redis `github.com/redis/go-redis/v9`; RabbitMQ `github.com/rabbitmq/amqp091-go`; object storage `github.com/aws/aws-sdk-go-v2/service/s3` (MinIO lokal); JWT `github.com/golang-jwt/jwt/v5`; password hash **argon2id** (`golang.org/x/crypto/argon2`); concurrency helper `golang.org/x/sync` (errgroup, semaphore); UUID `github.com/google/uuid` (**UUIDv7** untuk semua ID baru); logging `log/slog` (JSON); **metrik** `github.com/prometheus/client_golang` (endpoint `/metrics`); **trace** OpenTelemetry SDK + exporter OTLP + `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` (OTel hanya untuk trace, bukan metrik); config dari environment variable (`github.com/caarlos0/env/v11`); test `testing` + `github.com/stretchr/testify` + `github.com/testcontainers/testcontainers-go` beserta modul `postgres`, `redis`, `rabbitmq`, `minio`. Opus codec `gopkg.in/hraban/opus.v2` (cgo, libopus). VAD `github.com/maxhawkins/go-webrtcvad` (cgo, WebRTC VAD). Adapter provider (STT/LLM/TTS/evaluation/embedding/pronunciation) memakai `net/http` + `coder/websocket` langsung, **tanpa SDK vendor**. |
 | D-004 | Dependency injection: **manual wiring** di `cmd/*/main.go` (tanpa framework DI). Tanpa ORM. |
 | D-005 | **Layout per fitur (package by feature) dengan pemisahan handler / service / repository** (detail §2.2). Paket fitur (`auth`, `balance`, `session`, `content`, `conversation`, `prompt`, `provider`, `evaluation`, `memory`, `learner`, `summary`, `admin`, `events`) berisi tipe domain, aturan bisnis (`Service`), dan **interface port yang didefinisikan di sisi pemakai** (mis. `session.Repository`). Paket fitur MUST NOT mengimpor paket adapter (`postgres`, `redisstore`, `amqp`, `objectstore`, `httpapi`, `wsgateway`, `jobs`, `mailer`, vendor adapter `provider/<vendor>`) maupun library infrastruktur (`chi`, `pgx`, `go-redis`, `amqp091`, `coder/websocket`, `aws-sdk`). Adapter mengimplementasikan port; handler (`httpapi`, `wsgateway`) hanya decode → panggil `Service` → encode. Ditegakkan `depguard` di `golangci-lint` (Bab 14). [builder call] |
 | D-006 | Local dev: `docker-compose.yml` berisi `pgvector/pgvector:pg17`, `redis:7.4`, `rabbitmq:4-management`, `minio/minio`, profil `observability`: `otel/opentelemetry-collector-contrib` + `grafana/otel-lgtm` (Grafana + Tempo + Loki + Prometheus, stack sama dengan produksi; Grafana di `localhost:3000`) — tanpa Jaeger. `Makefile` target: `up`, `down`, `migrate-up`, `migrate-down`, `sqlc`, `test`, `test-integration`, `lint`, `run-api`, `run-realtime`, `run-worker`. |
 | D-007 | Semua provider punya adapter **fake** deterministik (`internal/provider/fake`) yang dapat dipakai di local dev dan load test lewat `PROVIDER_MODE=fake`. Ini first-class, bukan hanya untuk unit test. Mode `real` memakai vendor di D-040. |
+| D-008 | **Domain & hostname** (`kotoki.id`) [dari pemilik produk]: frontend `app.kotoki.id`, REST API `api.kotoki.id`, WebSocket realtime `realtime.kotoki.id`; email sistem dikirim dari `no-reply@kotoki.id` (`MAIL_FROM=Kotoki <no-reply@kotoki.id>`). Staging memakai `*.staging.kotoki.id` (`app.staging.kotoki.id`, `api.staging.kotoki.id`, `realtime.staging.kotoki.id`) [builder call]. Semua host berada di bawah registrable domain yang sama sehingga cookie refresh `SameSite=Strict` (D-021) terkirim. Nilai produksi config: Bab 13 §13.2.17. Nama teknis (prefix metrik, key Redis, exchange, cookie, issuer JWT, biner, namespace) memakai `kotoki` (bukan `kaiwa`); "kaiwa" hanya dipakai sebagai kata untuk fitur percakapan. |
 
 ### 2.2 Layout repo (final, per fitur)
 
@@ -68,7 +69,7 @@ kotoki-backend/
 │   ├── api/                # main.go: wiring manual REST API
 │   ├── realtime/           # main.go: wiring manual realtime gateway
 │   ├── worker/             # main.go: consumer RabbitMQ + job terjadwal (flag --handlers)
-│   └── kaiwa-cli/          # test client & tool benchmark
+│   └── kotoki-cli/          # test client & tool benchmark
 ├── internal/
 │   │   ── PAKET FITUR (domain + service + port; tanpa library infrastruktur) ──
 │   ├── auth/               # user, password, JWT, refresh token, reset password, consent, hapus akun, ticket WS
@@ -77,9 +78,9 @@ kotoki-backend/
 │   ├── session/            # lifecycle & state machine, Service, RuntimeService, query transcript, aturan sweeper
 │   ├── content/            # topic, scenario, character, voice, style, expression, prompt version, resolver, validator
 │   ├── conversation/       # runtime realtime: Manager, turn engine, detector, barge-in, generation, context builder
-│   │   ├── audio/          # opus decode/encode, VAD, pacing (cgo; hanya boleh diimpor graf realtime: conversation, wsgateway, cmd/realtime, kaiwaclient)
+│   │   ├── audio/          # opus decode/encode, VAD, pacing (cgo; hanya boleh diimpor graf realtime: conversation, wsgateway, cmd/realtime, kotokiclient)
 │   │   │   └── assets/     # audio APOLOGY pra-render (go:embed)
-│   │   ├── protocol/       # pesan WS & binary frame (dipakai juga kaiwaclient)
+│   │   ├── protocol/       # pesan WS & binary frame (dipakai juga kotokiclient)
 │   │   └── rtstate/        # port & tipe state realtime Redis (redisstore tidak mengimpor conversation)
 │   ├── prompt/             # Render, RegisterFixtures, EstimateTokens, SentenceParser & tag ekspresi
 │   ├── provider/           # port STT/LLM/TTS/Evaluation/Embedding/Pronunciation, router, breaker, health
@@ -107,7 +108,7 @@ kotoki-backend/
 │   ├── jobs/               # scheduler + advisory lock + job terjadwal (memanggil Service fitur)
 │   │   ── PENDUKUNG ──
 │   ├── platform/           # subpaket: config/, logging/, otel/, metrics/, health/, clock/, idgen/, ratelimit/, buildinfo/, errs/ (kode error domain lintas fitur)
-│   ├── kaiwaclient/        # library klien uji (REST + WS): kaiwa-cli, test/e2e, test/load
+│   ├── kotokiclient/        # library klien uji (REST + WS): kotoki-cli, test/e2e, test/load
 │   │   └── audio/          # encode/decode Opus klien (membungkus conversation/audio, cgo)
 │   └── testutil/           # helper test, testcontainers
 │       ├── fakes/          # fake port tulisan tangan (tanpa mock generator)
@@ -161,7 +162,7 @@ kotoki-backend/
 |---|---|
 | D-020 | Login dengan email + password (phone opsional sebagai kolom unik, tidak dipakai untuk login di versi ini). Password argon2id. |
 | D-021 | Access token: JWT HS256, TTL 15 menit, dikirim via header `Authorization: Bearer` untuk REST. Refresh token: opaque random 256-bit, disimpan **hash**-nya di DB, TTL 30 hari, rotasi setiap refresh, reuse detection (reuse → revoke seluruh family). Refresh token dikirim sebagai cookie `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`. |
-| D-022 | **WebSocket auth memakai one-time ticket** (menyelesaikan masalah browser tidak bisa set header WS). Alur: `POST /api/v1/sessions/{session_id}/realtime-ticket` (Bearer auth) → `{ticket, expires_in: 30}`; ticket random 256-bit disimpan di Redis `kaiwa:ws_ticket:{sha256(ticket)}` → `{user_id, session_id}` TTL 30 detik, **sekali pakai** (GETDEL). Connect: `GET /api/v1/realtime?ticket=...`. Access token JWT MUST NOT dikirim di query string; ticket boleh karena single-use, pendek, dan terikat session. Handshake MUST memeriksa `Origin` terhadap allowlist `WS_ALLOWED_ORIGINS`. |
+| D-022 | **WebSocket auth memakai one-time ticket** (menyelesaikan masalah browser tidak bisa set header WS). Alur: `POST /api/v1/sessions/{session_id}/realtime-ticket` (Bearer auth) → `{ticket, expires_in: 30}`; ticket random 256-bit disimpan di Redis `kotoki:ws_ticket:{sha256(ticket)}` → `{user_id, session_id}` TTL 30 detik, **sekali pakai** (GETDEL). Connect: `GET /api/v1/realtime?ticket=...`. Access token JWT MUST NOT dikirim di query string; ticket boleh karena single-use, pendek, dan terikat session. Handshake MUST memeriksa `Origin` terhadap allowlist `WS_ALLOWED_ORIGINS`. |
 | D-023 | Role user: `USER` atau `ADMIN` (kolom `users.role`). Endpoint `/api/v1/admin/*` hanya untuk `ADMIN`. |
 
 ### 2.5 Balance
@@ -184,7 +185,7 @@ kotoki-backend/
 | D-051 | Transisi sah (selain ini MUST ditolak): `RESERVED→STARTING` (ws `session.start` diterima), `STARTING→ACTIVE` (runtime siap, transaksi start), `STARTING→FAILED`, `RESERVED→CANCELLED` (user cancel), `RESERVED→ABANDONED` (start deadline lewat), `ACTIVE→ENDING` (user end / durasi habis / reconnect timeout / fatal error), `ENDING→COMPLETED` (settlement normal), `ENDING→FAILED`, `ACTIVE→FAILED` (crash recovery oleh sweeper). Status terminal: `COMPLETED`, `CANCELLED`, `ABANDONED`, `FAILED`. |
 | D-052 | `sessions.end_reason`: `USER_ENDED`, `DURATION_ELAPSED`, `RECONNECT_TIMEOUT`, `PROVIDER_FAILURE`, `SERVER_ERROR`, `USER_CANCELLED`, `NOT_STARTED`. Durasi habis = `ENDING` dengan `DURATION_ELAPSED` lalu `COMPLETED` (bukan status EXPIRED). WS event `session.expired` diganti `session.ending` dengan `reason`. |
 | D-053 | `STARTING` diset di transaksi terpisah saat `session.start` diterima; runtime lalu membuka koneksi provider; setelah siap, transaksi kedua `STARTING→ACTIVE` mengisi `started_at`, `expires_at = started_at + duration_seconds`. Jika runtime gagal siap dalam 10 detik → `FAILED` (`PROVIDER_FAILURE`, charge 0). |
-| D-054 | Owner timer: pod realtime pemilik sesi memegang timer expiry in-memory dan menulis heartbeat Redis `kaiwa:session:{id}:hb` (format & TTL milik Bab 7). Fallback: job **`session_sweeper`** (tiap 10 detik; jadwal & lock Bab 9 §9.9.1) memakai `session.Service` yang sama (idempotent) dengan aturan: (a) `ACTIVE` & `expires_at + 15 s < now` → `ENDING→COMPLETED` (`DURATION_ELAPSED`); (b) `ACTIVE` & `handoff_at IS NULL` & heartbeat hilang > 45 s → `ACTIVE→FAILED` (`SERVER_ERROR`), billable end = `last_heartbeat_at` (atau `now − 45 s`); (c) `ENDING` > 60 s → selesaikan settlement; (d) `STARTING` > 30 s → `FAILED` (`SERVER_ERROR`, charge 0); (e) `ACTIVE` & `handoff_at < now − 30 s` (handoff drain yang tidak di-resume) → `BeginEnding(RECONNECT_TIMEOUT)` + finalize, `billable_end = handoff_at` [builder call, S-10]. `sessions.handoff_at` diisi runtime saat `DRAIN_RELEASE` dan di-NULL-kan `ClaimRuntime`. Pengaman aturan (b): dinonaktifkan selama Redis tak terjangkau dan sampai Redis terjangkau terus-menerus ≥ 45 s; jika dalam satu tick kandidat (b) ≥ 20 sesi **dan** ≥ 50 % sesi `ACTIVE` → (b) dilewati pada tick itu + alert; sesi dengan `handoff_at IS NOT NULL` dikecualikan dari aturan (b) dan dari penghitung pengaman ini. Semantik aturan milik Bab 5 §5.6.4, mekanik job milik Bab 9. |
+| D-054 | Owner timer: pod realtime pemilik sesi memegang timer expiry in-memory dan menulis heartbeat Redis `kotoki:session:{id}:hb` (format & TTL milik Bab 7). Fallback: job **`session_sweeper`** (tiap 10 detik; jadwal & lock Bab 9 §9.9.1) memakai `session.Service` yang sama (idempotent) dengan aturan: (a) `ACTIVE` & `expires_at + 15 s < now` → `ENDING→COMPLETED` (`DURATION_ELAPSED`); (b) `ACTIVE` & `handoff_at IS NULL` & heartbeat hilang > 45 s → `ACTIVE→FAILED` (`SERVER_ERROR`), billable end = `last_heartbeat_at` (atau `now − 45 s`); (c) `ENDING` > 60 s → selesaikan settlement; (d) `STARTING` > 30 s → `FAILED` (`SERVER_ERROR`, charge 0); (e) `ACTIVE` & `handoff_at < now − 30 s` (handoff drain yang tidak di-resume) → `BeginEnding(RECONNECT_TIMEOUT)` + finalize, `billable_end = handoff_at` [builder call, S-10]. `sessions.handoff_at` diisi runtime saat `DRAIN_RELEASE` dan di-NULL-kan `ClaimRuntime`. Pengaman aturan (b): dinonaktifkan selama Redis tak terjangkau dan sampai Redis terjangkau terus-menerus ≥ 45 s; jika dalam satu tick kandidat (b) ≥ 20 sesi **dan** ≥ 50 % sesi `ACTIVE` → (b) dilewati pada tick itu + alert; sesi dengan `handoff_at IS NOT NULL` dikecualikan dari aturan (b) dan dari penghitung pengaman ini. Semantik aturan milik Bab 5 §5.6.4, mekanik job milik Bab 9. |
 | D-055 | Reconnect window 30 detik. Selama disconnected, timer sesi **tetap berjalan** (tidak dipause) untuk kesederhanaan dan anti-abuse; namun detik disconnected dicatat (`sessions.disconnected_seconds`) dan **dikurangkan dari charge** (D-036). Jika tidak reconnect dalam 30 detik → `ENDING` (`RECONNECT_TIMEOUT`). [builder call] |
 | D-056 | `conversation_start_mode`: `USER_FIRST` atau `AI_FIRST`, dipilih client saat create session, disimpan di sesi. |
 
@@ -217,7 +218,7 @@ kotoki-backend/
 | D-081 | Format output LLM untuk streaming: **bukan JSON**. LLM diinstruksikan menulis teks Jepang biasa dengan tag ekspresi opsional di awal kalimat: `<e:NAME>` (NAME dari expression profile). Server parse streaming: potong kalimat pada `。！？!?\n` (atau 60 karakter tanpa tanda), ambil tag, buang tag yang tidak dikenal, kirim kalimat ke TTS dengan ekspresi. Tanpa tag → ekspresi `neutral`. |
 | D-082 | Heartbeat: server mengirim WS ping tiap 15 detik; koneksi tanpa pong/data 45 detik dianggap putus. Limit: JSON frame ≤ 16 KiB, binary frame ≤ 4 KiB; rate binary frame = token bucket 100/detik burst 200, rate JSON frame = token bucket 20/detik burst 40; pelanggaran → error `PROTOCOL_VIOLATION` lalu close 1008. Outbound buffer per koneksi 256 pesan; jika penuh, drop koneksi (client reconnect). |
 | D-083 | Reconnect: client connect ulang dengan ticket baru + `session.resume {last_server_seq}`. Server mengirim ulang event dari replay buffer Redis Stream (MAXLEN 500, TTL 120 detik) dengan `server_seq > last_server_seq`; jika gap tidak tersedia, kirim `session.snapshot` (state lengkap). Audio tidak di-replay. |
-| D-084 | Session affinity: pod realtime yang memegang sesi dicatat di Redis `kaiwa:session:{id}:owner`. Reconnect ke pod lain → pod tersebut mengambil alih ownership dan membangun ulang runtime dari Postgres + Redis; turn yang sedang berjalan saat putus ditandai `FAILED`. **Fencing** berbasis Postgres: kolom `sessions.runtime_fence BIGINT NOT NULL DEFAULT 0` dinaikkan setiap klaim runtime; setiap tulis runtime ke Postgres mensyaratkan `runtime_fence` = fence miliknya (semantik milik Bab 7 §7.9.3). Ingress memakai sticky **cookie consistent-hash `kaiwa_rt`** sebagai optimasi (bukan hash ticket). |
+| D-084 | Session affinity: pod realtime yang memegang sesi dicatat di Redis `kotoki:session:{id}:owner`. Reconnect ke pod lain → pod tersebut mengambil alih ownership dan membangun ulang runtime dari Postgres + Redis; turn yang sedang berjalan saat putus ditandai `FAILED`. **Fencing** berbasis Postgres: kolom `sessions.runtime_fence BIGINT NOT NULL DEFAULT 0` dinaikkan setiap klaim runtime; setiap tulis runtime ke Postgres mensyaratkan `runtime_fence` = fence miliknya (semantik milik Bab 7 §7.9.3). Ingress memakai sticky **cookie consistent-hash `kotoki_rt`** sebagai optimasi (bukan hash ticket). |
 
 ### 2.9 Provider
 
@@ -233,7 +234,7 @@ kotoki-backend/
 | ID | Keputusan |
 |---|---|
 | D-090 | Transactional outbox (`event_outbox`) di Postgres; publisher di proses worker (`--handlers=outbox`) polling `FOR UPDATE SKIP LOCKED` tiap 500 ms → RabbitMQ. |
-| D-091 | RabbitMQ: satu **topic exchange** `kaiwa.events` (routing key = `event_type`). Queue & binding: `evaluation.session_completed` ← `session.completed`; `memory.session_completed` ← `session.completed`; `learner.evaluation_completed` ← `evaluation.completed`; `summary.session_completed` ← `session.completed`. Event MVP yang dipublish: `session.completed`, `evaluation.completed`, `evaluation.failed`, `memory.extracted`. `session.completed` diterbitkan untuk transisi terminal `COMPLETED` **dan** `FAILED` jika `started_at IS NOT NULL` (sesi pernah `ACTIVE`), dengan field payload `final_status` (`COMPLETED`/`FAILED`); sesi `CANCELLED`/`ABANDONED`/`STARTING→FAILED` tidak menerbitkan event. Event tanpa consumer (`evaluation.failed`, `memory.extracted`) dirutekan ke alternate exchange `kaiwa.events.unrouted` (Bab 9). |
+| D-091 | RabbitMQ: satu **topic exchange** `kotoki.events` (routing key = `event_type`). Queue & binding: `evaluation.session_completed` ← `session.completed`; `memory.session_completed` ← `session.completed`; `learner.evaluation_completed` ← `evaluation.completed`; `summary.session_completed` ← `session.completed`. Event MVP yang dipublish: `session.completed`, `evaluation.completed`, `evaluation.failed`, `memory.extracted`. `session.completed` diterbitkan untuk transisi terminal `COMPLETED` **dan** `FAILED` jika `started_at IS NOT NULL` (sesi pernah `ACTIVE`), dengan field payload `final_status` (`COMPLETED`/`FAILED`); sesi `CANCELLED`/`ABANDONED`/`STARTING→FAILED` tidak menerbitkan event. Event tanpa consumer (`evaluation.failed`, `memory.extracted`) dirutekan ke alternate exchange `kotoki.events.unrouted` (Bab 9). |
 | D-092 | Retry: per queue ada retry queue berbasis TTL + DLX: `<queue>.retry.5s`, `.retry.30s`, `.retry.2m`, `.retry.10m`, lalu `<queue>.dlq`. Max 4 retry untuk error retryable; error non-retryable langsung ke DLQ. Quorum queues. |
 | D-093 | Consumer idempotency: tabel `processed_events(consumer, event_id)` PK gabungan; consumer menulis baris ini di transaksi yang sama dengan efek bisnisnya. |
 | D-094 | Worker: satu binary `cmd/worker` dengan flag `--handlers=outbox,evaluation,memory,learner,summary,sweeper,cleanup`. Di Kubernetes dideploy sebagai beberapa Deployment dari image yang sama (outbox+sweeper+cleanup, evaluation, memory, learner+summary). Semua job terjadwal (nama, flag, interval, advisory lock ID, timeout) didefinisikan di **satu tabel: Bab 9 §9.9.1**; bab lain merujuknya dan tidak menulis lock ID/interval sendiri. |
@@ -259,10 +260,10 @@ Ringkasan satu baris untuk keputusan bab yang berdampak lintas bab. Detail, angk
 **Identity, akun & privasi**
 - D-NEW-3-1, D-NEW-13-1: Registrasi = `email`, `password`, `full_name`, `terms_version` (wajib, = `PRIVACY_POLICY_VERSION`), `phone_number` & `audio_consent` (opsional); `users` punya `terms_version`, `terms_accepted_at`, `audio_consent`, `audio_consent_updated_at`, `deleted_at`, `purged_at` — §3.3.1, §3.8.1, §13.9.1.
 - D-NEW-3-6: JWT HS256 dengan claims `iss`/`aud`/`sub`/`role`/`fam`/`jti`, `kid` dari secret, rotasi via `AUTH_JWT_SECRET` + `AUTH_JWT_PREVIOUS_SECRET` — §3.6, §13.2.7.
-- D-NEW-3-4, D-NEW-3-5: Refresh token SHA-256 + family + grace 10 s (`409 REFRESH_TOKEN_ROTATED`); cookie `kaiwa_refresh` `SameSite=Strict` ⇒ frontend & API wajib same-site — §3.8.3, §3.8.5.
+- D-NEW-3-4, D-NEW-3-5: Refresh token SHA-256 + family + grace 10 s (`409 REFRESH_TOKEN_ROTATED`); cookie `kotoki_refresh` `SameSite=Strict` ⇒ frontend & API wajib same-site — §3.8.3, §3.8.5.
 - D-NEW-3-14, D-NEW-13-2: `GET /auth/terms` (publik), `GET /me`, `PUT /me/consents`; `POST /sessions` ditolak `403 TERMS_NOT_ACCEPTED` bila terms usang; audio hanya di-capture jika `audio_consent = true` — §3.13, §13.9.1, §7.5.5.
 - D-NEW-3-15, D-NEW-13-3: `DELETE /me` (re-auth password, `409 ACCOUNT_HAS_ACTIVE_SESSION`) → status `DELETED` → purge asinkron job `account_purge`; ledger & baris `sessions` dipertahankan; consumer async melewati user `DELETED` — §3.13, §13.9.3.
-- D-NEW-13-7: Rate limit = token bucket Lua `kaiwa:ratelimit:{policy}:{subject}`, nama & angka policy kanonik di §13.4.3; Redis down → limiter lokal per pod — §3.10, §13.4.3.
+- D-NEW-13-7: Rate limit = token bucket Lua `kotoki:ratelimit:{policy}:{subject}`, nama & angka policy kanonik di §13.4.3; Redis down → limiter lokal per pod — §3.10, §13.4.3.
 - D-NEW-13-5: Katalog env var §13.2 kanonik (prefix grup, tanpa prefix aplikasi) — §13.2.
 - S-4 (D-NEW-5-26): Nama panggilan = `learner_profiles.nickname` (1–30, via `PATCH /profile`) → `PromptData.Learner.DisplayName`; `users.full_name` MUST NOT dikirim ke provider LLM mana pun [builder call] — §5.9.7, §12.8.4.
 
@@ -276,7 +277,7 @@ Ringkasan satu baris untuk keputusan bab yang berdampak lintas bab. Detail, angk
 - D-NEW-5-16: `disconnected_seconds` ditambah per episode lewat `AddDisconnected` (dihitung runtime, dipotong di `expires_at` oleh service) — §5.6.5, §7.10.
 - D-NEW-5-18: `session_events.event_type` = event lifecycle `session.Service` + event runtime Bab 7 (`OWNER_CHANGED`, `SESSION_DISCONNECTED`, `SESSION_RECONNECTED`, `BARGE_IN`, `TURN_FAILED`, `PROVIDER_FALLBACK`, `PROTOCOL_VIOLATION`, `DIFFICULTY_ADJUSTED`) — §5.3, §7.13.
 - D-NEW-5-8: Konvensi REST: list `{"data":[…],"next_cursor":…}`, cursor base64url `{"v":1,"k":…}`, limit default 20 / max 100; katalog konten Bab 6 memakai `{"items":[…]}` tanpa paginasi — §5.8, §6.12.
-- D-NEW-5-10: Control channel Redis Pub/Sub `kaiwa:session:{id}:control` setelah transisi ke `ENDING`/terminal — §5.6.6.
+- D-NEW-5-10: Control channel Redis Pub/Sub `kotoki:session:{id}:control` setelah transisi ke `ENDING`/terminal — §5.6.6.
 - S-5 (D-NEW-5-23): Objek `Session` memakai `scenario.name` dan `character.avatar_key` (frontend memetakan ke URL); nama topic/scenario dari baris induk, nama karakter dari `character_versions` snapshot [builder call] — §5.9.4.
 - S-6 (D-NEW-5-24): `session_turns` & `session_events` dipartisi RANGE bulanan pada `created_at` sejak hari pertama; PK `(id, created_at)`, `UNIQUE (session_id, sequence_number, created_at)` + keunikan per sesi dijamin aplikasi; **tidak ada FK** yang menunjuk ke keduanya (`evaluation_findings.session_turn_id`, `session_events.turn_id` = UUID biasa); index lokal; migration membuat bulan berjalan + 3; job `partition_maintenance` (flag `cleanup`, harian, lock `7100009`) membuat partisi 3 bulan ke depan dan men-drop partisi lewat retensi (turns < now − 180 h − 2 jam, events < now − 365 h); `transcript_retention` tetap membersihkan partisi batas [builder call] — §5.3.2, §5.3.3, §9.9.1, §13.3.
 
@@ -285,17 +286,17 @@ Ringkasan satu baris untuk keputusan bab yang berdampak lintas bab. Detail, angk
 - D-NEW-6-4: Formalitas efektif = `scenario_versions.formality_override ?? conversation_style_version.formality`; scenario punya `difficulty_level` 1–5 dan `evaluation_focus` — §6.3.2, §12.8.
 - D-NEW-6-7, D-NEW-6-10: User tidak memilih voice (default karakter, dialek & tier harus cocok); `provider_voice_id` immutable setelah bernilai nyata, placeholder ditolak saat `PROVIDER_MODE=real` — §6.3.4, §6.13.3.
 - D-NEW-6-11, D-NEW-6-12: Katalog 12 ekspresi lowercase; template prompt `text/template` `missingkey=error` dengan `{{.CoreRules}}`/`{{.OutputContract}}` wajib — §6.3.7, §6.8.
-- D-NEW-6-13, S-2 (D-NEW-5-21): Version prompt `OPENING` untuk sesi `AI_FIRST` dipilih `session.Service.BeginStart` dan dicatat di `sessions.opening_prompt_version_id` (saat `STARTING`); runtime memakai nilai dari session hasil `BeginStart`. Tidak ada OPENING `PUBLISHED` → tidak gagal: NULL, runtime men-TTS `scenario_versions.opening_line` sebagai turn 0, WARN + `kaiwa_content_opening_fallback_total` [builder call] — §5.3.1, §5.6.2, §6.8, §7.7.
+- D-NEW-6-13, S-2 (D-NEW-5-21): Version prompt `OPENING` untuk sesi `AI_FIRST` dipilih `session.Service.BeginStart` dan dicatat di `sessions.opening_prompt_version_id` (saat `STARTING`); runtime memakai nilai dari session hasil `BeginStart`. Tidak ada OPENING `PUBLISHED` → tidak gagal: NULL, runtime men-TTS `scenario_versions.opening_line` sebagai turn 0, WARN + `kotoki_content_opening_fallback_total` [builder call] — §5.3.1, §5.6.2, §6.8, §7.7.
 - S-1: Semua prompt (CONVERSATION, OPENING, SUMMARY, EVALUATION, MEMORY_EXTRACTION) di `prompt_versions` dengan `system_template`, `user_template` (wajib SUMMARY/EVALUATION/MEMORY_EXTRACTION), `output_schema` (wajib EVALUATION/MEMORY_EXTRACTION), `llm_params` (`temperature`, `max_output_tokens`, `top_p`, `seed`; nilai DB menang, env `EVAL_*` dihapus); template Go `text/template` `missingkey=error` `{{.FieldName}}`; struct data milik bab pemilik; `evaluations.rubric_version` = version prompt EVALUATION; seed `seed/0070_prompts.sql` [builder call] — §6.8, §9.9.6, §10.6, §10.7, §11.5.
 - D-NEW-6-16: Cache katalog in-process TTL 30 s; version by-ID di-cache tanpa TTL — §6.9.
 
 **Realtime & provider**
 - D-NEW-7-1, D-NEW-7-2: Katalog error WS + close code aplikasi `4xxx`; `server_seq` monotonic, event durable vs transient, replay dengan `prev_seq` — §7.4.
-- D-NEW-7-13: Fencing Postgres `runtime_fence`; owner key Redis `pod|fence`; heartbeat `kaiwa:session:{id}:hb` — §7.9.
+- D-NEW-7-13: Fencing Postgres `runtime_fence`; owner key Redis `pod|fence`; heartbeat `kotoki:session:{id}:hb` — §7.9.
 - D-NEW-7-11: Kegagalan generation → audio APOLOGY pra-render; 3 turn `FAILED` berturut-turut → sesi berakhir `PROVIDER_FAILURE` (tidak termasuk turn `TRUNCATED` (S-7) dan `CONTENT_FILTERED` (S-9)) — §7.7.6.
 - S-7: Timeout total LLM (15 s) atau deadline sesi tercapai **setelah** `MarkAudioSent` → router mengakhiri stream `DONE{Reason: TRUNCATED}` (bukan `ERROR`); kalimat yang sudah di-parse tetap diucapkan, turn `COMPLETED`, tidak dihitung ke `MAX_CONSECUTIVE_FAILED_TURNS`; `PROVIDER_SESSION_GRACE` = 15 s; "audio terkirim" = frame pertama generation masuk antrean writer (S-12) [builder call] — §8.5, §7.7.6.
 - S-8: Runtime memanggil `stt.Finalize()` di akhir turn user, saat masuk `AI_SPEAKING`, dan saat kembali ke `LISTENING`; FINAL dari dua commit terakhir ditandai `discard` (tidak masuk teks turn); barge-in `TextSince(onset)` hanya memakai partial sejak commit terakhir [builder call] — §7.6, §8.2.
-- S-9: `CONTENT_FILTERED` (`DONE` maupun `ERROR`) → generation gagal: turn `FAILED`, APOLOGY, counter terpisah (tidak dihitung ke batas 3 turn gagal), metrik `kaiwa_llm_content_filtered_total`, tidak memengaruhi charge [builder call] — §7.7.6, §8.3.
+- S-9: `CONTENT_FILTERED` (`DONE` maupun `ERROR`) → generation gagal: turn `FAILED`, APOLOGY, counter terpisah (tidak dihitung ke batas 3 turn gagal), metrik `kotoki_llm_content_filtered_total`, tidak memengaruhi charge [builder call] — §7.7.6, §8.3.
 - D-NEW-7-15: Expiry tepat di `expires_at`, grace penyelesaian AI maks 10 s (tidak ditagih) — §7.11.2.
 - D-NEW-7-16, D-NEW-7-17: Drain = safepoint `LISTENING` maks 20 s, flush 5 s, close 4100; kapasitas pod: readiness 503 pada 95, `session.start` ditolak ≥ 100, resume s.d. 120; KEDA target 70 sesi/pod (min 3, max 20) — §7.12, §13.10.
 - D-NEW-7-18, D-NEW-12-4: Budget konteks LLM total milik §7.8 (disesuaikan S-15/S-18: blok learner + `<conversation_difficulty>` 700 token); `MaxAISentencesPerTurn` = batas keras parser kalimat; speaking rate TTS 0.80–1.05 dari rumus §6.6.3 — §7.8, §6.6.3, §8.2.4.
@@ -304,7 +305,7 @@ Ringkasan satu baris untuk keputusan bab yang berdampak lintas bab. Detail, angk
 - D-NEW-8-11: Batas konkurensi provider per pod (STT 125 (S-14, ≥ hard max 120 sesi), LLM 60, TTS 80, evaluation 8, embedding 16, pronunciation 8) — §8.5.
 
 **Async, evaluasi, memory, learner**
-- D-NEW-9-2, D-NEW-9-4: Outbox `PENDING/PUBLISHED/FAILED` (maks 10 attempt) dengan `traceparent`/`tracestate`; retry via `kaiwa.retry`/`kaiwa.requeue`, DLQ `kaiwa.dlx` — §9.2, §9.6.
+- D-NEW-9-2, D-NEW-9-4: Outbox `PENDING/PUBLISHED/FAILED` (maks 10 attempt) dengan `traceparent`/`tracestate`; retry via `kotoki.retry`/`kotoki.requeue`, DLQ `kotoki.dlx` — §9.2, §9.6.
 - D-NEW-9-12: `sessions.summary_text` berbahasa Jepang ≤ 300 karakter, prompt `SUMMARY`, profile `STANDARD` — §9.9.6.
 - D-NEW-10-1, D-NEW-10-2: Skor dimensi integer 0–100, `overall_score` NUMERIC(5,2); status evaluasi `PENDING/RUNNING/COMPLETED/FAILED`; konversi ke proficiency hanya lewat algoritma §12.5 — §10.1, §10.3.
 - D-NEW-10-3: Sinyal internal `listening_response_signal`, `interaction_complexity_signal`, `dimension_confidence`, `pronunciation_utterance_count` untuk skill D-097 — §10.2, §12.4.
@@ -346,7 +347,7 @@ Bab ini mendefinisikan identitas user, autentikasi (password, JWT, refresh token
 | Verifikasi email/phone | Tidak ada di versi ini. Email dipakai untuk reset password. |
 | Password hash | argon2id, PHC string (§3.4). |
 | Access token | JWT HS256, TTL 15 menit, header `Authorization: Bearer` (D-021). |
-| Refresh token | Opaque 256-bit, hash SHA-256 di DB, TTL 30 hari sliding, rotasi tiap refresh, reuse detection → revoke family (D-021). Cookie `kaiwa_refresh`. |
+| Refresh token | Opaque 256-bit, hash SHA-256 di DB, TTL 30 hari sliding, rotasi tiap refresh, reuse detection → revoke family (D-021). Cookie `kotoki_refresh`. |
 | Reset password | Token opaque 256-bit, hash SHA-256, TTL **15 menit**, sekali pakai, dikirim via port `Mailer`. |
 | WebSocket auth | One-time ticket di Redis, TTL 30 detik, GETDEL (D-022). |
 | Role | `USER`, `ADMIN` (D-023). Tidak ada endpoint untuk mengubah role. |
@@ -622,8 +623,8 @@ Header: `{"alg":"HS256","typ":"JWT","kid":"<kid>"}`. Claims:
 
 ```json
 {
-  "iss": "kaiwa-api",
-  "aud": "kaiwa",
+  "iss": "kotoki-api",
+  "aud": "kotoki",
   "sub": "0192a3b4-....-user-uuid",
   "role": "USER",
   "fam": "0192a3b4-....-refresh-family-uuid",
@@ -636,7 +637,7 @@ Header: `{"alg":"HS256","typ":"JWT","kid":"<kid>"}`. Claims:
 
 Aturan:
 - Signing key = `AUTH_JWT_SECRET` (base64, MUST ≥ 32 byte setelah decode; jika tidak, proses gagal start). `kid` = 8 karakter hex pertama `sha256(secret_bytes)`. `AUTH_JWT_PREVIOUS_SECRET` (opsional) hanya untuk verifikasi selama rotasi: token dengan `kid` secret lama tetap diterima sampai variabel itu dihapus (≥ 15 menit setelah rotasi). Nama env kanonik: Bab 13 §13.2.7.
-- Verifikasi: `alg` MUST `HS256` (tolak `none`/lainnya), `kid` cocok dengan secret aktif atau sebelumnya, `iss` = `AUTH_JWT_ISSUER` (default `kaiwa-api`), `aud` = `AUTH_JWT_AUDIENCE` (default `kaiwa`), `exp`, `nbf` dengan leeway **30 detik**.
+- Verifikasi: `alg` MUST `HS256` (tolak `none`/lainnya), `kid` cocok dengan secret aktif atau sebelumnya, `iss` = `AUTH_JWT_ISSUER` (default `kotoki-api`), `aud` = `AUTH_JWT_AUDIENCE` (default `kotoki`), `exp`, `nbf` dengan leeway **30 detik**.
 - `AUTH_ACCESS_TOKEN_TTL` = `15m`.
 - Access token tidak disimpan di DB dan tidak bisa direvoke individual. Logout / reset password / suspend hanya merevoke refresh token; access token lama tetap valid ≤ 15 menit (diterima).
 - `role` di claim dipakai untuk routing cepat; endpoint admin tetap mengecek ulang DB (§3.12).
@@ -719,7 +720,7 @@ INSERT INTO refresh_tokens (id, user_id, family_id, parent_id, token_hash, user_
 VALUES ($id, $user_id, $id /* family = id */, NULL, $hash, $ua, $ip, $now, $now + interval '30 days');
 ```
 
-**Refresh — `POST /api/v1/auth/refresh`** (cookie `kaiwa_refresh` saja; body diabaikan):
+**Refresh — `POST /api/v1/auth/refresh`** (cookie `kotoki_refresh` saja; body diabaikan):
 
 ```text
 1. Rate limit: auth_refresh_ip. Origin check.
@@ -755,10 +756,10 @@ Tidak butuh Bearer. Baca cookie; jika valid, `UPDATE refresh_tokens SET revoked_
 #### 3.8.5 Cookie
 
 ```http
-Set-Cookie: kaiwa_refresh=<token>; Path=/api/v1/auth; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000
+Set-Cookie: kotoki_refresh=<token>; Path=/api/v1/auth; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000
 ```
 
-Clear: nilai kosong + `Max-Age=0` dengan atribut Path yang sama. Config: `AUTH_REFRESH_COOKIE_SECURE` (default `true`; `false` hanya diterima bila `APP_ENV=local`), `AUTH_REFRESH_COOKIE_DOMAIN` (default kosong = host-only). Konsekuensi `SameSite=Strict`: frontend dan API MUST berada di **site yang sama** (registrable domain sama, mis. `app.kaiwa.example` + `api.kaiwa.example`).
+Clear: nilai kosong + `Max-Age=0` dengan atribut Path yang sama. Config: `AUTH_REFRESH_COOKIE_SECURE` (default `true`; `false` hanya diterima bila `APP_ENV=local`), `AUTH_REFRESH_COOKIE_DOMAIN` (default kosong = host-only). Konsekuensi `SameSite=Strict`: frontend dan API MUST berada di **site yang sama** (registrable domain sama, mis. `app.kotoki.id` + `api.kotoki.id`).
 
 ### 3.9 Forgot & reset password
 
@@ -785,15 +786,15 @@ Mail dispatcher [builder call]: goroutine pool in-process di `cmd/api` (buffer c
 Isi email (template di `internal/auth/templates/password_reset.txt`):
 
 ```text
-Subject: [Kaiwa] パスワード再設定 / Reset your password
+Subject: [Kotoki] パスワード再設定 / Reset your password
 Body:
-Kami menerima permintaan reset password untuk akun Kaiwa Anda.
+Kami menerima permintaan reset password untuk akun Kotoki Anda.
 Buka tautan berikut dalam 15 menit:
 {PASSWORD_RESET_URL_BASE}?token={token}
 Jika Anda tidak meminta reset, abaikan email ini.
 ```
 
-`PASSWORD_RESET_URL_BASE` adalah URL halaman frontend (mis. `https://app.kaiwa.example/reset-password`). Frontend mengirim token ke `POST /auth/reset-password`.
+`PASSWORD_RESET_URL_BASE` adalah URL halaman frontend (mis. `https://app.kotoki.id/reset-password`). Frontend mengirim token ke `POST /auth/reset-password`.
 
 #### 3.9.2 Reset — `POST /api/v1/auth/reset-password`
 
@@ -822,14 +823,14 @@ Jika Anda tidak meminta reset, abaikan email ini.
 | `MAIL_MODE` | Adapter | Perilaku |
 |---|---|---|
 | `log` (default) | `mailer.LogMailer` | Menulis `slog.Info("mail.sent", "to", to, "subject", s, "body", body, "tag", tag)`. **Hanya** untuk `local`/`dev` — body berisi token reset. Jika `APP_ENV ∈ {staging, prod}` dan `MAIL_MODE=log` → proses gagal start (Bab 13 §13.2.13). |
-| `smtp` | `mailer.SMTPMailer` | `net/smtp` + STARTTLS wajib. Config: `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USERNAME`, `SMTP_PASSWORD`, `MAIL_FROM` (mis. `Kaiwa <no-reply@kaiwa.example>`). |
+| `smtp` | `mailer.SMTPMailer` | `net/smtp` + STARTTLS wajib. Config: `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USERNAME`, `SMTP_PASSWORD`, `MAIL_FROM` (mis. `Kotoki <no-reply@kotoki.id>`). |
 | (test) | `mailer.FakeMailer` | Menyimpan pesan di slice in-memory dengan mutex; dipakai integration test untuk mengambil token. |
 
 Log biasa (bukan LogMailer) MUST NOT memuat token reset, refresh token, ticket, atau password; email di log di-mask (`a***@example.com`).
 
 ### 3.10 Rate limit auth & endpoint sensitif
 
-Algoritma, key Redis (`kaiwa:ratelimit:{policy}:{subject}`), angka capacity/refill, subject (IP via `TRUSTED_PROXY_CIDRS`, email di-hash), header `Retry-After`/`RateLimit-Remaining`, dan perilaku saat Redis down (fallback limiter lokal per pod, **fail-open**) **semuanya milik Bab 13 §13.4.3** dan tidak didefinisikan ulang di sini. Ditolak → `429 RATE_LIMITED`. Pemetaan endpoint → policy (nama policy kanonik Bab 13):
+Algoritma, key Redis (`kotoki:ratelimit:{policy}:{subject}`), angka capacity/refill, subject (IP via `TRUSTED_PROXY_CIDRS`, email di-hash), header `Retry-After`/`RateLimit-Remaining`, dan perilaku saat Redis down (fallback limiter lokal per pod, **fail-open**) **semuanya milik Bab 13 §13.4.3** dan tidak didefinisikan ulang di sini. Ditolak → `429 RATE_LIMITED`. Pemetaan endpoint → policy (nama policy kanonik Bab 13):
 
 | Endpoint | Policy (urutan cek) |
 |---|---|
@@ -861,14 +862,14 @@ Algoritma, key Redis (`kaiwa:ratelimit:{policy}:{subject}`), angka capacity/refi
    RESERVED dengan deadline lewat → 409 SESSION_START_DEADLINE_PASSED.
    Lainnya → 409 SESSION_NOT_CONNECTABLE (details.status).
 5. raw := 32 byte crypto/rand; ticket := base64url(raw) tanpa padding.
-6. Redis: SET kaiwa:ws_ticket:{hex(sha256(ticket_string))} '<json>' EX 30 NX
+6. Redis: SET kotoki:ws_ticket:{hex(sha256(ticket_string))} '<json>' EX 30 NX
    json = {"user_id":"…","session_id":"…","issued_at":"2026-10-12T08:00:00.000Z"}
    (NX gagal = tabrakan hash → ulangi langkah 5 sekali.)
    Redis error/timeout → 503 SERVICE_UNAVAILABLE + Retry-After: 2 (Bab 13 §13.4.4).
 7. 200 {ticket, expires_in: 30, realtime_url}.
 ```
 
-Konsumsi (di Bab 7 Realtime): `GETDEL kaiwa:ws_ticket:{hex(sha256(ticket))}`; tidak ada → close/401. Setelah itu gateway MUST memverifikasi ulang dari Postgres: `sessions.user_id = ticket.user_id`, status session, `users.status = 'ACTIVE'`, dan `Origin` ∈ `WS_ALLOWED_ORIGINS`. `realtime_url` = config `REALTIME_PUBLIC_URL` + `/api/v1/realtime` (mis. `wss://rt.kaiwa.example/api/v1/realtime`); client menambahkan `?ticket=…`. Ticket dan URL-nya MUST NOT di-log (middleware logging me-redact query param `ticket`).
+Konsumsi (di Bab 7 Realtime): `GETDEL kotoki:ws_ticket:{hex(sha256(ticket))}`; tidak ada → close/401. Setelah itu gateway MUST memverifikasi ulang dari Postgres: `sessions.user_id = ticket.user_id`, status session, `users.status = 'ACTIVE'`, dan `Origin` ∈ `WS_ALLOWED_ORIGINS`. `realtime_url` = config `REALTIME_PUBLIC_URL` + `/api/v1/realtime` (mis. `wss://realtime.kotoki.id/api/v1/realtime`); client menambahkan `?ticket=…`. Ticket dan URL-nya MUST NOT di-log (middleware logging me-redact query param `ticket`).
 
 ### 3.12 Role ADMIN & endpoint admin
 
@@ -879,7 +880,7 @@ Konsumsi (di Bab 7 Realtime): `GETDEL kaiwa:ws_ticket:{hex(sha256(ticket))}`; ti
 Bootstrap admin [builder call]: tidak ada endpoint untuk mengubah role. Promosi dilakukan operator via SQL; disediakan target Makefile:
 
 ```make
-promote-admin: ## make promote-admin EMAIL=ops@kaiwa.example
+promote-admin: ## make promote-admin EMAIL=ops@kotoki.id
 	psql "$(DB_URL)" -v ON_ERROR_STOP=1 -c "UPDATE users SET role='ADMIN', updated_at=now() WHERE email='$(EMAIL)'"
 ```
 
@@ -931,7 +932,7 @@ Kontrak HTTP di §5.9.2; kebijakan privasi & purge di Bab 13 §13.9. Config: `PR
 
 #### 3.13.1 Terms — `GET /api/v1/auth/terms` (publik)
 
-Tanpa auth, rate limit `api_ip_default`. Response `200 {"terms_version": PRIVACY_POLICY_VERSION}` dengan `Cache-Control: no-store`. Dipakai frontend dan `kaiwa-cli` sebelum registrasi dan untuk mendeteksi terms baru.
+Tanpa auth, rate limit `api_ip_default`. Response `200 {"terms_version": PRIVACY_POLICY_VERSION}` dengan `Cache-Control: no-store`. Dipakai frontend dan `kotoki-cli` sebelum registrasi dan untuk mendeteksi terms baru.
 
 #### 3.13.2 Consent — `PUT /api/v1/me/consents`
 
@@ -968,7 +969,7 @@ Body `{"password": "..."}`. Rate limit `account_delete_user`. Rutin `auth.UserSe
       DELETE FROM refresh_tokens WHERE user_id=$uid;
       DELETE FROM password_reset_tokens WHERE user_id=$uid;
    COMMIT
-5. Clear cookie kaiwa_refresh. Log audit account_deletion_requested. 202 {"status":"DELETION_SCHEDULED"}.
+5. Clear cookie kotoki_refresh. Log audit account_deletion_requested. 202 {"status":"DELETION_SCHEDULED"}.
 ```
 
 Sesudahnya: login → `401 INVALID_CREDENTIALS`; endpoint ber-state → `403 ACCOUNT_SUSPENDED`; access token yang masih berlaku (≤ 15 menit) hanya bisa membaca data sampai purge. Purge asinkron (job `account_purge`, Bab 9 §9.9.1; urutan langkah Bab 13 §13.9.3) setelah `deleted_at + ACCOUNT_PURGE_DELAY`, lalu mengisi `purged_at`. Baris `sessions`, `balance_*`, `admin_audit_logs` dipertahankan.
@@ -980,7 +981,7 @@ Nama env kanonik = katalog Bab 13 §13.2 (tabel ini hanya ringkasan; default yan
 | Env | Default |
 |---|---|
 | `AUTH_JWT_SECRET` / `AUTH_JWT_PREVIOUS_SECRET` | (wajib) / `""` |
-| `AUTH_JWT_ISSUER` / `AUTH_JWT_AUDIENCE` | `kaiwa-api` / `kaiwa` |
+| `AUTH_JWT_ISSUER` / `AUTH_JWT_AUDIENCE` | `kotoki-api` / `kotoki` |
 | `AUTH_ACCESS_TOKEN_TTL` | `15m` |
 | `AUTH_REFRESH_TOKEN_TTL` | `720h` |
 | `AUTH_REFRESH_REUSE_GRACE` | `10s` * |
@@ -990,7 +991,7 @@ Nama env kanonik = katalog Bab 13 §13.2 (tabel ini hanya ringkasan; default yan
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` |
 | `WS_TICKET_TTL` | `30s` |
 | `REALTIME_PUBLIC_URL` | `ws://localhost:8081` * |
-| `MAIL_MODE`, `MAIL_FROM`, `SMTP_*` | `log`, `Kaiwa <no-reply@localhost>` |
+| `MAIL_MODE`, `MAIL_FROM`, `SMTP_*` | `log`, `Kotoki <no-reply@localhost>` |
 | `AUTH_ARGON2_*` | §3.4 * |
 | `INITIAL_BALANCE_SECONDS` | `0` (D-031) |
 | `PRIVACY_POLICY_VERSION` | (wajib) |
@@ -1009,8 +1010,8 @@ Nama env kanonik = katalog Bab 13 §13.2 (tabel ini hanya ringkasan; default yan
 - D-NEW-3-2: Password policy: 12–128 code point (NFC), tidak blank, tidak sama dengan email/local-part, tidak ada di daftar 10.000 password umum; tanpa aturan komposisi. Kode error `PASSWORD_TOO_WEAK` + `details.reason`.
 - D-NEW-3-3: Argon2id m=19456 KiB, t=2, p=1, salt 16 B, key 32 B, maksimal 8 hash bersamaan per pod; rehash saat login jika parameter berubah; dummy verify untuk email tidak dikenal.
 - D-NEW-3-4: Refresh token disimpan sebagai SHA-256 (BYTEA); TTL sliding 30 hari per token; tabel bernama `refresh_tokens` dengan `family_id`; grace 10 detik untuk refresh paralel (`409 REFRESH_TOKEN_ROTATED`) sebelum dianggap reuse.
-- D-NEW-3-5: Nama cookie `kaiwa_refresh`; endpoint ber-cookie memeriksa `Origin` terhadap `CORS_ALLOWED_ORIGINS`; frontend & API harus same-site.
-- D-NEW-3-6: JWT claims `iss` (default `kaiwa-api`), `aud` (default `kaiwa`), `sub`, `role`, `fam`, `jti`, `iat`, `nbf`, `exp`; header `kid` = 8 hex pertama SHA-256 secret; rotasi via `AUTH_JWT_SECRET` + `AUTH_JWT_PREVIOUS_SECRET` (Bab 13 §13.2.7); leeway 30 detik.
+- D-NEW-3-5: Nama cookie `kotoki_refresh`; endpoint ber-cookie memeriksa `Origin` terhadap `CORS_ALLOWED_ORIGINS`; frontend & API harus same-site.
+- D-NEW-3-6: JWT claims `iss` (default `kotoki-api`), `aud` (default `kotoki`), `sub`, `role`, `fam`, `jti`, `iat`, `nbf`, `exp`; header `kid` = 8 hex pertama SHA-256 secret; rotasi via `AUTH_JWT_SECRET` + `AUTH_JWT_PREVIOUS_SECRET` (Bab 13 §13.2.7); leeway 30 detik.
 - D-NEW-3-7: Reset token TTL 15 menit; permintaan baru meng-invalidasi token lama; email dikirim async via mail dispatcher in-process; forgot-password selalu `202`.
 - D-NEW-3-8: Mailer adapter `log` (`MAIL_MODE=log`, dilarang di staging/prod), `smtp` (STARTTLS), `fake` (test).
 - D-NEW-3-9: Rate limit memakai policy token bucket Bab 13 §13.4.3 (fail-open ke limiter lokal saat Redis down); bab ini hanya memetakan endpoint → policy (§3.10). `auth_forgot_email` yang ditolak tetap menghasilkan `202` generik.
@@ -1603,7 +1604,7 @@ COMMIT
 
 Untuk `FailActive`, kolom `ended_at` diisi `LEAST($estimated_end, expires_at)` (bukan `$now`; `$estimated_end` = `last_heartbeat_at`, §5.6.4) sehingga `ended_at = billable_end` dan payload outbox (`ended_at`, `active_seconds`) mencerminkan waktu sesi benar-benar berhenti (selaras Bab 9 §9.9.2); untuk `Finalize`, `ended_at = $now` sedangkan `billable_end` diambil dari `ending_at` (D-036), sehingga `ended_at − billable_end` = waktu flush/finalize yang tidak ditagih.
 
-Sesudah commit (di luar tx, best-effort): `PUBLISH kaiwa:session:{sid}:control {"type":"terminated","status":…}` (Bab 5 §5.6.6).
+Sesudah commit (di luar tx, best-effort): `PUBLISH kotoki:session:{sid}:control {"type":"terminated","status":…}` (Bab 5 §5.6.6).
 
 #### 4.6.4 Ringkasan efek akun per transaksi (contoh reserved = 600)
 
@@ -1685,7 +1686,7 @@ Filter opsional `?entry_type=GRANT,CONSUME` (comma-separated, nilai di luar enum
 
 ### 4.8 Rekonsiliasi
 
-Job `balance_reconcile` (flag `cleanup`; interval 1 jam, advisory lock, dan timeout di tabel tunggal Bab 9 §9.9.1), read-only, di replika/primary dengan `statement_timeout = '60s'`. Setiap baris hasil = pelanggaran: log ERROR (`balance.reconcile.mismatch`, dengan nama check dan ID), dan set gauge Prometheus `kaiwa_balance_invariant_violations{check="R1|…|R6"}` (nama metrik Bab 13). Alert jika > 0 (Bab 13). **Tidak ada auto-fix**; koreksi manual via adjustment.
+Job `balance_reconcile` (flag `cleanup`; interval 1 jam, advisory lock, dan timeout di tabel tunggal Bab 9 §9.9.1), read-only, di replika/primary dengan `statement_timeout = '60s'`. Setiap baris hasil = pelanggaran: log ERROR (`balance.reconcile.mismatch`, dengan nama check dan ID), dan set gauge Prometheus `kotoki_balance_invariant_violations{check="R1|…|R6"}` (nama metrik Bab 13). Alert jika > 0 (Bab 13). **Tidak ada auto-fix**; koreksi manual via adjustment.
 
 ```sql
 -- R1: saldo account = jumlah ledger
@@ -2027,7 +2028,7 @@ CREATE INDEX idx_sessions_summary_retention ON sessions (ended_at) WHERE summary
 ```
 
 Catatan:
-- Kolom konfigurasi (`topic_id` … `provider_profile`, `adaptive_difficulty`, `duration_seconds`, `reserved_seconds`, `conversation_start_mode`) immutable setelah INSERT (D-064). Tidak ada query sqlc yang meng-UPDATE kolom tersebut. `opening_prompt_version_id` di-set tepat sekali, di transisi T2 (`RESERVED→STARTING`) untuk sesi `AI_FIRST`: `BeginStart` (satu-satunya pemilih) membaca version `OPENING` yang `PUBLISHED` saat itu (Bab 6 §6.8) di transaksi T2 dan mengembalikannya di session hasil `BeginStart`; runtime memakai nilai itu, tidak meng-query sendiri (S-2) [builder call]. Tidak ada OPENING `PUBLISHED` → **tidak gagal**: transisi T2 tetap terjadi dengan `opening_prompt_version_id = NULL`, `BeginStart` log WARN `session.opening_prompt_missing`; runtime (Bab 7) langsung men-TTS `scenario_versions.opening_line` (teks statis) sebagai turn 0 dan menaikkan metrik `kaiwa_content_opening_fallback_total`. Sesi `USER_FIRST` selalu NULL. Payload event tidak lagi menjadi sumber version OPENING.
+- Kolom konfigurasi (`topic_id` … `provider_profile`, `adaptive_difficulty`, `duration_seconds`, `reserved_seconds`, `conversation_start_mode`) immutable setelah INSERT (D-064). Tidak ada query sqlc yang meng-UPDATE kolom tersebut. `opening_prompt_version_id` di-set tepat sekali, di transisi T2 (`RESERVED→STARTING`) untuk sesi `AI_FIRST`: `BeginStart` (satu-satunya pemilih) membaca version `OPENING` yang `PUBLISHED` saat itu (Bab 6 §6.8) di transaksi T2 dan mengembalikannya di session hasil `BeginStart`; runtime memakai nilai itu, tidak meng-query sendiri (S-2) [builder call]. Tidak ada OPENING `PUBLISHED` → **tidak gagal**: transisi T2 tetap terjadi dengan `opening_prompt_version_id = NULL`, `BeginStart` log WARN `session.opening_prompt_missing`; runtime (Bab 7) langsung men-TTS `scenario_versions.opening_line` (teks statis) sebagai turn 0 dan menaikkan metrik `kotoki_content_opening_fallback_total`. Sesi `USER_FIRST` selalu NULL. Payload event tidak lagi menjadi sumber version OPENING.
 - `handoff_at` (S-10) [builder call]: diisi `MarkHandoff` saat runtime melepas sesi `ACTIVE` karena drain (`DRAIN_RELEASE`, Bab 7 §7.12); di-NULL-kan oleh `ClaimRuntime` berikutnya (attach/takeover). Nilai non-NULL pada sesi `ACTIVE` = tidak ada runtime sejak `handoff_at`: aturan sweeper (b) dan penghitung pengaman massal mengabaikan sesi ini, aturan (e) menutupnya setelah 30 s (§5.6.4), dan `BeginEnding` mengisi `ending_at = COALESCE(handoff_at, $now)` sehingga tagihan berhenti di `handoff_at`. Kolom tidak di-NULL-kan saat terminal (jejak audit).
 - `adaptive_difficulty` dihitung `learner.Service.ComputeAdaptiveDifficulty` (Bab 12 §12.8) sebelum transaksi create (§4.6.1); runtime membacanya lewat `GetForAttach`, learner worker memakainya sebagai `D_eff`.
 - `runtime_fence` hanya diubah oleh `ClaimRuntime` dan oleh transisi `session.Service` yang menutup/mengakhiri sesi (§5.2); semantik milik Bab 7 §7.9.3.
@@ -2233,7 +2234,7 @@ Semua transisi lain (mis. `RESERVED→ACTIVE`, `COMPLETED→*`, `ENDING→ACTIVE
 #### 5.6.2 Start
 
 1. Client membuat sesi (`RESERVED`), minta ticket, connect WS, kirim `session.start` (Bab 7).
-2. Runtime memanggil `ClaimRuntime([RESERVED])` lalu `MarkStarting` (T2; `BeginStart` memilih `opening_prompt_version_id` untuk `AI_FIRST` dan mengembalikannya). Runtime memakai nilai dari session hasil `MarkStarting`: non-NULL → generate opening dengan prompt itu; NULL → TTS `scenario_versions.opening_line` apa adanya sebagai turn 0 + metrik `kaiwa_content_opening_fallback_total` (S-2) [builder call]. Gagal `ErrStartDeadlinePassed` → kirim error WS `SESSION_START_DEADLINE_PASSED`, close.
+2. Runtime memanggil `ClaimRuntime([RESERVED])` lalu `MarkStarting` (T2; `BeginStart` memilih `opening_prompt_version_id` untuk `AI_FIRST` dan mengembalikannya). Runtime memakai nilai dari session hasil `MarkStarting`: non-NULL → generate opening dengan prompt itu; NULL → TTS `scenario_versions.opening_line` apa adanya sebagai turn 0 + metrik `kotoki_content_opening_fallback_total` (S-2) [builder call]. Gagal `ErrStartDeadlinePassed` → kirim error WS `SESSION_START_DEADLINE_PASSED`, close.
 3. Runtime membaca `GetForAttach` (termasuk `adaptive_difficulty` dan `users.audio_consent`) dan membuka provider (STT stream, warm-up LLM/TTS) dengan timeout total 10 detik.
 4. Siap → `Activate` (T3). Gagal/timeout → `FailStart(PROVIDER_FAILURE)` (T4).
 5. Jika client terputus saat `STARTING`, runtime tetap melanjutkan; detik terputus setelah `started_at` dicatat lewat `AddDisconnected` saat client attach atau sesi berakhir (Bab 7 §7.10).
@@ -2247,7 +2248,7 @@ Semua transisi lain (mis. `RESERVED→ACTIVE`, `COMPLETED→*`, `ENDING→ACTIVE
 
 Semantik aturan dimiliki bab ini; mekanik job (flag `sweeper`, interval 10 s, advisory lock, timeout run) hanya di tabel tunggal **Bab 9 §9.9.1**. Setiap sesi diproses dengan panggilan `session.Service` sendiri-sendiri (transaksi terpisah, fence nil, actor `SWEEPER`); error satu sesi di-log dan tidak menghentikan loop. Batas 200 sesi per aturan per tick.
 
-Heartbeat owner (format & TTL milik Bab 7 §7.9.1): key Redis `kaiwa:session:{id}:hb`, nilai epoch milliseconds, ditulis pod pemilik tiap 5 detik (juga saat client terputus), TTL 60 detik. "Heartbeat hilang" = key tidak ada **atau** `now − nilai > 45 s`.
+Heartbeat owner (format & TTL milik Bab 7 §7.9.1): key Redis `kotoki:session:{id}:hb`, nilai epoch milliseconds, ditulis pod pemilik tiap 5 detik (juga saat client terputus), TTL 60 detik. "Heartbeat hilang" = key tidak ada **atau** `now − nilai > 45 s`.
 
 | Aturan | Query kandidat | Aksi |
 |---|---|---|
@@ -2260,10 +2261,10 @@ Heartbeat owner (format & TTL milik Bab 7 §7.9.1): key Redis `kaiwa:session:{id
 Urutan per tick: (e) sebelum (a), sehingga sesi handoff yang juga sudah lewat `expires_at` ditutup (e); bila (a) lebih dulu menyentuhnya, `ending_at` tetap `handoff_at` (T7) sehingga charge identik.
 
 Pengaman aturan (b):
-1. Aturan (b) **dinonaktifkan** selama Redis tidak terjangkau dan sampai Redis terjangkau **terus-menerus ≥ 45 s** setelah pulih (Bab 13 §13.4.4; gauge `kaiwa_sweeper_heartbeat_checks_suspended`). Aturan (a), (c), (d), (e) tetap berjalan (hanya butuh Postgres).
-2. Jika dalam satu tick jumlah kandidat (b) ≥ 20 sesi **dan** ≥ 50 % dari seluruh sesi `ACTIVE` dengan `handoff_at IS NULL` → (b) dilewati pada tick itu, log ERROR `sweeper.mass_heartbeat_loss`, naikkan `kaiwa_sweeper_mass_heartbeat_loss_total` (alert Bab 13). Sesi dengan `handoff_at IS NOT NULL` tidak dihitung di pembilang maupun penyebut (drain massal saat rolling deploy tidak memicu/menekan pengaman ini) (S-10).
+1. Aturan (b) **dinonaktifkan** selama Redis tidak terjangkau dan sampai Redis terjangkau **terus-menerus ≥ 45 s** setelah pulih (Bab 13 §13.4.4; gauge `kotoki_sweeper_heartbeat_checks_suspended`). Aturan (a), (c), (d), (e) tetap berjalan (hanya butuh Postgres).
+2. Jika dalam satu tick jumlah kandidat (b) ≥ 20 sesi **dan** ≥ 50 % dari seluruh sesi `ACTIVE` dengan `handoff_at IS NULL` → (b) dilewati pada tick itu, log ERROR `sweeper.mass_heartbeat_loss`, naikkan `kotoki_sweeper_mass_heartbeat_loss_total` (alert Bab 13). Sesi dengan `handoff_at IS NOT NULL` tidak dihitung di pembilang maupun penyebut (drain massal saat rolling deploy tidak memicu/menekan pengaman ini) (S-10).
 
-Metric: `kaiwa_sweeper_actions_total{rule="a|b|c|d|e",result="ok|noop|error"}`.
+Metric: `kotoki_sweeper_actions_total{rule="a|b|c|d|e",result="ok|noop|error"}`.
 
 #### 5.6.5 Disconnect & reconnect (D-055, D-083, D-084)
 
@@ -2290,7 +2291,7 @@ RETURNING *;          -- 0 baris: status lain → ErrInvalidTransition; fence be
 Setelah commit transisi ke `ENDING` atau status terminal, `session.Service` mem-publish (best-effort, error di-log):
 
 ```text
-PUBLISH kaiwa:session:{session_id}:control
+PUBLISH kotoki:session:{session_id}:control
 {"type":"status_changed","session_id":"…","status":"COMPLETED","end_reason":"USER_ENDED","version":7}
 ```
 
@@ -2582,7 +2583,7 @@ Aturan: handler MUST NOT memanggil `json.NewEncoder`, `w.WriteHeader`, atau menu
   "terms_version": "2026-10-01",
   "audio_consent": true
 }
-// 201 response (+ Set-Cookie: kaiwa_refresh=…)
+// 201 response (+ Set-Cookie: kotoki_refresh=…)
 {
   "access_token": "eyJhbGciOi…",
   "token_type": "Bearer",
@@ -2606,7 +2607,7 @@ Error: `400 VALIDATION_FAILED` (email/full_name/phone/`terms_version` dengan `re
 
 Error: `401 INVALID_CREDENTIALS`, `403 ACCOUNT_SUSPENDED`, `429 RATE_LIMITED`.
 
-**`POST /auth/refresh`** — tanpa body; cookie `kaiwa_refresh`.
+**`POST /auth/refresh`** — tanpa body; cookie `kotoki_refresh`.
 
 ```json
 // 200 response (+ Set-Cookie baru)
@@ -2687,7 +2688,7 @@ Error: `400 VALIDATION_FAILED` (`terms_version` `required`/`not_current`; `audio
 ```json
 // request
 {"password": "correct horse battery"}
-// 202 response (+ Set-Cookie kaiwa_refresh dihapus)
+// 202 response (+ Set-Cookie kotoki_refresh dihapus)
 {"status": "DELETION_SCHEDULED"}
 ```
 
@@ -2795,7 +2796,7 @@ Error: `400 IDEMPOTENCY_KEY_REQUIRED`, `400 IDEMPOTENCY_KEY_INVALID`, `400 VALID
   "session_id": "…",
   "ticket": "Zk3…43 karakter",
   "expires_in": 30,
-  "realtime_url": "wss://rt.kaiwa.example/api/v1/realtime"
+  "realtime_url": "wss://realtime.kotoki.id/api/v1/realtime"
 }
 ```
 
@@ -3162,7 +3163,7 @@ Kode didefinisikan sebagai konstanta di `internal/platform/errs/codes.go` (`type
 - Fencing: ClaimRuntime kedua (takeover) → panggilan runtime lama dengan fence lama mendapat `ErrFenceLost`, tulis turn 0 baris; sweeper menutup sesi → fence naik.
 - Race: `Finalize` paralel dari runtime & sweeper → satu settle, satu outbox; `Cancel` vs `MarkStarting` paralel → tepat satu sukses.
 - Start deadline: `MarkStarting` setelah 5 menit (fake clock) → `ABANDONED`, saldo kembali; Activate setelah 10 s → `FAILED` charge 0.
-- Sweeper (fake clock + Redis testcontainer, key `kaiwa:session:{id}:hb`): aturan (a)–(e) masing-masing, termasuk (c) tidak memproses `ENDING` 59 s dan memproses 61 s; (e) tidak memproses `handoff_at` 29 s dan memproses 31 s dengan `ending_at = handoff_at`, `end_reason = RECONNECT_TIMEOUT`, charge contoh 10 §4.5; sesi `handoff_at IS NOT NULL` tanpa heartbeat tidak pernah kena (b); guard mass-heartbeat-loss (≥ 20 & ≥ 50 % sesi `ACTIVE` non-handoff) tidak memproses (b), dan 30 sesi handoff tidak ikut dihitung; Redis down lalu pulih 30 s → (b) masih nonaktif, 46 s → aktif, (e) tetap berjalan.
+- Sweeper (fake clock + Redis testcontainer, key `kotoki:session:{id}:hb`): aturan (a)–(e) masing-masing, termasuk (c) tidak memproses `ENDING` 59 s dan memproses 61 s; (e) tidak memproses `handoff_at` 29 s dan memproses 31 s dengan `ending_at = handoff_at`, `end_reason = RECONNECT_TIMEOUT`, charge contoh 10 §4.5; sesi `handoff_at IS NOT NULL` tanpa heartbeat tidak pernah kena (b); guard mass-heartbeat-loss (≥ 20 & ≥ 50 % sesi `ACTIVE` non-handoff) tidak memproses (b), dan 30 sesi handoff tidak ikut dihitung; Redis down lalu pulih 30 s → (b) masih nonaktif, 46 s → aktif, (e) tetap berjalan.
 - Disconnect: `AddDisconnected(12)` → `disconnected_seconds = 12`; episode yang melewati `expires_at` 5 s → hanya `n − 5` ditambahkan; fence salah → `ErrFenceLost`.
 - REST contract tests (httptest) untuk setiap endpoint di §5.8.5: kode sukses, bentuk JSON (golden file `testdata/api/*.json`), kode error utama, `404` untuk resource user lain, pagination `next_cursor`, replay `Idempotency-Key`; objek `Session` memakai `scenario.name` & `character.avatar_key` (tanpa `title`/`avatar_url`, S-5); `PATCH /profile` `nickname` 31 karakter → `400`, `null` → terhapus; matriks evaluasi §5.9.6 (409/404/PENDING sintetis untuk `COMPLETED` dan `FAILED`-pernah-aktif); terms usang → `403 TERMS_NOT_ACCEPTED`; `GET /sessions/{id}/turns` → `410` setelah 180 hari (fake clock).
 
@@ -3172,12 +3173,12 @@ Kode didefinisikan sebagai konstanta di `internal/platform/errs/codes.go` (`type
 - D-NEW-5-2: `Idempotency-Key` wajib pada `POST /sessions`, disimpan permanen di `sessions.create_idempotency_key` + `create_request_hash`; replay `200` + `Idempotent-Replayed: true`.
 - D-NEW-5-3: `session_turns.status` NULL = turn sedang berjalan (kini D-075); turn menggantung ditandai `FAILED` saat settle.
 - D-NEW-5-4: Pemetaan end_reason → status terminal (§5.4); `ENDING→FAILED` untuk `PROVIDER_FAILURE`/`SERVER_ERROR`.
-- D-NEW-5-5: Sweeper (kini D-054): (a) expiry +15 s → `DURATION_ELAPSED`/`COMPLETED`; (b) `ACTIVE` dengan `handoff_at IS NULL` dan heartbeat `kaiwa:session:{id}:hb` hilang > 45 s → `FAILED` (`SERVER_ERROR`, `ended_at` = billable end = `last_heartbeat_at` atau `now − 45 s`); (c) `ENDING` > 60 s → Finalize; (d) `STARTING` > 30 s → `FAILED`; (e) `ACTIVE` & `handoff_at < now − 30 s` → `BeginEnding(RECONNECT_TIMEOUT)` + Finalize, `billable_end = handoff_at` (S-10) [builder call]. Pengaman (b): nonaktif saat Redis down + 45 s setelah pulih; skip bila kandidat ≥ 20 & ≥ 50 % sesi `ACTIVE` non-handoff (sesi handoff dikecualikan dari penghitung). Jadwal & lock: Bab 9 §9.9.1.
+- D-NEW-5-5: Sweeper (kini D-054): (a) expiry +15 s → `DURATION_ELAPSED`/`COMPLETED`; (b) `ACTIVE` dengan `handoff_at IS NULL` dan heartbeat `kotoki:session:{id}:hb` hilang > 45 s → `FAILED` (`SERVER_ERROR`, `ended_at` = billable end = `last_heartbeat_at` atau `now − 45 s`); (c) `ENDING` > 60 s → Finalize; (d) `STARTING` > 30 s → `FAILED`; (e) `ACTIVE` & `handoff_at < now − 30 s` → `BeginEnding(RECONNECT_TIMEOUT)` + Finalize, `billable_end = handoff_at` (S-10) [builder call]. Pengaman (b): nonaktif saat Redis down + 45 s setelah pulih; skip bila kandidat ≥ 20 & ≥ 50 % sesi `ACTIVE` non-handoff (sesi handoff dikecualikan dari penghitung). Jadwal & lock: Bab 9 §9.9.1.
 - D-NEW-5-6: Kolom tambahan `sessions`: `adaptive_difficulty` (JSONB NOT NULL, snapshot Bab 12), `opening_prompt_version_id` (dipilih `BeginStart` di T2 untuk `AI_FIRST`; NULL = fallback `opening_line`), `runtime_fence`, `handoff_at` (S-10), `failure_detail`, `transcript_purged_at`, `create_idempotency_key`, `create_request_hash`. `session_turns`: `tts_voice_id`, `error_code`. `session_events` punya `actor`, `from_status`, `to_status`, `turn_id` (UUID tanpa FK, S-6); urutan `(created_at, id)`.
 - D-NEW-5-7: Format error tetap D-013 (§5.8.2): `code`, `message` (Indonesia, untuk user, teks tetap per kode dari `errs.Messages`), `request_id`, `details` (`null` bila tidak ada) — keempatnya selalu ada; satu penulis `httpapi.WriteError`.
 - D-NEW-5-8: Pagination cursor base64url `{"v":1,"k":…}`, `limit` default 20 / max 100; list envelope `{"data","next_cursor"}`; katalog konten Bab 6 memakai `{"items"}` tanpa paginasi.
 - D-NEW-5-9: Endpoint konten memerlukan Bearer auth; path & bentuk milik Bab 6 §6.12.
-- D-NEW-5-10: Control channel Redis pub/sub `kaiwa:session:{id}:control` setelah transisi ke `ENDING`/terminal.
+- D-NEW-5-10: Control channel Redis pub/sub `kotoki:session:{id}:control` setelah transisi ke `ENDING`/terminal.
 - D-NEW-5-11: Tidak ada endpoint REST untuk mengakhiri sesi `ACTIVE`; akhir sesi hanya via WS `session.end`, timer, reconnect timeout, atau sweeper.
 - D-NEW-5-12: `GET /sessions/{id}/evaluation` mengikuti Bab 10 §10.11: belum terminal → `409 SESSION_NOT_ENDED`; tidak pernah `ACTIVE` → `404 EVALUATION_NOT_AVAILABLE`; belum ada hasil → `200 PENDING`.
 - D-NEW-5-13: Endpoint admin tambahan: `PATCH /admin/users/{id}` (status), `GET /admin/sessions/{id}`, `/turns`, `/events`, `/admin/users/{id}/balance/transactions`, `/admin/audit-logs`.
@@ -3188,7 +3189,7 @@ Kode didefinisikan sebagai konstanta di `internal/platform/errs/codes.go` (`type
 - D-NEW-5-18: `session_events.event_type` = 8 event lifecycle `session.Service` + 8 event runtime Bab 7 §7.13 (`OWNER_CHANGED`, `SESSION_DISCONNECTED`, `SESSION_RECONNECTED`, `BARGE_IN`, `TURN_FAILED`, `PROVIDER_FALLBACK`, `PROTOCOL_VIOLATION`, `DIFFICULTY_ADJUSTED`); retensi 365 hari.
 - D-NEW-5-19: Retensi transcript: baris `session_turns` dihapus 180 hari setelah `ended_at`, `summary_text` di-NULL, `transcript_purged_at` diisi; `410 TRANSCRIPT_EXPIRED` juga dihitung dari `ended_at` agar konsisten sebelum job berjalan.
 - D-NEW-5-20: §5.10 adalah katalog error REST lengkap lintas bab; `VALIDATION_ERROR` tidak ada.
-- D-NEW-5-21 (S-2) [builder call]: `BeginStart` satu-satunya pemilih version OPENING `PUBLISHED` → `opening_prompt_version_id`, dikembalikan ke runtime lewat `MarkStarting`. Tidak ada OPENING `PUBLISHED` → T2 tetap sukses dengan NULL (log WARN); runtime men-TTS `scenario_versions.opening_line` sebagai turn 0 + `kaiwa_content_opening_fallback_total`. Jalur `ErrContentMisconfigured` → `RESERVED` → `ABANDONED` untuk kasus ini dihapus.
+- D-NEW-5-21 (S-2) [builder call]: `BeginStart` satu-satunya pemilih version OPENING `PUBLISHED` → `opening_prompt_version_id`, dikembalikan ke runtime lewat `MarkStarting`. Tidak ada OPENING `PUBLISHED` → T2 tetap sukses dengan NULL (log WARN); runtime men-TTS `scenario_versions.opening_line` sebagai turn 0 + `kotoki_content_opening_fallback_total`. Jalur `ErrContentMisconfigured` → `RESERVED` → `ABANDONED` untuk kasus ini dihapus.
 - D-NEW-5-22 (S-3) [builder call]: Billing berhenti saat `ENDING`: `billable_end = LEAST(COALESCE(ending_at, ended_at), expires_at)` (D-036, §4.5); `BeginEnding` mengisi `ending_at = COALESCE(handoff_at, $now)`.
 - D-NEW-5-23 (S-5) [builder call]: Objek `Session`: `scenario.name` (bukan `title`), `character.avatar_key` (bukan `avatar_url`; frontend memetakan); nama topic/scenario dari baris induk, nama/avatar karakter dari `character_versions` snapshot.
 - D-NEW-5-24 (S-6) [builder call]: `session_turns` & `session_events` dipartisi RANGE bulanan pada `created_at` sejak hari pertama; PK `(id, created_at)`; `UNIQUE (session_id, sequence_number, created_at)` + keunikan per sesi dijamin aplikasi; tidak ada FK yang menunjuk ke keduanya; index lokal; migration membuat bulan berjalan + 3; `partition_maintenance` (Bab 9 §9.9.1) membuat & men-drop partisi; cursor event admin `[created_at, id]`.
@@ -3487,7 +3488,7 @@ Version mana yang dipakai dan dicatat:
 | `EVALUATION` | saat evaluation worker memproses | `evaluations.prompt_version_id`; `evaluations.rubric_version` = `prompt_versions.version` key `EVALUATION` (Bab 10) |
 | `MEMORY_EXTRACTION` | saat memory worker memproses | kolom/metadata Bab 11 |
 
-**Fallback OPENING** [builder call, S-2]: tidak adanya version `OPENING` `PUBLISHED` **tidak** menggagalkan create session maupun `BeginStart`. `opening_prompt_version_id = NULL`; runtime langsung men-TTS `scenario_versions.opening_line` (teks statis, ekspresi `neutral`, tanpa panggilan LLM) sebagai turn 0, log WARN (`session_id`, `scenario_version_id`) dan menaikkan counter `kaiwa_content_opening_fallback_total` (tanpa label). Fallback karena generasi opening gagal tetap milik Bab 7 dan tidak menaikkan metrik ini.
+**Fallback OPENING** [builder call, S-2]: tidak adanya version `OPENING` `PUBLISHED` **tidak** menggagalkan create session maupun `BeginStart`. `opening_prompt_version_id = NULL`; runtime langsung men-TTS `scenario_versions.opening_line` (teks statis, ekspresi `neutral`, tanpa panggilan LLM) sebagai turn 0, log WARN (`session_id`, `scenario_version_id`) dan menaikkan counter `kotoki_content_opening_fallback_total` (tanpa label). Fallback karena generasi opening gagal tetap milik Bab 7 dan tidak menaikkan metrik ini.
 
 ### 6.4 DDL
 
@@ -4365,7 +4366,7 @@ input: expr (nama ekspresi setelah filter batas), provider, vpc (voice_provider_
 6. return (provider, vpc.provider_voice_id, model, params, effectiveExpression = e)
 ```
 
-`effectiveExpression` hanya untuk metrik/log (`kaiwa_tts_expression_degraded_total{provider,from,to}`); yang disimpan di `session_turns.expressions` adalah `expr` (§6.3.7).
+`effectiveExpression` hanya untuk metrik/log (`kotoki_tts_expression_degraded_total{provider,from,to}`); yang disimpan di `session_turns.expressions` adalah `expr` (§6.3.7).
 
 #### 6.6.3 Tempo bicara
 
@@ -4684,7 +4685,7 @@ func Resolve(in) (ResolvedConfig, error):
       if vpc == nil || vpc.status != ACTIVE            → 500 CONTENT_MISCONFIGURED
       if hasPrefix(vpc.provider_voice_id, "PLACEHOLDER_") → 500 CONTENT_MISCONFIGURED
       fb := repo.GetVoiceProviderConfig(vp.id, cfg.TTS.FallbackProvider)   // PROVIDER_TTS_FALLBACK, default DEEPGRAM
-      if fb == nil || fb.status != ACTIVE: log WARN + metric kaiwa_content_voice_fallback_missing_total{voice_profile}
+      if fb == nil || fb.status != ACTIVE: log WARN + metric kotoki_content_voice_fallback_missing_total{voice_profile}
                                                        // tidak memblokir
 
   // 6. Prompt
@@ -4701,7 +4702,7 @@ func Resolve(in) (ResolvedConfig, error):
   return ResolvedConfig{topic.id, scn.id, sv.id, ch.id, cv.id, vp.id, stv.id, exv.id, pv.id, profile}
 ```
 
-Urutan pemeriksaan di atas wajib (error pertama yang ditemukan dikembalikan). Setiap `CONTENT_MISCONFIGURED` MUST di-log level ERROR dengan field `entity`, `rule`, dan menaikkan `kaiwa_content_resolve_errors_total{code}`; pesan ke client generik ("Selected configuration is temporarily unavailable"). Karena API publik (§6.12) hanya menampilkan entitas yang lolos pemeriksaan yang sama, `CONTENT_MISCONFIGURED` dalam praktik hanya muncul bila konten berubah setelah client memuat katalog.
+Urutan pemeriksaan di atas wajib (error pertama yang ditemukan dikembalikan). Setiap `CONTENT_MISCONFIGURED` MUST di-log level ERROR dengan field `entity`, `rule`, dan menaikkan `kotoki_content_resolve_errors_total{code}`; pesan ke client generik ("Selected configuration is temporarily unavailable"). Karena API publik (§6.12) hanya menampilkan entitas yang lolos pemeriksaan yang sama, `CONTENT_MISCONFIGURED` dalam praktik hanya muncul bila konten berubah setelah client memuat katalog.
 
 **Cache:** `CatalogService` dan `Resolver` membaca lewat cache in-process per pod, TTL `CONTENT_CACHE_TTL_SECONDS` (default **30**). Mutasi admin menginvalidasi cache pod yang memproses request; pod lain konsisten setelah ≤ TTL. Konsekuensi yang diterima: entitas yang baru di-disable masih bisa dipakai sesi baru hingga 30 detik. `SessionConfigLoader.Load` (by ID, immutable) boleh di-cache tanpa TTL (LRU 1.000 entri) karena baris version tidak pernah berubah — kecuali `VoiceConfigs` yang dibaca langsung tiap kali sesi dimulai.
 
@@ -4766,7 +4767,7 @@ Retire version scenario/character tanpa pengganti **diizinkan**: induk otomatis 
 #### 6.10.3 Validasi otomatis
 
 - Integration test `TestSeedContentIsValid` (testcontainers): jalankan semua migration + semua file `seed/*.sql`, lalu `Validator.ValidateCatalog` MUST mengembalikan nol `ERROR` (dengan `PROVIDER_MODE=fake`). Test ini wajib hijau di CI.
-- Proses `cmd/api` menjalankan `ValidateCatalog` sekali saat startup: hasil `ERROR` di-log level ERROR dan diset ke gauge `kaiwa_content_validation_issues{severity}`; startup **tidak** gagal (konten rusak hanya menyembunyikan entitas terkait dari katalog) [builder call].
+- Proses `cmd/api` menjalankan `ValidateCatalog` sekali saat startup: hasil `ERROR` di-log level ERROR dan diset ke gauge `kotoki_content_validation_issues{severity}`; startup **tidak** gagal (konten rusak hanya menyembunyikan entitas terkait dari katalog) [builder call].
 
 ### 6.11 Paparan dialek & suara learner (voice exposure)
 
@@ -5040,7 +5041,7 @@ Aturan:
   | `0006` | expression_profiles | `000d` | prompt_versions |
   | `0007` | expression_profile_versions | | |
 
-- Target Makefile baru `seed`: `for f in seed/*.sql seed/env/$${KAIWA_ENV:-local}/*.sql; do psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -f $$f; done` (direktori `env/<env>` boleh tidak ada).
+- Target Makefile baru `seed`: `for f in seed/*.sql seed/env/$${KOTOKI_ENV:-local}/*.sql; do psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -f $$f; done` (direktori `env/<env>` boleh tidak ada).
 
 #### 6.13.3 ID suara vendor
 
@@ -5267,7 +5268,7 @@ COMMIT;
 6. Publish konkuren dua version berbeda untuk induk yang sama (2 goroutine) → tepat satu `PUBLISHED` di akhir, tidak ada error 500.
 7. Endpoint publik tidak pernah mengembalikan entitas yang gagal resolver; tes: disable voice default karakter → karakter hilang dari `GET /api/v1/characters`.
 8. Prompt (S-1): DB menolak `llm_params` dengan key di luar `temperature`/`max_output_tokens`/`top_p`/`seed`. Validator (table-driven) menolak: `user_template` NULL untuk `SUMMARY`/`EVALUATION`/`MEMORY_EXTRACTION`; `user_template` atau `output_schema` terisi untuk `CONVERSATION`/`OPENING`; `output_schema` NULL untuk `EVALUATION`/`MEMORY_EXTRACTION`; schema bukan JSON Schema 2020-12 valid; template dengan `{{snake_case}}` atau field tak dikenal (render dry-run gagal pada fixture bab pemilik); key tanpa fixture terdaftar. `TestSeedContentIsValid` memvalidasi kelima version seed. Unit test "nilai DB menang": `llm_params` berisi nilai → nilai itu dipakai; key tidak ada → default kode.
-9. OPENING (S-2): create session `AI_FIRST` tanpa `OPENING` `PUBLISHED` → sukses; `opening_prompt_version_id` NULL; `kaiwa_content_opening_fallback_total` naik saat runtime mengucapkan `opening_line`.
+9. OPENING (S-2): create session `AI_FIRST` tanpa `OPENING` `PUBLISHED` → sukses; `opening_prompt_version_id` NULL; `kotoki_content_opening_fallback_total` naik saat runtime mengucapkan `opening_line`.
 10. Privasi nama (S-4): render `CONVERSATION`/`OPENING` dengan `nickname` NULL → tidak ada kalimat nama/sapaan nama; test yang menangkap semua request ke fake LLM memastikan nilai `users.full_name` fixture tidak pernah muncul di request mana pun (kelima key).
 
 ### Keputusan bab ini
@@ -5284,7 +5285,7 @@ COMMIT;
 - D-NEW-6-10: `provider_voice_id` hanya boleh berubah dari `PLACEHOLDER_…`; seed memakai placeholder untuk ElevenLabs/Deepgram sampai benchmark Bab 8; placeholder ditolak saat mode TTS `real`. Voice ID aktual per turn dicatat di `session_turns.tts_voice_id`.
 - D-NEW-6-11: Katalog ekspresi kanonik 12 nama (9 emosi + `laugh`/`chuckle`/`sigh`) dengan rantai degradasi; nama ekspresi lowercase.
 - D-NEW-6-12: Template prompt (kelima key, system & user) = Go `text/template` dengan `missingkey=error`, sintaks hanya `{{.FieldName}}`; `CONVERSATION`/`OPENING` wajib memuat `{{.CoreRules}}` & `{{.OutputContract}}`; teks instruksi enum (formalitas, dll.) adalah tabel kode.
-- D-NEW-6-13: Version prompt `OPENING` untuk sesi `AI_FIRST` dipilih oleh `session.Service.BeginStart` (Bab 5) dan disimpan di `sessions.opening_prompt_version_id` (nullable, FK `prompt_versions`, DDL Bab 5); runtime memakai nilai dari session hasil `BeginStart`. Tidak ada `OPENING` `PUBLISHED` → NULL + fallback `opening_line`, WARN + `kaiwa_content_opening_fallback_total`; resolver tidak lagi menolak `AI_FIRST` (S-2). `SUMMARY`/`EVALUATION`/`MEMORY_EXTRACTION` dicatat oleh output worker masing-masing.
+- D-NEW-6-13: Version prompt `OPENING` untuk sesi `AI_FIRST` dipilih oleh `session.Service.BeginStart` (Bab 5) dan disimpan di `sessions.opening_prompt_version_id` (nullable, FK `prompt_versions`, DDL Bab 5); runtime memakai nilai dari session hasil `BeginStart`. Tidak ada `OPENING` `PUBLISHED` → NULL + fallback `opening_line`, WARN + `kotoki_content_opening_fallback_total`; resolver tidak lagi menolak `AI_FIRST` (S-2). `SUMMARY`/`EVALUATION`/`MEMORY_EXTRACTION` dicatat oleh output worker masing-masing.
 - D-NEW-6-14: Kode error baru: `TOPIC_NOT_AVAILABLE`, `SCENARIO_NOT_AVAILABLE`, `SCENARIO_TOPIC_MISMATCH`, `CHARACTER_NOT_AVAILABLE`, `CONVERSATION_STYLE_NOT_AVAILABLE`, `EXPRESSION_PROFILE_NOT_AVAILABLE` (422); `CONTENT_MISCONFIGURED` (500); `CONTENT_VALIDATION_FAILED` (422); `CONTENT_INVALID_TRANSITION`, `CONTENT_IN_USE_AS_DEFAULT`, `CONTENT_VERSION_REQUIRED` (409). Objek error boleh memuat `details` (array) opsional.
 - D-NEW-6-15: Authoring = seed SQL untuk entitas induk & konten awal + endpoint admin JSON `/api/v1/admin/content/*` untuk lifecycle version & status induk. Target Makefile baru `seed`.
 - D-NEW-6-16: Cache katalog in-process TTL 30 s (`CONTENT_CACHE_TTL_SECONDS`).
@@ -5320,7 +5321,7 @@ Prinsip yang mengikat seluruh bab:
 
 ```text
 cmd/realtime/main.go                 # wiring manual (D-004): config, pgxpool, redis, provider router, conversation.Manager, wsgateway, HTTP server
-internal/wsgateway/                  # PAKET HANDLER — satu-satunya paket di sisi server (selain adapter vendor provider/* dan kaiwaclient) yang mengimpor github.com/coder/websocket; conversation hanya melihat conversation.Conn
+internal/wsgateway/                  # PAKET HANDLER — satu-satunya paket di sisi server (selain adapter vendor provider/* dan kotokiclient) yang mengimpor github.com/coder/websocket; conversation hanya melihat conversation.Conn
   handler.go                         # GET /api/v1/realtime: origin check, rate limit, drain/kapasitas, upgrade, ticket (§7.3.1 langkah 1–6)
                                      # → conversation.Manager.Attach(ctx, conn, ticket)
   conn.go                            # adapter *websocket.Conn → conversation.Conn (Read/Write/Ping/Close)
@@ -5342,7 +5343,7 @@ internal/conversation/               # PAKET FITUR — runtime realtime (tanpa l
   config_loader.go                   # ConfigLoader: adapter di atas content.SessionConfigLoader + cache LRU per version ID
   ports.go                           # port yang dikonsumsi runtime (§7.13.1): SessionRuntime, TurnRepository,
                                      # SessionEventWriter, RuntimeStore, ConfigLoader, LearnerContextProvider, AudioStore
-  protocol/                          # envelope, tipe pesan, codec JSON, binary frame, error code, close code (dipakai juga kaiwaclient)
+  protocol/                          # envelope, tipe pesan, codec JSON, binary frame, error code, close code (dipakai juga kotokiclient)
   audio/                             # (cgo) opus decode/encode, VAD (wrapper go-webrtcvad + sliding window), framer,
                                      # utterance capture, WAV writer, aset apology
 internal/prompt/                     # tanpa impor paket fitur lain (§2.2 aturan 3)
@@ -5355,7 +5356,7 @@ internal/redisstore/realtime_state.go   # implementasi conversation.RuntimeStore
 internal/redisstore/ws_ticket.go        # ticket WS (GETDEL sekali pakai), dipanggil wsgateway lewat port milik auth
 ```
 
-Aturan dependensi (D-005, §2.2): `internal/conversation` hanya mengimpor paket fitur `session`, `content`, `prompt`, `provider`, `memory`, `learner` serta subpaketnya sendiri (`conversation/audio`, `conversation/protocol`); ia MUST NOT mengimpor `coder/websocket`, `go-redis`, `pgx`, maupun paket adapter. Koneksi WebSocket masuk sebagai interface `conversation.Conn` (adapter di `wsgateway`); state Redis lewat port `conversation.RuntimeStore` (implementasi `redisstore`); transisi sesi lewat `*session.RuntimeService` (Bab 5) dan tulis turn/event lewat port yang diimplementasikan `postgres`. `conversation/protocol` tidak mengimpor `conversation` (dipakai `kaiwaclient`). Semua adapter di-inject dari `cmd/realtime/main.go`.
+Aturan dependensi (D-005, §2.2): `internal/conversation` hanya mengimpor paket fitur `session`, `content`, `prompt`, `provider`, `memory`, `learner` serta subpaketnya sendiri (`conversation/audio`, `conversation/protocol`); ia MUST NOT mengimpor `coder/websocket`, `go-redis`, `pgx`, maupun paket adapter. Koneksi WebSocket masuk sebagai interface `conversation.Conn` (adapter di `wsgateway`); state Redis lewat port `conversation.RuntimeStore` (implementasi `redisstore`); transisi sesi lewat `*session.RuntimeService` (Bab 5) dan tulis turn/event lewat port yang diimplementasikan `postgres`. `conversation/protocol` tidak mengimpor `conversation` (dipakai `kotokiclient`). Semua adapter di-inject dari `cmd/realtime/main.go`.
 
 ### 7.2 Konfigurasi runtime (env, default)
 
@@ -5365,8 +5366,8 @@ Semua angka di bab ini berasal dari tabel berikut (dibaca dengan `caarlos0/env`)
 |---|---|---|
 | `HTTP_ADDR` | `:8081` (realtime) | listen address publik `cmd/realtime` (konvensi Bab 13 §13.2.2) |
 | `REALTIME_POD_ID` | `$HOSTNAME` | identitas pod untuk owner key |
-| `WS_ALLOWED_ORIGINS` | (wajib, list koma) | D-022, mis. `https://app.kaiwa.example` |
-| `WS_ALLOW_EMPTY_ORIGIN` | `false` (dev: `true`) | izinkan tanpa header `Origin` (untuk `kaiwa-cli`) [builder call] |
+| `WS_ALLOWED_ORIGINS` | (wajib, list koma) | D-022, mis. `https://app.kotoki.id` |
+| `WS_ALLOW_EMPTY_ORIGIN` | `false` (dev: `true`) | izinkan tanpa header `Origin` (untuk `kotoki-cli`) [builder call] |
 | `REALTIME_READY_MAX_SESSIONS` | `95` | `/readyz` 503 pada nilai ini (R-22, §7.12.2) |
 | `REALTIME_MAX_SESSIONS` | `100` | D-103, batas `session.start` baru per pod (R-22) |
 | `REALTIME_HARD_MAX_SESSIONS` | `120` | batas absolut termasuk resume; upgrade ditolak HTTP 503 (R-22) [builder call] |
@@ -5411,7 +5412,7 @@ Semua angka di bab ini berasal dari tabel berikut (dibaca dengan `caarlos0/env`)
 
 ### 7.3 Handshake & attach
 
-Endpoint (D-070, D-022): `GET /api/v1/realtime?ticket=<base64url 43 char>` dilayani `cmd/realtime`. Ticket diterbitkan oleh API (`POST /api/v1/sessions/{session_id}/realtime-ticket`, lihat Bab 5) dan disimpan di Redis `kaiwa:ws_ticket:{sha256hex(ticket)}` (§7.9).
+Endpoint (D-070, D-022): `GET /api/v1/realtime?ticket=<base64url 43 char>` dilayani `cmd/realtime`. Ticket diterbitkan oleh API (`POST /api/v1/sessions/{session_id}/realtime-ticket`, lihat Bab 5) dan disimpan di Redis `kotoki:ws_ticket:{sha256hex(ticket)}` (§7.9).
 
 Access log & trace MUST me-redact query `ticket` (ganti `ticket=REDACTED`).
 
@@ -5421,9 +5422,9 @@ Access log & trace MUST me-redact query `ticket` (ganti `ticket=REDACTED`).
 |---|---|---|
 | 1 | Cek header `Origin` ∈ `WS_ALLOWED_ORIGINS` (exact match scheme+host+port). Tanpa `Origin`: hanya jika `WS_ALLOW_EMPTY_ORIGIN=true`. | HTTP `403` tanpa upgrade, body error format D-013 code `ORIGIN_NOT_ALLOWED` |
 | 2 | Rate limit per IP: 30 upgrade/menit (limiter Redis Bab 13 §13.4.3, policy `ws_connect_ip`). | HTTP `429` tanpa upgrade, header `Retry-After`, code `RATE_LIMITED` |
-| 3 | Pod `draining`? atau `activeSessions ≥ REALTIME_HARD_MAX_SESSIONS` (120)? Dicek **sebelum** upgrade dan **sebelum** ticket dikonsumsi (R-22), sehingga ticket tetap berlaku dan client boleh mengulang dengan ticket yang sama selama belum kedaluwarsa. | HTTP `503` tanpa upgrade, body D-013 code `SERVER_DRAINING` / `SERVER_AT_CAPACITY`, header `Retry-After: 1` dan `Set-Cookie: kaiwa_rt=; Max-Age=0; Path=/api/v1/realtime; Secure; HttpOnly` (agar percobaan berikutnya di-hash ulang ke pod lain, Bab 13 §13.10.6) |
-| 4 | Upgrade: `websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: <host dari allowlist>, CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{"kaiwa.v1"}})`; `conn.SetReadLimit(WS_MAX_JSON_BYTES)`. | — |
-| 5 | `GETDEL kaiwa:ws_ticket:{sha256hex(ticket)}` → `{user_id, session_id, issued_at}`. Tidak ada / format salah. | close `4001 TICKET_INVALID` |
+| 3 | Pod `draining`? atau `activeSessions ≥ REALTIME_HARD_MAX_SESSIONS` (120)? Dicek **sebelum** upgrade dan **sebelum** ticket dikonsumsi (R-22), sehingga ticket tetap berlaku dan client boleh mengulang dengan ticket yang sama selama belum kedaluwarsa. | HTTP `503` tanpa upgrade, body D-013 code `SERVER_DRAINING` / `SERVER_AT_CAPACITY`, header `Retry-After: 1` dan `Set-Cookie: kotoki_rt=; Max-Age=0; Path=/api/v1/realtime; Secure; HttpOnly` (agar percobaan berikutnya di-hash ulang ke pod lain, Bab 13 §13.10.6) |
+| 4 | Upgrade: `websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: <host dari allowlist>, CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{"kotoki.v1"}})`; `conn.SetReadLimit(WS_MAX_JSON_BYTES)`. | — |
+| 5 | `GETDEL kotoki:ws_ticket:{sha256hex(ticket)}` → `{user_id, session_id, issued_at}`. Tidak ada / format salah. | close `4001 TICKET_INVALID` |
 | 5b | Redis error. | close `4503 SERVICE_UNAVAILABLE` |
 | 6 | Rate limit per user: 10 attach/menit (Bab 13 §13.4.3, policy `ws_attach_user`). | close `4029 RATE_LIMITED` |
 | 7 | Load `sessions` by `session_id` dari Postgres. Tidak ada. | close `4004 SESSION_NOT_FOUND` |
@@ -5457,7 +5458,7 @@ Satu sesi hanya boleh punya **satu koneksi aktif**. Koneksi baru yang valid untu
 
 - **Text frame** = satu JSON object UTF-8 (envelope §7.4.2). Maks 16 KiB.
 - **Binary frame** = audio (§7.4.7). Maks 4 KiB.
-- Subprotocol `kaiwa.v1` di-echo jika client menawarkannya; versi otoritatif tetap field `version` envelope.
+- Subprotocol `kotoki.v1` di-echo jika client menawarkannya; versi otoritatif tetap field `version` envelope.
 
 #### 7.4.2 Envelope
 
@@ -5991,7 +5992,7 @@ Definisi istilah:
 | 20 | semua | `SESSION_END` / `EXPIRY` / `FATAL` | – | §7.11 | – |
 
 `consecutiveFailedTurns` naik setiap turn `FAILED`, reset ke 0 setiap turn `COMPLETED`/`INTERRUPTED`. Mencapai `MAX_CONSECUTIVE_FAILED_TURNS` (3) → akhiri sesi `PROVIDER_FAILURE` (§7.11.4). Pengecualian [builder call]:
-- Turn `FAILED` karena `CONTENT_FILTERED` (S-9; `DONE{CONTENT_FILTERED}` atau `ERROR` kind `CONTENT_FILTERED`) **tidak** mengubah `consecutiveFailedTurns` (tidak naik, tidak reset); hanya `contentFilteredTurns++` dan metrik `kaiwa_llm_content_filtered_total`. Tidak memengaruhi charge.
+- Turn `FAILED` karena `CONTENT_FILTERED` (S-9; `DONE{CONTENT_FILTERED}` atau `ERROR` kind `CONTENT_FILTERED`) **tidak** mengubah `consecutiveFailedTurns` (tidak naik, tidak reset); hanya `contentFilteredTurns++` dan metrik `kotoki_llm_content_filtered_total`. Tidak memengaruhi charge.
 - Generation yang diakhiri router dengan `DONE{TRUNCATED}` (S-7) menghasilkan turn `COMPLETED` biasa (counter reset), bukan kegagalan.
 
 #### 7.6.2 Detector turn (D-076, D-077)
@@ -6144,7 +6145,7 @@ Utterance yang hanya filler (mis. `えっと`) **tidak** di-discard; ambang 2000
 
 Opening memakai prompt version `OPENING` yang tersnapshot di `sessions.opening_prompt_version_id` (R-4; dipilih `BeginStart` Bab 5, S-2) dengan konteks yang sama (character, scenario, learner, adaptive difficulty, memory). Takeover sesi `AI_FIRST` memakai nilai kolom yang sama dari `GetForAttach`/`ClaimRuntime` (tidak pernah lookup `PUBLISHED`). ID ini tidak dicatat di payload `session_events`. Selama opening berlaku barge-in normal (baris 13) dan baris 9b. Selesai → baris 15 → `LISTENING`.
 
-**Fallback opening statis (S-2)** [builder call]: bila sesi `AI_FIRST` punya `opening_prompt_version_id = NULL` (tidak ada `OPENING` `PUBLISHED` saat `BeginStart`), sesi **tidak** gagal. Generation `OPENING` dibuat tanpa LLM: `scenario_versions.opening_line` dimasukkan ke `SentenceParser` (`Feed` + `Close`, tanpa batas `MaxSentences`), setiap kalimat di-TTS lewat `g.pg.Synthesize` dengan ekspresi `neutral`, dan sisanya identik dengan opening biasa (turn 0, `ai.sentence`, barge-in, `assistant_text = opening_line`, `llm_provider`/`llm_model` NULL, token 0). Runtime log WARN (`session_id`, `scenario_version_id`) dan menaikkan `kaiwa_content_opening_fallback_total` (nama milik Bab 6 §6.8). Kegagalan generation opening (LLM/TTS setelah fallback) tetap mengikuti baris 12 (turn 0 `FAILED`, `LISTENING`; `opening_line` tidak diputar ulang) dan tidak menaikkan metrik itu.
+**Fallback opening statis (S-2)** [builder call]: bila sesi `AI_FIRST` punya `opening_prompt_version_id = NULL` (tidak ada `OPENING` `PUBLISHED` saat `BeginStart`), sesi **tidak** gagal. Generation `OPENING` dibuat tanpa LLM: `scenario_versions.opening_line` dimasukkan ke `SentenceParser` (`Feed` + `Close`, tanpa batas `MaxSentences`), setiap kalimat di-TTS lewat `g.pg.Synthesize` dengan ekspresi `neutral`, dan sisanya identik dengan opening biasa (turn 0, `ai.sentence`, barge-in, `assistant_text = opening_line`, `llm_provider`/`llm_model` NULL, token 0). Runtime log WARN (`session_id`, `scenario_version_id`) dan menaikkan `kotoki_content_opening_fallback_total` (nama milik Bab 6 §6.8). Kegagalan generation opening (LLM/TTS setelah fallback) tetap mengikuti baris 12 (turn 0 `FAILED`, `LISTENING`; `opening_line` tidak diputar ulang) dan tidak menaikkan metrik itu.
 
 Runtime juga menyalin `sessions.adaptive_difficulty` (R-3, Bab 12 §12.8; immutable di DB) ke `r.adaptive` saat langkah 4a; nilai in-memory ini yang dipakai §7.7.3 (batas kalimat) dan §7.8 (prompt, speaking rate), dan hanya berubah lewat penyesuaian in-session §7.8.6.
 
@@ -6388,7 +6389,7 @@ Setelah turn `COMPLETED`/`INTERRUPTED`:
 1b. Hanya setelah turn `COMPLETED`: penyesuaian adaptive in-session (§7.8.6, Bab 12 §12.8.5) — sinkron di loop (fungsi murni, < 1 ms), berlaku mulai generation berikutnya.
 2. Rolling summary check (§7.8.5).
 3. Refresh memory episodik (D-098, S-15) lewat port Bab 11 `memory.RetrievalService.RefreshEpisodic(ctx 1,5 s, userID, sessionID, recent)` di goroutine, dengan `recent` = ≤ 3 turn terakhir berstatus `COMPLETED`/`INTERRUPTED` (`TurnText{UserText, AssistantSpokenText}`); dilewati bila memory dimatikan, `user_text` turn ini < 6 rune, atau refresh lain masih berjalan (maks 1 in-flight per sesi). Hasil dikirim ke loop (`r.memctx.Episodic`) dan dipakai mulai generation **berikutnya**; gagal/`Degraded` → tetap pakai hasil lama. Penulisan Redis `memctx` dilakukan implementasi Bab 11.
-4. Cek invalidasi memory core (S-15): di goroutine yang sama, `memory.RetrievalService.ReloadCoreIfChanged(ctx 1,5 s, &copy)` atas salinan `r.memctx` (implementasi membaca `kaiwa:user:{id}:memver`); `changed=true` → salinan dikirim ke loop dan menggantikan `r.memctx.Core` mulai generation berikutnya. Dijalankan di tugas pasca-turn (bukan tepat sebelum generation seperti sketsa Bab 11 §11.7.5) agar jalur turn tanpa I/O; efeknya sama: memory yang dihapus user hilang paling lambat di generation berikutnya [builder call].
+4. Cek invalidasi memory core (S-15): di goroutine yang sama, `memory.RetrievalService.ReloadCoreIfChanged(ctx 1,5 s, &copy)` atas salinan `r.memctx` (implementasi membaca `kotoki:user:{id}:memver`); `changed=true` → salinan dikirim ke loop dan menggantikan `r.memctx.Core` mulai generation berikutnya. Dijalankan di tugas pasca-turn (bukan tepat sebelum generation seperti sketsa Bab 11 §11.7.5) agar jalur turn tanpa I/O; efeknya sama: memory yang dihapus user hilang paling lambat di generation berikutnya [builder call].
 
 #### 7.7.6 Fallback & kegagalan provider (D-042, D-080)
 
@@ -6402,7 +6403,7 @@ Setelah turn `COMPLETED`/`INTERRUPTED`:
 | LLM atau TTS error setelah first audio | `GENERATION_FAILED` (baris 16) → APOLOGY |
 | LLM total 15 s atau deadline sesi (`expires_at + PROVIDER_SESSION_GRACE`) tercapai **sebelum** audio terkirim | router: `TIMEOUT` → fallback / `ERROR` seperti baris LLM di atas |
 | LLM total 15 s atau deadline sesi tercapai **setelah** audio terkirim (S-7) | router mengakhiri stream dengan `DONE{TRUNCATED}` (bukan `ERROR`); kalimat yang sudah diparse tetap diucapkan; turn `COMPLETED` dengan `assistant_text` terpotong; **tidak** dihitung ke `MAX_CONSECUTIVE_FAILED_TURNS`; metrik `llm_truncated_total` |
-| `CONTENT_FILTERED` (`DONE{CONTENT_FILTERED}` atau `ERROR` kind `CONTENT_FILTERED`, S-9) | tidak ada fallback (Bab 8 §8.3); `GENERATION_FAILED` → turn `FAILED` + APOLOGY (baris 11/16); **tidak** dihitung ke batas 3 turn gagal berturut-turut (counter terpisah, metrik `kaiwa_llm_content_filtered_total`); charge tidak terpengaruh |
+| `CONTENT_FILTERED` (`DONE{CONTENT_FILTERED}` atau `ERROR` kind `CONTENT_FILTERED`, S-9) | tidak ada fallback (Bab 8 §8.3); `GENERATION_FAILED` → turn `FAILED` + APOLOGY (baris 11/16); **tidak** dihitung ke batas 3 turn gagal berturut-turut (counter terpisah, metrik `kotoki_llm_content_filtered_total`); charge tidak terpengaruh |
 
 **APOLOGY:** aset `internal/conversation/audio/assets/apology_ja.opus` (di-`go:embed`; format: berulang `[uint16 BE len][opus packet 20 ms]`), teks `すみません、うまく聞き取れませんでした。もう一度お願いします。`, ekspresi `neutral`. Dibuat sekali oleh `make assets-apology` memakai TTS primary dengan suara netral default [builder call]. Diputar sebagai generation `kind=APOLOGY` (punya `ai.generation_started`, `ai.sentence`, `ai.audio_*`).
 
@@ -6461,7 +6462,7 @@ Bentuk pesan LLM (`BuiltPrompt.Messages`):
 | Config snapshot (ID version dari `sessions`, D-064) | start / takeover | memori runtime; cache LRU per pod by version ID (immutable) |
 | Learner prompt context (`prompt.LearnerContext`, Bab 12 §12.8.4) | start / takeover, sekali; `Adaptation` dirender ulang (fungsi descriptor Bab 12) setelah penyesuaian in-session §7.8.6 | memori runtime |
 | Adaptive difficulty (`sessions.adaptive_difficulty`, R-3) | start / takeover (bersama baris sesi); takeover menimpa dengan field Redis `rt.adaptive` bila ada | memori `r.adaptive` + Redis `rt.adaptive` (§7.8.6) |
-| `memory.MemoryContext` awal (Bab 11 §11.7.3) | start: `memory.RetrievalService.BuildSessionContext`; takeover: baca Redis `kaiwa:session:{id}:memctx` (JSON `MemoryContext`, ditulis implementasi Bab 11), tidak ada/rusak → `BuildSessionContext` | memori runtime (`r.memctx`) |
+| `memory.MemoryContext` awal (Bab 11 §11.7.3) | start: `memory.RetrievalService.BuildSessionContext`; takeover: baca Redis `kotoki:session:{id}:memctx` (JSON `MemoryContext`, ditulis implementasi Bab 11), tidak ada/rusak → `BuildSessionContext` | memori runtime (`r.memctx`) |
 | Memory episodik refresh | async setelah turn (`memory.RetrievalService.RefreshEpisodic`, §7.7.5) | memori runtime |
 | Memory core reload (`memver` berubah) | async setelah turn (`memory.RetrievalService.ReloadCoreIfChanged`, §7.7.5) | memori runtime |
 | Rolling summary | async (§7.8.5) | memori + Redis `summary` |
@@ -6575,7 +6576,7 @@ type PromptBuilder interface {
   AIが約束したこと/質問中のこと。含めないこと: 文法の訂正、評価、推測。箇条書き不可。
   user: これまでの要約:\n{previous}\n\n新しい会話:\n{turns as "ユーザー: …\nAI: …"}
   ```
-- **Hasil:** loop menerima `SummaryReady{text, coveredUntilSeq}`; jika `coveredUntilSeq` > nilai sekarang → simpan di memori + `HSET kaiwa:session:{id}:summary`. Gagal/timeout → coba lagi setelah turn berikutnya (maks 3 gagal berturut; lalu berhenti untuk sesi itu, window tetap diperluas ≤ 12).
+- **Hasil:** loop menerima `SummaryReady{text, coveredUntilSeq}`; jika `coveredUntilSeq` > nilai sekarang → simpan di memori + `HSET kotoki:session:{id}:summary`. Gagal/timeout → coba lagi setelah turn berikutnya (maks 3 gagal berturut; lalu berhenti untuk sesi itu, window tetap diperluas ≤ 12).
 - Summary in-session **tidak** sama dengan `sessions.summary_text` (diisi summary worker pasca-sesi, Bab 9).
 
 #### 7.8.6 Penyesuaian adaptive difficulty in-session (R-17, Bab 12 §12.8.5)
@@ -6601,7 +6602,7 @@ func MaybeAdjust(s AdaptiveState, recentUserTexts []string) (AdaptiveState, bool
 
 Efek bila `true`:
 1. `r.adaptive = s.Current` — berlaku mulai generation **berikutnya** (block `<conversation_difficulty>` dirender ulang, `SpeakingRate` dan `MaxSentences` baru). Generation yang sedang berjalan tidak diubah.
-2. `redisSync`: `HSET kaiwa:session:{id}:rt adaptive <JSON AdaptiveDifficulty> turns_since_adjust <n>` (coalesce seperti field `rt` lain). Takeover memakai nilai ini; bila Redis tidak punya field → snapshot DB (penyesuaian hilang, diterima).
+2. `redisSync`: `HSET kotoki:session:{id}:rt adaptive <JSON AdaptiveDifficulty> turns_since_adjust <n>` (coalesce seperti field `rt` lain). Takeover memakai nilai ini; bila Redis tidak punya field → snapshot DB (penyesuaian hilang, diterima).
 3. `persister`: `session_events` `DIFFICULTY_ADJUSTED` payload `{"turn_seq":n,"in_session_adjustments":k,"speech_speed":v,"question_complexity":v,"scaffolding":v}` (tanpa teks transcript).
 4. Metrik `difficulty_adjustments_total`.
 
@@ -6609,7 +6610,7 @@ Efek bila `true`:
 
 ### 7.9 State Redis realtime
 
-Namespace `kaiwa:`. ID dalam key selalu UUID kanonik (lowercase, dengan tanda hubung) yang sudah divalidasi; tidak ada string bebas dari user di key. Redis berisi potongan transcript (turn hash, replay stream) paling lama umur sesi + 5 menit.
+Namespace `kotoki:`. ID dalam key selalu UUID kanonik (lowercase, dengan tanda hubung) yang sudah divalidasi; tidak ada string bebas dari user di key. Redis berisi potongan transcript (turn hash, replay stream) paling lama umur sesi + 5 menit.
 
 #### 7.9.1 Daftar key
 
@@ -6617,16 +6618,16 @@ Namespace `kaiwa:`. ID dalam key selalu UUID kanonik (lowercase, dengan tanda hu
 
 | Key | Tipe | Isi | TTL | Penulis | Pembaca |
 |---|---|---|---|---|---|
-| `kaiwa:ws_ticket:{sha256hex(ticket)}` | STRING | JSON `{"user_id":"…","session_id":"…","issued_at":"RFC3339"}` | 30 s | API (`SET … EX 30 NX`, Bab 5) | realtime (`GETDEL`, sekali pakai) |
-| `kaiwa:session:{id}:owner` | STRING | `"{pod_id}\|{fence}"` | 15 s, refresh tiap 5 s | pod pemilik (Lua §7.9.2) | pod takeover, ops |
-| `kaiwa:session:{id}:hb` | STRING | epoch ms terakhir runtime hidup | 60 s, tulis tiap 5 s | pod pemilik (juga saat client terputus) | sweeper (Bab 9, ambang 45 s), pod takeover |
-| `kaiwa:session:{id}:rt` | HASH | `status`, `turn_state`, `accepting_turns` (0/1), `conn_id`, `connected` (0/1), `disconnected_at` (epoch ms atau kosong), `generation`, `next_turn_seq`, `current_turn_id`, `last_server_seq`, `last_durable_seq`, `expires_at` (epoch ms), `pod_id`, `fence`, `adaptive` (JSON `AdaptiveDifficulty` runtime, §7.8.6), `turns_since_adjust`, `stt_vendor` (`PRIMARY`/`FALLBACK`: peran vendor STT aktif, sticky; S-13), `updated_at` | `TTL_S` | pod pemilik (`redisSync`, coalesce ≤ 1 tulis / 100 ms, `HSET` seluruh field) | pod takeover, ops |
-| `kaiwa:session:{id}:turn` | HASH | turn berjalan: `turn_id`, `turn_seq`, `initiator`, `turn_state`, `generation`, `user_started_at`, `user_text` (TurnText saat ini), `assistant_text`, `spoken_sentences`, `expressions` (JSON array), `updated_at` | `TTL_S`; `DEL` saat turn final | pod pemilik (coalesce 250 ms) | pod takeover (mengisi turn `FAILED`) |
-| `kaiwa:session:{id}:events` | STREAM | entry: `seq`, `prev_seq` (server_seq event durable sebelumnya, 0 jika tidak ada), `type`, `env` (envelope JSON lengkap) | `XADD … MAXLEN ~ 500`; `EXPIRE 120` setiap XADD (D-083) | pod pemilik (event durable saja) | pod yang memproses resume |
-| `kaiwa:session:{id}:summary` | HASH | `text`, `covered_until_seq`, `model`, `updated_at` | `TTL_S` | pod pemilik (summarizer) | pod takeover |
-| `kaiwa:realtime:pod:{pod_id}` | Pub/Sub channel | JSON `{"type":"TAKEOVER","session_id":"…","fence":42}` | – | pod takeover (`PUBLISH`) | pod `{pod_id}` (`SUBSCRIBE` saat boot) |
-| `kaiwa:realtime:podinfo:{pod_id}` | HASH | `active_sessions`, `draining` (0/1), `started_at`, `build` | 15 s, refresh 5 s | pod | ops/dashboard |
-| `kaiwa:ratelimit:ws_connect_ip:{ip}`, `kaiwa:ratelimit:ws_attach_user:{user_id}` | HASH (token bucket Bab 13 §13.4.3) | | Bab 13 | handler WS | handler WS |
+| `kotoki:ws_ticket:{sha256hex(ticket)}` | STRING | JSON `{"user_id":"…","session_id":"…","issued_at":"RFC3339"}` | 30 s | API (`SET … EX 30 NX`, Bab 5) | realtime (`GETDEL`, sekali pakai) |
+| `kotoki:session:{id}:owner` | STRING | `"{pod_id}\|{fence}"` | 15 s, refresh tiap 5 s | pod pemilik (Lua §7.9.2) | pod takeover, ops |
+| `kotoki:session:{id}:hb` | STRING | epoch ms terakhir runtime hidup | 60 s, tulis tiap 5 s | pod pemilik (juga saat client terputus) | sweeper (Bab 9, ambang 45 s), pod takeover |
+| `kotoki:session:{id}:rt` | HASH | `status`, `turn_state`, `accepting_turns` (0/1), `conn_id`, `connected` (0/1), `disconnected_at` (epoch ms atau kosong), `generation`, `next_turn_seq`, `current_turn_id`, `last_server_seq`, `last_durable_seq`, `expires_at` (epoch ms), `pod_id`, `fence`, `adaptive` (JSON `AdaptiveDifficulty` runtime, §7.8.6), `turns_since_adjust`, `stt_vendor` (`PRIMARY`/`FALLBACK`: peran vendor STT aktif, sticky; S-13), `updated_at` | `TTL_S` | pod pemilik (`redisSync`, coalesce ≤ 1 tulis / 100 ms, `HSET` seluruh field) | pod takeover, ops |
+| `kotoki:session:{id}:turn` | HASH | turn berjalan: `turn_id`, `turn_seq`, `initiator`, `turn_state`, `generation`, `user_started_at`, `user_text` (TurnText saat ini), `assistant_text`, `spoken_sentences`, `expressions` (JSON array), `updated_at` | `TTL_S`; `DEL` saat turn final | pod pemilik (coalesce 250 ms) | pod takeover (mengisi turn `FAILED`) |
+| `kotoki:session:{id}:events` | STREAM | entry: `seq`, `prev_seq` (server_seq event durable sebelumnya, 0 jika tidak ada), `type`, `env` (envelope JSON lengkap) | `XADD … MAXLEN ~ 500`; `EXPIRE 120` setiap XADD (D-083) | pod pemilik (event durable saja) | pod yang memproses resume |
+| `kotoki:session:{id}:summary` | HASH | `text`, `covered_until_seq`, `model`, `updated_at` | `TTL_S` | pod pemilik (summarizer) | pod takeover |
+| `kotoki:realtime:pod:{pod_id}` | Pub/Sub channel | JSON `{"type":"TAKEOVER","session_id":"…","fence":42}` | – | pod takeover (`PUBLISH`) | pod `{pod_id}` (`SUBSCRIBE` saat boot) |
+| `kotoki:realtime:podinfo:{pod_id}` | HASH | `active_sessions`, `draining` (0/1), `started_at`, `build` | 15 s, refresh 5 s | pod | ops/dashboard |
+| `kotoki:ratelimit:ws_connect_ip:{ip}`, `kotoki:ratelimit:ws_attach_user:{user_id}` | HASH (token bucket Bab 13 §13.4.3) | | Bab 13 | handler WS | handler WS |
 
 Tidak ada key Redis untuk balance (D-032: hanya Postgres).
 
@@ -6635,7 +6636,7 @@ Tidak ada key Redis untuk balance (D-032: hanya Postgres).
 Acquire / refresh / takeover (satu skrip; `fence` selalu berasal dari Postgres sehingga monotonic):
 
 ```lua
--- KEYS[1] = kaiwa:session:{id}:owner ; ARGV[1] = pod_id ; ARGV[2] = fence ; ARGV[3] = ttl_ms
+-- KEYS[1] = kotoki:session:{id}:owner ; ARGV[1] = pod_id ; ARGV[2] = fence ; ARGV[3] = ttl_ms
 local cur = redis.call('GET', KEYS[1])
 if cur then
   local f = tonumber(string.match(cur, '|(%d+)$'))
@@ -6687,7 +6688,7 @@ Keputusan: **sesi yang sedang berjalan tetap berjalan di memori pod sampai seles
 | Pub/Sub putus | resubscribe dengan backoff 1 s; keamanan takeover tetap dijamin fence Postgres |
 | Timer expiry, settlement, persist turn | tidak terpengaruh (in-memory + Postgres) |
 
-Interaksi dengan sweeper: aturan sweeper (semantik Bab 5 §5.6, mekanik job Bab 9 §9.9) dan pengamannya terhadap kehilangan heartbeat (aturan (b) dinonaktifkan selama Redis tak terjangkau dan sampai Redis terjangkau terus-menerus ≥ 45 s; skip massal ≥ 20 sesi **dan** ≥ 50 % sesi `ACTIVE`) didefinisikan di R-9 dan Bab 13 §13.4.4 — bab ini tidak menambah aturan lain. Kewajiban runtime: menulis `kaiwa:session:{id}:hb` tiap `HEARTBEAT_INTERVAL` (5 s, TTL 60 s) selama runtime memegang sesi (termasuk saat client terputus), dan menulis ulang segera setelah Redis pulih (`redisSync`, tabel di atas). Transisi sweeper lewat `session.Service` membuat tulis ber-fence runtime yang masih hidup gagal (status sesi tidak lagi `STARTING/ACTIVE/ENDING` → `ErrFenceLost`, §7.9.3), sehingga runtime itu berhenti.
+Interaksi dengan sweeper: aturan sweeper (semantik Bab 5 §5.6, mekanik job Bab 9 §9.9) dan pengamannya terhadap kehilangan heartbeat (aturan (b) dinonaktifkan selama Redis tak terjangkau dan sampai Redis terjangkau terus-menerus ≥ 45 s; skip massal ≥ 20 sesi **dan** ≥ 50 % sesi `ACTIVE`) didefinisikan di R-9 dan Bab 13 §13.4.4 — bab ini tidak menambah aturan lain. Kewajiban runtime: menulis `kotoki:session:{id}:hb` tiap `HEARTBEAT_INTERVAL` (5 s, TTL 60 s) selama runtime memegang sesi (termasuk saat client terputus), dan menulis ulang segera setelah Redis pulih (`redisSync`, tabel di atas). Transisi sweeper lewat `session.Service` membuat tulis ber-fence runtime yang masih hidup gagal (status sesi tidak lagi `STARTING/ACTIVE/ENDING` → `ErrFenceLost`, §7.9.3), sehingga runtime itu berhenti.
 
 ### 7.10 Reconnect & resume (D-083, D-084)
 
@@ -6729,7 +6730,7 @@ persister: session_events SESSION_DISCONNECTED{at: disconnectedFrom}
 ```text
 1. Handshake valid, status ACTIVE (Postgres), command session.resume
 2. fence := ClaimRuntime(sessionID, [ACTIVE])           // 0 rows → close 4010
-3. Lua owner SET (pod|fence); PUBLISH kaiwa:realtime:pod:{pemilik lama} TAKEOVER{session_id, fence}
+3. Lua owner SET (pod|fence); PUBLISH kotoki:realtime:pod:{pemilik lama} TAKEOVER{session_id, fence}
 4. Baca rt, turn, summary, ujung stream (XREVRANGE COUNT 1) dari Redis (gagal → §7.9.4)
 5. disconnectedFrom = rt.disconnected_at ?: hb ?: rt.updated_at ?: now
    if now − disconnectedFrom > RECONNECT_WINDOW:
@@ -6878,7 +6879,7 @@ Client menerima 4100 → ambil ticket baru → reconnect segera → takeover di 
 
 Angka kanonik (R-22); Bab 13 §13.10 menyelaraskan autoscaling (KEDA target 70 sesi/pod, min 3, max 20) dengan angka ini.
 
-- `activeSessions` = jumlah runtime yang dimiliki pod (semua state: starting, active, detached, ending) = metrik `kaiwa_realtime_sessions_active` (dijumlah lintas label `state`).
+- `activeSessions` = jumlah runtime yang dimiliki pod (semua state: starting, active, detached, ending) = metrik `kotoki_realtime_sessions_active` (dijumlah lintas label `state`).
 - `activeSessions ≥ REALTIME_READY_MAX_SESSIONS (95)` → `/readyz` 503 (LB berhenti mengirim koneksi baru; koneksi lama tidak terpengaruh).
 - `activeSessions ≥ REALTIME_MAX_SESSIONS (100)` → `session.start` untuk sesi baru ditolak `4503 SERVER_AT_CAPACITY` (sesi tetap `RESERVED`).
 - Resume/takeover diterima sampai `REALTIME_HARD_MAX_SESSIONS (120)`; pada ≥ 120 (atau draining) upgrade ditolak HTTP 503 **sebelum** ticket dikonsumsi (§7.3.1 langkah 3).
@@ -6975,7 +6976,7 @@ type LearnerContextProvider interface { // Bab 12; implementasi: paket learner
 //   BuildSessionContext(ctx, memory.SessionContextInput) (memory.MemoryContext, error)          // start / takeover tanpa memctx
 //   RefreshEpisodic(ctx, userID, sessionID uuid.UUID, recent []memory.TurnText) ([]memory.ContextItem, error) // pasca-turn
 //   ReloadCoreIfChanged(ctx, mc *memory.MemoryContext) (changed bool, err error)                 // pasca-turn (memver)
-// Redis kaiwa:session:{id}:memctx & kaiwa:user:{id}:memver milik Bab 11; runtime hanya MEMBACA memctx saat takeover (via RuntimeStore).
+// Redis kotoki:session:{id}:memctx & kotoki:user:{id}:memver milik Bab 11; runtime hanya MEMBACA memctx saat takeover (via RuntimeStore).
 
 type AudioStore interface { // Bab 13; implementasi: objectstore (put-only)
     PutTempWAV(ctx context.Context, key string, pcm16k []int16) error
@@ -7062,7 +7063,7 @@ Runtime tidak mengetahui vendor; identifier provider (uppercase, R-6), model, da
 
 ### 7.14 Metrik & trace wajib
 
-Tabel ini **kanonik** untuk metrik realtime; dashboard, alert, KEDA, dan kriteria load test Bab 13 memakai nama di sini. Nama lengkap = prefix `kaiwa_realtime_` + nama di kolom pertama. Label **tidak boleh** berisi `session_id`/`user_id`. Konvensi Bab 13 §13.7.3: histogram latensi dalam **detik**, bucket `TURN_BUCKETS` (latensi turn/provider) atau `BARGE_BUCKETS` (barge-in, exit goroutine) Bab 13. Nilai label `provider` uppercase (R-6, mis. `ELEVENLABS`, `FAKE_PRIMARY`); `provider_profile` = `PREMIUM`/`STANDARD`.
+Tabel ini **kanonik** untuk metrik realtime; dashboard, alert, KEDA, dan kriteria load test Bab 13 memakai nama di sini. Nama lengkap = prefix `kotoki_realtime_` + nama di kolom pertama. Label **tidak boleh** berisi `session_id`/`user_id`. Konvensi Bab 13 §13.7.3: histogram latensi dalam **detik**, bucket `TURN_BUCKETS` (latensi turn/provider) atau `BARGE_BUCKETS` (barge-in, exit goroutine) Bab 13. Nilai label `provider` uppercase (R-6, mis. `ELEVENLABS`, `FAKE_PRIMARY`); `provider_profile` = `PREMIUM`/`STANDARD`.
 
 | Metrik | Tipe | Label | Definisi |
 |---|---|---|---|
@@ -7088,7 +7089,7 @@ Tabel ini **kanonik** untuk metrik realtime; dashboard, alert, KEDA, dan kriteri
 | `llm_truncated_total` | counter | `provider_profile` | stream LLM diakhiri router dengan `DONE{TRUNCATED}` setelah audio terkirim (S-7) |
 | `stt_discarded_commits_total` | counter | `boundary` (`ai_speaking`,`listening`) | FINAL commit `DISCARD` yang dibuang (S-8); teks tidak dicatat |
 | `difficulty_adjustments_total` | counter | – | penyesuaian in-session §7.8.6 |
-| `provider_fallback_total` | counter | `capability` (`STT`,`LLM`,`TTS`), `from`, `to` | (pelengkap `kaiwa_provider_fallback_total` Bab 8) |
+| `provider_fallback_total` | counter | `capability` (`STT`,`LLM`,`TTS`), `from`, `to` | (pelengkap `kotoki_provider_fallback_total` Bab 8) |
 | `audio_frames_in_total` | counter | `result` (`ok`,`gap`,`dup`,`invalid`,`overflow`) | |
 | `audio_frames_out_total` | counter | `result` (`written`,`dropped_stale`) | |
 | `frame_processing_seconds` | histogram `[0.0001,0.0002,0.0005,0.001,0.002,0.005,0.01,0.02]` | `stage` (`opus_decode`, `vad`, `opus_encode`) | biaya CPU per frame (diverifikasi load test Bab 13) |
@@ -7106,9 +7107,9 @@ Tabel ini **kanonik** untuk metrik realtime; dashboard, alert, KEDA, dan kriteri
 | `playback_finished_missing_total` | counter | – | turn ditutup oleh deadline, bukan laporan client |
 | `drain_duration_seconds` | histogram | – | |
 
-Metrik di luar prefix realtime yang dinaikkan runtime (nama dari resolusi kanonik): `kaiwa_llm_content_filtered_total{provider}` (turn gagal karena `CONTENT_FILTERED`, S-9) dan `kaiwa_content_opening_fallback_total` (opening statis karena tidak ada `OPENING` `PUBLISHED`, S-2, nama milik Bab 6).
+Metrik di luar prefix realtime yang dinaikkan runtime (nama dari resolusi kanonik): `kotoki_llm_content_filtered_total{provider}` (turn gagal karena `CONTENT_FILTERED`, S-9) dan `kotoki_content_opening_fallback_total` (opening statis karena tidak ada `OPENING` `PUBLISHED`, S-2, nama milik Bab 6).
 
-Error Redis dicatat lewat metrik klien umum Bab 13 (`kaiwa_redis_command_errors_total{op}`); tidak ada metrik Redis khusus realtime.
+Error Redis dicatat lewat metrik klien umum Bab 13 (`kotoki_redis_command_errors_total{op}`); tidak ada metrik Redis khusus realtime.
 
 Trace (OpenTelemetry), span wajib dan atribut:
 - `ws.connection` (per koneksi): `session.id`, `conn.id`, `resume` (bool), `close.code`.
@@ -7134,7 +7135,7 @@ sequenceDiagram
   C->>API: POST /api/v1/sessions (AI_FIRST, 600)
   API->>PG: tx: RESERVED + reservation + ledger RESERVE
   C->>API: POST /sessions/{id}/realtime-ticket
-  API->>R: SET kaiwa:ws_ticket:{h} EX 30 NX
+  API->>R: SET kotoki:ws_ticket:{h} EX 30 NX
   C->>RT: GET /api/v1/realtime?ticket=…
   RT->>R: GETDEL ticket
   RT->>PG: load session (RESERVED, user ok)
@@ -7272,8 +7273,8 @@ sequenceDiagram
 7b. **Batas kalimat & adaptive** (R-17): fake LLM menghasilkan 6 kalimat dengan `MaxAISentencesPerTurn=2` → tepat 2 `ai.sentence`, stream LLM dibatalkan, turn `COMPLETED`, `assistant_text` = 2 kalimat; 2 dari 6 user turn terakhir berisi `もう一度` setelah ≥ 4 turn → `DIFFICULTY_ADJUSTED` sekali, `SpeechSpeed` turun 1, generation berikutnya memakai `MaxSentences`/`SpeakingRate` baru; `sessions.adaptive_difficulty` tidak berubah.
 7c. **Consent audio** (R-19): `users.audio_consent=false` → tidak ada objek `audio/tmp/...` dan `user_audio_object_key` NULL untuk semua turn; `true` → satu WAV per turn final non-`DISCARDED`.
 7d. **Commit STT di batas turn** (S-8, fake STT): `Finalize` dipanggil tepat 3× per turn REPLY normal (turn end, masuk `AI_SPEAKING`, kembali `LISTENING`); teks FINAL commit `DISCARD` (mis. gema/noise selama `AI_SPEAKING`) tidak muncul di `user_text` turn berikutnya; barge-in tidak terkonfirmasi oleh partial yang berasal dari audio sebelum commit (b).
-7e. **Deadline & content filter** (S-7, S-9): fake LLM yang macet setelah kalimat pertama ter-audio → router `DONE{TRUNCATED}`, kalimat itu diputar, turn `COMPLETED`, `llm_finished=false`, `consecutiveFailedTurns` = 0; 3 turn berturut-turut `CONTENT_FILTERED` → 3 APOLOGY, turn `FAILED`, sesi **tidak** berakhir `PROVIDER_FAILURE`, `kaiwa_llm_content_filtered_total` = 3.
-7f. **Opening & start** (S-2, S-14): `AI_FIRST` tanpa `OPENING` `PUBLISHED` → sesi `ACTIVE`, turn 0 berisi `opening_line` di-TTS tanpa panggilan LLM, `kaiwa_content_opening_fallback_total` +1; runtime tidak pernah meng-query version OPENING; `session.start` setelah `start_deadline_at` → `error{SESSION_START_DEADLINE_PASSED}` + close 4010, sesi `ABANDONED`.
+7e. **Deadline & content filter** (S-7, S-9): fake LLM yang macet setelah kalimat pertama ter-audio → router `DONE{TRUNCATED}`, kalimat itu diputar, turn `COMPLETED`, `llm_finished=false`, `consecutiveFailedTurns` = 0; 3 turn berturut-turut `CONTENT_FILTERED` → 3 APOLOGY, turn `FAILED`, sesi **tidak** berakhir `PROVIDER_FAILURE`, `kotoki_llm_content_filtered_total` = 3.
+7f. **Opening & start** (S-2, S-14): `AI_FIRST` tanpa `OPENING` `PUBLISHED` → sesi `ACTIVE`, turn 0 berisi `opening_line` di-TTS tanpa panggilan LLM, `kotoki_content_opening_fallback_total` +1; runtime tidak pernah meng-query version OPENING; `session.start` setelah `start_deadline_at` → `error{SESSION_START_DEADLINE_PASSED}` + close 4010, sesi `ABANDONED`.
 7g. **Handoff & STT sticky** (S-10, S-13): drain → `sessions.handoff_at` terisi; resume di pod lain → `handoff_at` NULL; tanpa resume → sweeper aturan (e) menutup sesi `RECONNECT_TIMEOUT` dengan `billable_end = handoff_at`. Sesi yang sudah pindah ke STT fallback dan di-takeover → `OpenSTT` dengan `StartWith=FALLBACK`, `stt_provider` turn berikutnya = vendor fallback.
 7h. **Prompt budget** (S-15, S-18): golden test `BuildConversation` dengan fixture maksimum — total estimasi ≤ 6.950; komponen learner ≤ 700 tanpa memotong descriptor dimensi; memory core ≤ 600 dan episodik ≤ 500; urutan pemangkasan 8 → 7 → 10 → 6 → 11; system message = `prompt.Render` template Bab 6; `OPENING` hanya berisi pesan `system`.
 8. **Redis down** (chaos): sesi berjalan selesai normal dan ter-settle; handshake baru → 4503.
@@ -7282,7 +7283,7 @@ sequenceDiagram
 
 ### Keputusan bab ini
 
-- D-NEW-7-1: Katalog error WS dan close code aplikasi `4001, 4003, 4004, 4008, 4009, 4010, 4011, 4029, 4100, 4101, 4102, 4500, 4503` (+ `1000, 1008, 1011`) beserta kebijakan reconnect client (§7.4.8–7.4.9). Penolakan sebelum upgrade dengan HTTP (tanpa menyentuh ticket): origin `403`, rate limit IP `429`, draining / hard capacity 120 `503` + `Retry-After: 1` + hapus cookie `kaiwa_rt` (R-22); penolakan lain setelah upgrade dengan close code.
+- D-NEW-7-1: Katalog error WS dan close code aplikasi `4001, 4003, 4004, 4008, 4009, 4010, 4011, 4029, 4100, 4101, 4102, 4500, 4503` (+ `1000, 1008, 1011`) beserta kebijakan reconnect client (§7.4.8–7.4.9). Penolakan sebelum upgrade dengan HTTP (tanpa menyentuh ticket): origin `403`, rate limit IP `429`, draining / hard capacity 120 `503` + `Retry-After: 1` + hapus cookie `kotoki_rt` (R-22); penolakan lain setelah upgrade dengan close code.
 - D-NEW-7-2: Event tambahan `session.ready` dan `pong`; `server_seq` monotonic per sesi; klasifikasi event durable/transient; field envelope `replay`; `session.snapshot.server_seq_baseline` me-reset baseline client; entry replay menyimpan `prev_seq` untuk deteksi gap eksak.
 - D-NEW-7-3: `session.start` pada sesi `ACTIVE` diperlakukan sebagai `session.resume{last_server_seq:0}`; `session.end` saat `STARTING` ditunda sampai `ACTIVE`.
 - D-NEW-7-4: Rate input (R-25): frame biner token bucket 100/s burst 200; JSON 20/s burst 40; attach 30/menit per IP (`ws_connect_ip`) dan 10/menit per user (`ws_attach_user`), limiter Bab 13 §13.4.3.
@@ -7294,7 +7295,7 @@ sequenceDiagram
 - D-NEW-7-10: Counter `generation` naik saat generation baru dimulai **dan** saat dibatalkan.
 - D-NEW-7-11: Kegagalan generation setelah fallback → aset APOLOGY pra-render (`go:embed`); 3 turn `FAILED` berturut-turut → sesi berakhir `PROVIDER_FAILURE` (turn `FAILED` karena `CONTENT_FILTERED` tidak dihitung, S-9). Fallback LLM/TTS/STT dijalankan router Bab 8 (`Generation`, `ResilientSTTSession`): LLM fallback sebelum audio = event `RESET` (generation sama, `ai.text_delta.reset=true`); TTS fallback = sintesis ulang seluruh generation dengan vendor fallback; STT fallback + replay 15 s di router; tidak ada switch-back STT dalam sesi.
 - D-NEW-7-12: Saat client terputus (pod sama): generation dibatalkan, turn berjalan `FAILED`, STT stream ditutup dan dibuka ulang saat resume (R-24).
-- D-NEW-7-13: Fencing berbasis Postgres `sessions.runtime_fence` (R-2; dinaikkan `ClaimRuntime`); owner key Redis berisi `pod|fence`; semua tulis runtime ke Postgres ber-fence dan mensyaratkan status `STARTING/ACTIVE/ENDING`; notifikasi takeover via Pub/Sub `kaiwa:realtime:pod:{pod_id}`.
+- D-NEW-7-13: Fencing berbasis Postgres `sessions.runtime_fence` (R-2; dinaikkan `ClaimRuntime`); owner key Redis berisi `pod|fence`; semua tulis runtime ke Postgres ber-fence dan mensyaratkan status `STARTING/ACTIVE/ENDING`; notifikasi takeover via Pub/Sub `kotoki:realtime:pod:{pod_id}`.
 - D-NEW-7-14: `disconnected_seconds` dihitung dari aktivitas terakhir client sampai attach/akhir sesi, dibulatkan ke bawah per episode.
 - D-NEW-7-15: Expiry: `ACTIVE→ENDING` tepat di `expires_at`; turn AI yang sedang bicara diselesaikan untuk kalimat yang sudah dihasilkan (LLM dipotong) dalam grace 10 s; turn user yang sedang berjalan disimpan sebagai `COMPLETED` tanpa jawaban AI; arahan penutup ditambahkan ke prompt sejak T-60 s.
 - D-NEW-7-16: Drain (R-22, kanonik; Bab 13 §13.10.5 mengikuti): safepoint `LISTENING` maks 20 s, flush 5 s, release owner, close 4100 (client reconnect → takeover pod lain); `terminationGracePeriodSeconds: 40`, `preStop: sleep 5`; koneksi baru ke pod draining → HTTP 503 sebelum ticket dikonsumsi.
@@ -7302,18 +7303,18 @@ sequenceDiagram
 - D-NEW-7-18: Estimator token tunggal `prompt.EstimateTokens` (+ `ItemOverheadTokens` 4, dipakai Bab 11), budget per komponen (learner+difficulty 700, memory core 600 + episodik 500, total input ≤ 6.950), urutan pemangkasan 8 → 7 → 10 → 6 → 11, window 8 turn diperluas ≤ 12, tata letak pesan LLM: `system` = `prompt.Render` template Bab 6, lalu recent turns `user`/`assistant`, lalu input user; `OPENING` hanya `system` (§7.8, S-15, S-18) [builder call].
 - D-NEW-7-19: Rolling summary in-session dengan template di kode, trigger 4 turn, via `RealtimeRouter.CompleteText` (Task `ROLLING_SUMMARY`, profile `STANDARD`), disimpan di memori + Redis.
 - D-NEW-7-20: Memory memakai port Bab 11 `memory.RetrievalService` (tidak ada interface memory milik Bab 7, S-15): `BuildSessionContext` saat start (takeover: Redis `memctx` dulu), `RefreshEpisodic` (≤ 3 turn terakhir, timeout 1,5 s, maks 1 in-flight) dan `ReloadCoreIfChanged` (`memver`) async di tugas pasca-turn, hasil dipakai mulai generation berikutnya [builder call].
-- D-NEW-7-21: Set key Redis (heartbeat `kaiwa:session:{id}:hb`, R-7), TTL, skrip Lua owner, dan kebijakan Redis down (§7.9). Pengaman sweeper terhadap kehilangan heartbeat mengikuti R-9 / Bab 13 §13.4.4 (tidak ada aturan "uptime Redis" tambahan).
+- D-NEW-7-21: Set key Redis (heartbeat `kotoki:session:{id}:hb`, R-7), TTL, skrip Lua owner, dan kebijakan Redis down (§7.9). Pengaman sweeper terhadap kehilangan heartbeat mengikuti R-9 / Bab 13 §13.4.4 (tidak ada aturan "uptime Redis" tambahan).
 - D-NEW-7-22: `session_events.event_type` yang ditulis runtime memakai katalog Bab 5 §5.7.1: `OWNER_CHANGED` (`START`/`TAKEOVER`/`DRAIN_RELEASE`), `SESSION_DISCONNECTED`, `SESSION_RECONNECTED`, `BARGE_IN`, `TURN_FAILED`, `PROVIDER_FALLBACK`, `PROTOCOL_VIOLATION`, dan `DIFFICULTY_ADJUSTED` (semuanya ada di CHECK Bab 5 §5.3).
 - D-NEW-7-23: Format nilai ticket Redis `{"user_id","session_id","issued_at"}` ditulis API dengan `SET … EX 30 NX`.
 - D-NEW-7-24: Capture WAV utterance per turn (≤ 45 s) untuk pronunciation, upload async oleh persister, hanya bila `PRONUNCIATION_CAPTURE_ENABLED` **dan** `users.audio_consent = true` (R-19; dibaca sekali per runtime).
 - D-NEW-7-25: Replay stream memakai `XADD … MAXLEN ~ 500` (trimming approximate, menyimpan ≥ 500 entry, D-083) demi performa Redis; deteksi gap tetap eksak lewat `prev_seq`.
-- D-NEW-7-26: Opening `AI_FIRST` (S-2): `MarkStarting` = Bab 5 `BeginStart` yang memilih version `OPENING` `PUBLISHED` dan mengisi `sessions.opening_prompt_version_id`; runtime memakai nilai dari record yang dikembalikan (tidak meng-query sendiri); takeover memakai nilai kolom. NULL → turn 0 = TTS statis `scenario_versions.opening_line` (tanpa LLM), log WARN + `kaiwa_content_opening_fallback_total` [builder call].
+- D-NEW-7-26: Opening `AI_FIRST` (S-2): `MarkStarting` = Bab 5 `BeginStart` yang memilih version `OPENING` `PUBLISHED` dan mengisi `sessions.opening_prompt_version_id`; runtime memakai nilai dari record yang dikembalikan (tidak meng-query sendiri); takeover memakai nilai kolom. NULL → turn 0 = TTS statis `scenario_versions.opening_line` (tanpa LLM), log WARN + `kotoki_content_opening_fallback_total` [builder call].
 - D-NEW-7-27: Batas keras `MaxAISentencesPerTurn` di parser (tepat N kalimat, lalu cancel stream LLM, turn `COMPLETED`) dan penyesuaian in-session Bab 12 §12.8.5 di context builder, disimpan di memori + Redis `rt.adaptive`, dicatat `DIFFICULTY_ADJUSTED` (R-17).
 - D-NEW-7-28: `session_turns.tts_voice_id` = voice ID vendor TTS yang dipakai generation terakhir turn (R-5); `stt_final_ms` NULL di DB bila final timeout; identifier provider uppercase di payload WS, kolom, dan label metrik (R-6).
-- D-NEW-7-29: Metrik realtime kanonik §7.14 memakai satuan detik (konvensi Bab 13); `kaiwa_realtime_sessions_active` adalah metrik KEDA.
+- D-NEW-7-29: Metrik realtime kanonik §7.14 memakai satuan detik (konvensi Bab 13); `kotoki_realtime_sessions_active` adalah metrik KEDA.
 - D-NEW-7-30 (S-7): `DONE{TRUNCATED}` dari router (total 15 s atau deadline sesi setelah audio terkirim) = jawaban dipotong: kalimat yang sudah diparse diputar, turn `COMPLETED`, tidak dihitung kegagalan; deadline ctx generation = `expires_at + PROVIDER_SESSION_GRACE` (15 s) [builder call].
 - D-NEW-7-31 (S-8): Commit STT (`Finalize`) di tiga batas — akhir turn user (`TURN_END`), masuk `AI_SPEAKING` dan kembali `LISTENING` (`DISCARD`); FINAL `DISCARD` dibuang; `TextSince` (barge-in) hanya memakai teks sejak commit terakhir yang sudah dijawab; antrean FIFO `pendingCommits`; setelah `PROVIDER_SWITCHED` hanya commit `TURN_END` yang diulang [builder call].
-- D-NEW-7-32 (S-9): `CONTENT_FILTERED` → turn `FAILED` + APOLOGY, counter terpisah (tidak naik/tidak reset `consecutiveFailedTurns`), metrik `kaiwa_llm_content_filtered_total`, tanpa efek ke charge [builder call].
+- D-NEW-7-32 (S-9): `CONTENT_FILTERED` → turn `FAILED` + APOLOGY, counter terpisah (tidak naik/tidak reset `consecutiveFailedTurns`), metrik `kotoki_llm_content_filtered_total`, tanpa efek ke charge [builder call].
 - D-NEW-7-33 (S-10): Handoff drain menulis `sessions.handoff_at` via `MarkHandoff` sebelum release owner; `ClaimRuntime` mengosongkannya; sesi yang tidak kembali ditutup sweeper aturan (e) [builder call].
 - D-NEW-7-34 (S-11): Bab 7 tidak mendefinisikan `stt_audio_ms` (definisi Bab 8 §8.7.1); durasi ucapan user = `user_ended_at − user_started_at`.
 - D-NEW-7-35 (S-12): "Audio terkirim" = frame pertama generation masuk antrean writer; `MarkAudioSent` (dipanggil pacer), `ai.audio_started`, `AI_SPEAKING`, dan metrik latensi first audio memakai titik yang sama [builder call].
@@ -7725,7 +7726,7 @@ type StructuredRequest struct {
 	Model           string          // DIISI ROUTER (PROVIDER_EVALUATION_<VENDOR>_MODEL)
 	Messages        []Message       // system (boleh >1 di awal) + user/assistant; dibangun prompt builder Bab 10/11.
 	                                // Pesan repair Bab 10 = assistant (output lama) + user (koreksi).
-	SchemaName      string          // [a-z0-9_]{1,64}, mis. "kaiwa_evaluation_rubric_v1"
+	SchemaName      string          // [a-z0-9_]{1,64}, mis. "kotoki_evaluation_rubric_v1"
 	JSONSchema      json.RawMessage // JSON Schema draft 2020-12 subset; lihat batasan 8.4.8
 	MaxOutputTokens int             // >0
 	Temperature     float64         // 0..2; NEGATIF → default 0.2; 0 dikirim apa adanya (Bab 10 memakai 0)
@@ -7956,7 +7957,7 @@ type EvaluationRoute interface {
 }
 ```
 
-Panggilan pada `Evaluation().Fallback()` menaikkan `kaiwa_provider_fallback_total{capability="EVALUATION", from=<primary>, to=<fallback>, reason="CALLER_DIRECTED"}`; pemanggil (Bab 10) mencatat `used_fallback` sendiri.
+Panggilan pada `Evaluation().Fallback()` menaikkan `kotoki_provider_fallback_total{capability="EVALUATION", from=<primary>, to=<fallback>, reason="CALLER_DIRECTED"}`; pemanggil (Bab 10) mencatat `used_fallback` sendiri.
 
 ---
 
@@ -8224,7 +8225,7 @@ Penerapan ekspresi & tempo: adapter membaca `req.Resolved.Params` (8.4.12) → `
 
 Terverifikasi di referensi WebSocket `/v1/speak`: `encoding` ∈ {`linear16`, `mulaw`, `alaw`}, `sample_rate` ∈ {8000, 16000, **24000**, 32000, 48000} (default 24000), parameter `speed` 0,7–1,5. **Verifikasi di task adapter**: (a) parameter yang sama berlaku untuk REST `POST /v1/speak`, (b) `container=none` menghasilkan PCM mentah tanpa header WAV (jika tidak tersedia, adapter mem-parsing & membuang header RIFF 44 byte), (c) `speed` berlaku untuk model Aura-2 Jepang.
 
-Ekspresi: Aura **tidak** mendukung kontrol emosi/gaya; baris `voice_provider_configs` `DEEPGRAM` tidak punya kapabilitas `STYLE_PARAMS`/`AUDIO_TAGS`/`INSTRUCTIONS` (Bab 6 §6.3.5), sehingga `ResolveTTSParams` mendegradasi ekspresi ke `neutral` (metrik `kaiwa_tts_expression_degraded_total{provider="DEEPGRAM",from,to}`). Adapter hanya mengirim query `speed` bila `req.Resolved.Params.speed` ada (artinya kapabilitas `SPEED` diset — hanya setelah parameter `speed` terverifikasi untuk Aura-2 Jepang); selain itu tempo default vendor dipakai.
+Ekspresi: Aura **tidak** mendukung kontrol emosi/gaya; baris `voice_provider_configs` `DEEPGRAM` tidak punya kapabilitas `STYLE_PARAMS`/`AUDIO_TAGS`/`INSTRUCTIONS` (Bab 6 §6.3.5), sehingga `ResolveTTSParams` mendegradasi ekspresi ke `neutral` (metrik `kotoki_tts_expression_degraded_total{provider="DEEPGRAM",from,to}`). Adapter hanya mengirim query `speed` bila `req.Resolved.Params.speed` ada (artinya kapabilitas `SPEED` diset — hanya setelah parameter `speed` terverifikasi untuk Aura-2 Jepang); selain itu tempo default vendor dipakai.
 
 #### 8.4.7 OpenAI TTS — contingency (hanya bila Aura gagal gate kualitas)
 
@@ -8312,7 +8313,7 @@ else:
     req.Model    = b.ModelOverride ?? ttsModel(req.Profile, vendor)          // Bab 6 §6.6.2 langkah 5
     req.Resolved = r
     if r.EffectiveExpression != expressionOrNeutral(req.Expression):
-        metrics kaiwa_tts_expression_degraded_total{provider=vendor, from=req.Expression, to=r.EffectiveExpression}++
+        metrics kotoki_tts_expression_degraded_total{provider=vendor, from=req.Expression, to=r.EffectiveExpression}++
 adapter[vendor].Synthesize(ctx, req)
 ```
 
@@ -8423,7 +8424,7 @@ Secret & base URL (secret dari Kubernetes Secret, Bab 13):
 | `DEEPGRAM_BASE_URL` / `DEEPGRAM_WS_BASE_URL` | `https://api.deepgram.com` / `wss://api.deepgram.com` |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` |
 | `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta` |
-| `AZURE_SPEECH_ENDPOINT` | wajib, mis. `https://kaiwa-speech.cognitiveservices.azure.com` |
+| `AZURE_SPEECH_ENDPOINT` | wajib, mis. `https://kotoki-speech.cognitiveservices.azure.com` |
 
 Validasi startup (`provider.RouterConfig.Validate()`): primary ≠ fallback; semua vendor yang direferensikan punya API key (mode real); kedua profile terdefinisi; timeout > 0; limit konkurensi > 0. Gagal validasi → proses exit code 1 dengan pesan yang menyebut env var.
 
@@ -8533,7 +8534,7 @@ Definisi sukses/gagal per kapabilitas:
 - TTS: sukses = chunk pertama dalam budget dan stream selesai tanpa error.
 - Async: per attempt.
 
-Transisi breaker → log WARN `provider circuit state changed` + metrik `kaiwa_provider_circuit_transitions_total`.
+Transisi breaker → log WARN `provider circuit state changed` + metrik `kotoki_provider_circuit_transitions_total`.
 
 #### 8.5.5 Health tracking
 
@@ -8572,7 +8573,7 @@ Satu sesi STT memegang 1 slot selama sesi hidup. LLM/TTS memegang slot selama re
 
 Limit konkurensi **akun vendor** (mis. limit concurrent request per plan ElevenLabs, rate limit OpenAI) adalah batas global; operator MUST mengatur `PROVIDER_CONCURRENCY_*` = `floor(limit_akun × 0,9 / jumlah_replika)`. Nilai limit plan tiap vendor → **verifikasi di task benchmark** dan catat di `deploy/config/provider-profile.env` sebagai komentar.
 
-Quota awareness (observasi saja): adapter memublikasikan header rate-limit vendor yang tersedia sebagai gauge `kaiwa_provider_ratelimit_remaining`, menghitung respons 429 per `VendorCode`, dan menghormati `Retry-After` pada retry async. Tidak ada redistribusi trafik otomatis.
+Quota awareness (observasi saja): adapter memublikasikan header rate-limit vendor yang tersedia sebagai gauge `kotoki_provider_ratelimit_remaining`, menghitung respons 429 per `VendorCode`, dan menghormati `Retry-After` pada retry async. Tidak ada redistribusi trafik otomatis.
 
 #### 8.5.7 Aturan fallback LLM/TTS dalam satu generasi (D-042)
 
@@ -8714,7 +8715,7 @@ switchTo(vendor):
     jika runtime memanggil Finalize selama replay: tandai pending; kirim Finalize setelah backlog habis
     FINAL FromFinalize milik sesi vendor lama yang belum datang TIDAK diteruskan setelah switch; runtime mengulang
     Finalize TURN_END yang masih menunggu (Bab 7 §7.6.2, S-8)
-    metrics: kaiwa_stt_replay_seconds.Observe(len(backlog)/32000)
+    metrics: kotoki_stt_replay_seconds.Observe(len(backlog)/32000)
 ```
 
 Pengiriman lebih cepat dari realtime harus diverifikasi per vendor (8.4.1, 8.4.2); jika vendor menolak, adapter MUST melakukan pacing 4× realtime (`PROVIDER_STT_REPLAY_SPEED=4`, `0` = tanpa pacing; default `0`).
@@ -8805,7 +8806,7 @@ Turn yang di-`DISCARDED` tetap menyimpan usage (biaya tetap terjadi). Biaya eval
 
 #### 8.7.2 Tabel harga (config, bukan DB)
 
-File `internal/provider/pricing/prices.yaml` di-embed (`go:embed`); dapat dioverride dengan `PROVIDER_PRICES_FILE=/etc/kaiwa/prices.yaml` (ConfigMap) [builder call].
+File `internal/provider/pricing/prices.yaml` di-embed (`go:embed`); dapat dioverride dengan `PROVIDER_PRICES_FILE=/etc/kotoki/prices.yaml` (ConfigMap) [builder call].
 
 ```yaml
 version: "2026-10-12"
@@ -8858,10 +8859,10 @@ type PriceTable interface {
 
 | Metrik | Tipe | Label |
 |---|---|---|
-| `kaiwa_provider_usage_total` | counter | `provider`, `capability`, `model`, `unit` ∈ {`input_tokens`,`output_tokens`,`characters`,`audio_ms`,`requests`} |
-| `kaiwa_provider_cost_usd_total` | counter | `provider`, `capability`, `model` |
-| `kaiwa_session_cost_usd` | histogram (bucket 0.005…2) | `profile` — diobservasi saat sesi terminal |
-| `kaiwa_session_cost_per_minute_usd` | histogram | `profile` |
+| `kotoki_provider_usage_total` | counter | `provider`, `capability`, `model`, `unit` ∈ {`input_tokens`,`output_tokens`,`characters`,`audio_ms`,`requests`} |
+| `kotoki_provider_cost_usd_total` | counter | `provider`, `capability`, `model` |
+| `kotoki_session_cost_usd` | histogram (bucket 0.005…2) | `profile` — diobservasi saat sesi terminal |
+| `kotoki_session_cost_per_minute_usd` | histogram | `profile` |
 
 Saat sesi terminal, runtime menulis log INFO `session_cost` berisi total usage & estimasi USD per kapabilitas (tanpa teks). Agregasi "cost per user / per 1.000 sesi" dihitung di laporan offline (8.8.3) dari kolom `session_turns` × tabel harga, bukan disimpan.
 
@@ -8875,26 +8876,26 @@ Versi yang diimplementasikan: **(1) metrik Prometheus per provider, (2) kolom la
 
 | Metrik | Tipe | Label | Keterangan |
 |---|---|---|---|
-| `kaiwa_provider_requests_total` | counter | `provider`,`capability`,`model`,`task`,`outcome` (`success`,`error`,`cancelled`,`truncated`) | STT: per sesi dibuka; `task` = `StructuredRequest.Task`/`TextRequest.Task`, `""` untuk panggilan realtime |
-| `kaiwa_provider_errors_total` | counter | `provider`,`capability`,`kind`,`vendor_code` | `vendor_code` dibatasi ke daftar kode yang dikenal adapter; lainnya `other` |
-| `kaiwa_provider_latency_seconds` | histogram | `provider`,`capability`,`model`,`phase` | phase: `connect`, `first_partial`, `final_after_finalize`, `first_token`, `first_sentence`*, `total`, `first_audio`; bucket 0.05,0.1,0.2,0.3,0.4,0.5,0.75,1,1.5,2,3,5,10,20,60 |
-| `kaiwa_provider_active` | gauge | `provider`,`capability` | stream/request in-flight |
-| `kaiwa_provider_concurrency_wait_seconds` | histogram | `provider`,`capability` | |
-| `kaiwa_provider_concurrency_rejected_total` | counter | `provider`,`capability` | |
-| `kaiwa_provider_fallback_total` | counter | `capability`,`from`,`to`,`reason` (ErrorKind, `CIRCUIT_OPEN`, atau `CALLER_DIRECTED`) | |
-| `kaiwa_provider_circuit_state` | gauge | `provider`,`capability` | 0 CLOSED, 1 OPEN, 2 HALF_OPEN |
-| `kaiwa_provider_circuit_transitions_total` | counter | `provider`,`capability`,`to` | |
-| `kaiwa_provider_stream_disconnects_total` | counter | `provider`,`capability` | putus tak terduga |
-| `kaiwa_provider_ratelimit_remaining` | gauge | `provider`,`capability`,`kind` (`requests`,`tokens`) | hanya bila header tersedia |
-| `kaiwa_stt_replay_seconds` | histogram | `from`,`to` | |
-| `kaiwa_stt_rotations_total` | counter | `provider` | |
-| `kaiwa_tts_expression_degraded_total` | counter | `provider`,`from`,`to` | ekspresi didegradasi `ResolveTTSParams` (Bab 6 §6.6.2) |
-| `kaiwa_tts_epoch_restarts_total` | counter | `from`,`to` | |
+| `kotoki_provider_requests_total` | counter | `provider`,`capability`,`model`,`task`,`outcome` (`success`,`error`,`cancelled`,`truncated`) | STT: per sesi dibuka; `task` = `StructuredRequest.Task`/`TextRequest.Task`, `""` untuk panggilan realtime |
+| `kotoki_provider_errors_total` | counter | `provider`,`capability`,`kind`,`vendor_code` | `vendor_code` dibatasi ke daftar kode yang dikenal adapter; lainnya `other` |
+| `kotoki_provider_latency_seconds` | histogram | `provider`,`capability`,`model`,`phase` | phase: `connect`, `first_partial`, `final_after_finalize`, `first_token`, `first_sentence`*, `total`, `first_audio`; bucket 0.05,0.1,0.2,0.3,0.4,0.5,0.75,1,1.5,2,3,5,10,20,60 |
+| `kotoki_provider_active` | gauge | `provider`,`capability` | stream/request in-flight |
+| `kotoki_provider_concurrency_wait_seconds` | histogram | `provider`,`capability` | |
+| `kotoki_provider_concurrency_rejected_total` | counter | `provider`,`capability` | |
+| `kotoki_provider_fallback_total` | counter | `capability`,`from`,`to`,`reason` (ErrorKind, `CIRCUIT_OPEN`, atau `CALLER_DIRECTED`) | |
+| `kotoki_provider_circuit_state` | gauge | `provider`,`capability` | 0 CLOSED, 1 OPEN, 2 HALF_OPEN |
+| `kotoki_provider_circuit_transitions_total` | counter | `provider`,`capability`,`to` | |
+| `kotoki_provider_stream_disconnects_total` | counter | `provider`,`capability` | putus tak terduga |
+| `kotoki_provider_ratelimit_remaining` | gauge | `provider`,`capability`,`kind` (`requests`,`tokens`) | hanya bila header tersedia |
+| `kotoki_stt_replay_seconds` | histogram | `from`,`to` | |
+| `kotoki_stt_rotations_total` | counter | `provider` | |
+| `kotoki_tts_expression_degraded_total` | counter | `provider`,`from`,`to` | ekspresi didegradasi `ResolveTTSParams` (Bab 6 §6.6.2) |
+| `kotoki_tts_epoch_restarts_total` | counter | `from`,`to` | |
 | + metrik biaya 8.7.4 | | | |
 
 \* `first_sentence` diobservasi oleh runtime (Bab 7) memakai histogram yang sama via helper `provider.ObserveLLMFirstSentence(provider, model, d)` (`metrics.go`).
 
-Nilai label `provider`, `from`, `to` (untuk vendor) dan `capability` MUST UPPERCASE persis `provider.Name`/`provider.Capability` (mis. `kaiwa_provider_fallback_total{capability="STT",from="ELEVENLABS",to="DEEPGRAM",reason="TIMEOUT"}`); label `task` (`EVALUATION`, `MEMORY_EXTRACTION`, `SUMMARY`, `ROLLING_SUMMARY`) juga uppercase. Label MUST NOT memuat `session_id`/`user_id` (kardinalitas). Alert & dashboard didefinisikan Bab 13; panel minimal: P50/P95/P99 per phase per provider, error rate per kind, fallback rate, circuit state, active streams vs limit, biaya per jam.
+Nilai label `provider`, `from`, `to` (untuk vendor) dan `capability` MUST UPPERCASE persis `provider.Name`/`provider.Capability` (mis. `kotoki_provider_fallback_total{capability="STT",from="ELEVENLABS",to="DEEPGRAM",reason="TIMEOUT"}`); label `task` (`EVALUATION`, `MEMORY_EXTRACTION`, `SUMMARY`, `ROLLING_SUMMARY`) juga uppercase. Label MUST NOT memuat `session_id`/`user_id` (kardinalitas). Alert & dashboard didefinisikan Bab 13; panel minimal: P50/P95/P99 per phase per provider, error rate per kind, fallback rate, circuit state, active streams vs limit, biaya per jam.
 
 #### 8.8.2 Log terstruktur per panggilan
 
@@ -8902,7 +8903,7 @@ Satu log DEBUG per request/stream selesai (`msg="provider call"`): `provider`, `
 
 #### 8.8.3 Laporan offline kualitas & latency per stack
 
-Subcommand `kaiwa-cli provider-report --from 2026-10-01 --to 2026-10-08 --format csv --prices prices.yaml` (membaca Postgres read-only via `DATABASE_URL`) [builder call]. Output satu baris per kombinasi `(stt_provider, llm_provider, llm_model, tts_provider, tts_model)` dari `session_turns` berstatus `COMPLETED`/`INTERRUPTED`/`FAILED`:
+Subcommand `kotoki-cli provider-report --from 2026-10-01 --to 2026-10-08 --format csv --prices prices.yaml` (membaca Postgres read-only via `DATABASE_URL`) [builder call]. Output satu baris per kombinasi `(stt_provider, llm_provider, llm_model, tts_provider, tts_model)` dari `session_turns` berstatus `COMPLETED`/`INTERRUPTED`/`FAILED`:
 
 | Kolom output | Definisi |
 |---|---|
@@ -8960,7 +8961,7 @@ Keputusan gagal: `FAIL_EVERY_N>0` → `counter % N == 0`; selain itu `hash64(FAK
 
 - Segmentasi berbasis energi: RMS per frame 20 ms; frame "speech" bila RMS ≥ `FAKE_STT_ENERGY_DBFS` (default −40 dBFS). Segmen dimulai setelah ≥ 200 ms speech; segmen internal ditutup setelah 600 ms non-speech **atau** saat `Finalize()`.
 - Mode transcript `FAKE_STT_MODE`:
-  - `fixture` (default bila `FAKE_STT_FIXTURE_DIR` diset): saat start, muat semua `*.wav` (PCM16 mono 16 kHz) di direktori beserta sidecar `<nama>.txt` (UTF-8, satu baris transcript). Hitung **envelope energi** (RMS per 20 ms, dinormalisasi) tiap fixture. Untuk segmen masuk, hitung envelope yang sama lalu pilih fixture dengan normalized cross-correlation tertinggi (geser ±10 frame); skor ≥ `FAKE_STT_MATCH_THRESHOLD` (0,8) → transcript fixture; selain itu jatuh ke mode `energy`. Envelope tahan terhadap encoding Opus round-trip sehingga WAV yang dikirim `kaiwa-cli` dikenali. Tie → nama file leksikografis terkecil.
+  - `fixture` (default bila `FAKE_STT_FIXTURE_DIR` diset): saat start, muat semua `*.wav` (PCM16 mono 16 kHz) di direktori beserta sidecar `<nama>.txt` (UTF-8, satu baris transcript). Hitung **envelope energi** (RMS per 20 ms, dinormalisasi) tiap fixture. Untuk segmen masuk, hitung envelope yang sama lalu pilih fixture dengan normalized cross-correlation tertinggi (geser ±10 frame); skor ≥ `FAKE_STT_MATCH_THRESHOLD` (0,8) → transcript fixture; selain itu jatuh ke mode `energy`. Envelope tahan terhadap encoding Opus round-trip sehingga WAV yang dikirim `kotoki-cli` dikenali. Tie → nama file leksikografis terkecil.
   - `energy`: transcript = `FAKE_STT_PHRASES[segmentIndex % len]`, daftar default (dipisah `|`): `はい、そうです。|えっと、週末は友達と映画を見ました。|日本語の勉強は楽しいです。|すみません、もう一度お願いします。|昨日は雨でしたね。`.
 - PARTIAL: setiap 200 ms selama segmen, `Text` = prefix transcript kandidat sepanjang `ceil(len_rune × min(1, elapsed/expectedDuration))` (`expectedDuration` = durasi fixture, atau 120 ms per rune pada mode energy). Pada mode fixture, kandidat sementara dipilih dari prefix envelope setelah 400 ms.
 - FINAL: saat segmen ditutup, setelah `FAKE_<INST>_STT_LATENCY_MS` (default 150) → `FINAL{Text, Confidence: 0.95, FromFinalize}`. `Finalize()` tanpa segmen aktif → `FINAL{Text:"", FromFinalize:true}`.
@@ -9002,7 +9003,7 @@ Keputusan gagal: `FAIL_EVERY_N>0` → `counter % N == 0`; selain itu `hash64(FAK
 Selain env `FAKE_<INST>_<CAP>_*` (dibaca sekali saat start), fault bisa diubah **tanpa restart** lewat Redis — dipakai skenario chaos/load test Bab 13 §13.13.
 
 - Aktif hanya untuk kapabilitas yang berjalan dalam mode fake. Produksi menolak `PROVIDER_MODE=fake` (Bab 13), sehingga key ini tidak pernah dibaca di prod.
-- Key: `FAKE_FAULTS_REDIS_KEY` (default `kaiwa:fake:faults`, Bab 13 §13.2.9). Setiap proses (realtime & worker) menjalankan satu goroutine poller: `GET` key tiap `FAKE_FAULTS_POLL_INTERVAL` (default `1s`), parse, lalu ganti snapshot atomik (`atomic.Pointer[FaultSet]`). Panggilan provider hanya membaca snapshot (tanpa I/O di jalur panas).
+- Key: `FAKE_FAULTS_REDIS_KEY` (default `kotoki:fake:faults`, Bab 13 §13.2.9). Setiap proses (realtime & worker) menjalankan satu goroutine poller: `GET` key tiap `FAKE_FAULTS_POLL_INTERVAL` (default `1s`), parse, lalu ganti snapshot atomik (`atomic.Pointer[FaultSet]`). Panggilan provider hanya membaca snapshot (tanpa I/O di jalur panas).
 - Key tidak ada → tidak ada fault runtime (hanya env). Redis error → pertahankan snapshot terakhir maksimal 10 s, lalu kosongkan (fault tidak "menempel" saat Redis hilang). JSON tidak valid / entri tidak dikenal → entri itu diabaikan + log WARN (maks 1×/menit per key).
 - Format (kunci entri = `"<CAPABILITY>.<INSTANCE>"`, keduanya UPPERCASE):
 
@@ -9052,10 +9053,10 @@ Tujuan: menetapkan nilai awal model di provider profile, memvalidasi pasangan pr
 
 #### 8.10.1 Tool
 
-Subcommand `kaiwa-cli provider-bench` [builder call] yang memakai adapter **nyata** langsung (bukan lewat WebSocket), dengan flag:
+Subcommand `kotoki-cli provider-bench` [builder call] yang memakai adapter **nyata** langsung (bukan lewat WebSocket), dengan flag:
 
 ```text
-kaiwa-cli provider-bench --suite stt|llm|tts|e2e|concurrency|all \
+kotoki-cli provider-bench --suite stt|llm|tts|e2e|concurrency|all \
   --dataset testdata/benchmark --models-file bench/models.yaml \
   --out bench/results/2026-10-12/ --repeat 3
 ```
@@ -9064,7 +9065,7 @@ kaiwa-cli provider-bench --suite stt|llm|tts|e2e|concurrency|all \
 
 #### 8.10.2 Dataset golden (Jepang)
 
-Manifest `testdata/benchmark/manifest.jsonl` (di repo); audio di object storage privat `s3://kaiwa-benchmark/v1/` (tidak di repo karena berisi suara orang) [builder call]; subset 10 file berlisensi bebas di repo untuk CI fake-STT.
+Manifest `testdata/benchmark/manifest.jsonl` (di repo); audio di object storage privat `s3://kotoki-benchmark/v1/` (tidak di repo karena berisi suara orang) [builder call]; subset 10 file berlisensi bebas di repo untuk CI fake-STT.
 
 | Set | Isi | Jumlah minimum |
 |---|---|---|
@@ -9148,8 +9149,8 @@ Urutan task implementasi yang disarankan: (1) tipe & error port, (2) fake + conf
 - D-NEW-8-14: `stt_audio_ms` per turn = delta audio terkirim sejak penutupan turn sebelumnya; sisa setelah turn terakhir dibebankan ke turn terakhir. Definisi kanonik (S-11); durasi ucapan = `user_ended_at − user_started_at`.
 - D-NEW-8-15: Tabel harga di `internal/provider/pricing/prices.yaml` (embed, override `PROVIDER_PRICES_FILE`), semua harga 0 sampai benchmark; estimasi token 1,0 token/rune bila usage tidak tersedia.
 - D-NEW-8-16: Endpoint debug internal `GET /internal/providers`; health provider tidak memengaruhi readiness pod.
-- D-NEW-8-17: Subcommand `kaiwa-cli provider-report` dan `kaiwa-cli provider-bench`; dataset benchmark audio di bucket privat, manifest di repo.
-- D-NEW-8-18: Override mode per kapabilitas `PROVIDER_MODE_<CAP>`; mode fake memakai instance `FAKE_PRIMARY`/`FAKE_FALLBACK` dengan env injeksi `FAKE_<INST>_<CAP>_*` dan fault runtime Redis `kaiwa:fake:faults` berkunci `"<CAP>.<INSTANCE>"` (8.9.6).
+- D-NEW-8-17: Subcommand `kotoki-cli provider-report` dan `kotoki-cli provider-bench`; dataset benchmark audio di bucket privat, manifest di repo.
+- D-NEW-8-18: Override mode per kapabilitas `PROVIDER_MODE_<CAP>`; mode fake memakai instance `FAKE_PRIMARY`/`FAKE_FALLBACK` dengan env injeksi `FAKE_<INST>_<CAP>_*` dan fault runtime Redis `kotoki:fake:faults` berkunci `"<CAP>.<INSTANCE>"` (8.9.6).
 - D-NEW-8-19: Fake STT mengenali fixture WAV lewat korelasi envelope energi (tahan Opus round-trip), sidecar `<nama>.txt`.
 - D-NEW-8-20: Kriteria seleksi model: STANDARD = termurah lolos gate; PREMIUM = kualitas tertinggi lolos gate dengan biaya ≤ 3× STANDARD; gate angka di 8.10.4.
 - D-NEW-8-21: Parameter suara/ekspresi/tempo bersumber dari data Bab 6 (`voice_provider_configs.settings/capabilities/model_override`, `tts_mappings`); router menjalankan `ResolveTTSParams` (Bab 6 §6.6.2) setelah memilih vendor dan mengisi `TTSRequest.Model`/`Resolved`; adapter hanya membaca hasilnya. `TTSRequest.SpeakingRate` (0,80–1,05) = tahap 1 rumus tempo Bab 6 §6.6.3 yang memuat `AdaptiveDifficulty.SpeechSpeed`. Mode fake tidak membutuhkan `voice_provider_configs`.
@@ -9197,13 +9198,13 @@ Paket fitur MUST NOT mengimpor `amqp`, `postgres`, `amqp091`, atau `pgx` (D-005)
  Outbox publisher (worker --handlers=outbox)
           │  publish persistent + publisher confirm
           ▼
- exchange kaiwa.events (topic, routing key = event_type)
+ exchange kotoki.events (topic, routing key = event_type)
    ├─ session.completed    → evaluation.session_completed  → Evaluation worker (Bab 10)
    │                       → memory.session_completed      → Memory worker (Bab 11)
    │                       → summary.session_completed     → Summary worker (§9.9.6)
    ├─ evaluation.completed → learner.evaluation_completed  → Learner worker (Bab 12)
    └─ (tanpa binding: evaluation.failed, memory.extracted) → alternate exchange
-                                                            → kaiwa.events.unrouted
+                                                            → kotoki.events.unrouted
 ```
 
 Aturan umum:
@@ -9376,7 +9377,7 @@ func (p *Publisher) publishBatch(ctx context.Context) (int, error) {
     for i, r := range rows {
         msg := buildMessage(r)                              // §9.3.3
         dc, err := p.ch.PublishWithDeferredConfirmWithContext(ctx,
-            "kaiwa.events", r.EventType, false /*mandatory*/, false /*immediate*/, msg)
+            "kotoki.events", r.EventType, false /*mandatory*/, false /*immediate*/, msg)
         if err != nil { return 0, errBrokerUnavailable }    // channel putus → rollback seluruh batch
         confirms[i] = dc
     }
@@ -9412,13 +9413,13 @@ Keputusan & alasan:
 
 | Properti | Nilai |
 |---|---|
-| exchange / routing key | `kaiwa.events` / `event_type` |
+| exchange / routing key | `kotoki.events` / `event_type` |
 | `ContentType` | `application/json` |
 | `DeliveryMode` | `2` (persistent) |
 | `MessageId` | `event_id` |
 | `Type` | `event_type` |
 | `Timestamp` | `occurred_at` |
-| `AppId` | `kaiwa` |
+| `AppId` | `kotoki` |
 | `Headers` | `traceparent` (string), `tracestate` (string, jika ada), `x-event-version` (int32) |
 | `Body` | envelope JSON §9.4 |
 
@@ -9487,7 +9488,7 @@ Sesi `CANCELLED`, `ABANDONED`, dan `STARTING → FAILED` **tidak** menerbitkan e
 
 ```json
 {
-  "$id": "kaiwa/events/session.completed/v1",
+  "$id": "kotoki/events/session.completed/v1",
   "type": "object",
   "additionalProperties": true,
   "required": ["session_id", "final_status", "end_reason", "conversation_start_mode",
@@ -9530,7 +9531,7 @@ Producer `WORKER`, `aggregate_type = EVALUATION`, `aggregate_id = evaluation_id`
 
 ```json
 {
-  "$id": "kaiwa/events/evaluation.completed/v1",
+  "$id": "kotoki/events/evaluation.completed/v1",
   "type": "object",
   "additionalProperties": true,
   "required": ["evaluation_id", "session_id", "rubric_version", "insufficient_evidence",
@@ -9599,11 +9600,11 @@ Producer `WORKER`, `aggregate_type = EVALUATION`, `aggregate_id = evaluation_id`
 
 #### 9.5.3 `evaluation.failed` v1
 
-Producer `WORKER`, `aggregate_type = EVALUATION`. Diterbitkan saat evaluasi menjadi `FAILED` final (Bab 10 §10.10). Tidak ada consumer di MVP (masuk `kaiwa.events.unrouted`); disediakan untuk notifikasi/analitik di masa depan.
+Producer `WORKER`, `aggregate_type = EVALUATION`. Diterbitkan saat evaluasi menjadi `FAILED` final (Bab 10 §10.10). Tidak ada consumer di MVP (masuk `kotoki.events.unrouted`); disediakan untuk notifikasi/analitik di masa depan.
 
 ```json
 {
-  "$id": "kaiwa/events/evaluation.failed/v1",
+  "$id": "kotoki/events/evaluation.failed/v1",
   "type": "object",
   "additionalProperties": true,
   "required": ["evaluation_id", "session_id", "failure_code", "attempt_count", "failed_at"],
@@ -9624,7 +9625,7 @@ Producer `WORKER`, `aggregate_type = SESSION`, `aggregate_id = session_id`. Dite
 
 ```json
 {
-  "$id": "kaiwa/events/memory.extracted/v1",
+  "$id": "kotoki/events/memory.extracted/v1",
   "type": "object",
   "additionalProperties": true,
   "required": ["session_id", "created_memory_ids", "updated_memory_ids",
@@ -9653,23 +9654,23 @@ Producer `WORKER`, `aggregate_type = SESSION`, `aggregate_id = session_id`. Dite
 
 ### 9.6 Topologi RabbitMQ (kanonik D-091, D-092)
 
-RabbitMQ 4.x. Virtual host `/kaiwa` (lokal: `/`). Semua exchange durable; semua queue **quorum** (D-092).
+RabbitMQ 4.x. Virtual host `/kotoki` (lokal: `/`). Semua exchange durable; semua queue **quorum** (D-092).
 
 #### 9.6.1 Exchange
 
 | Exchange | Tipe | Argumen | Fungsi |
 |---|---|---|---|
-| `kaiwa.events` | `topic` | `alternate-exchange = kaiwa.events.unrouted` | Exchange domain; routing key = `event_type` |
-| `kaiwa.events.unrouted` | `fanout` | – | Menampung event tanpa binding (`evaluation.failed`, `memory.extracted`) |
-| `kaiwa.retry` | `direct` | – | Consumer mem-publish ulang message gagal ke retry queue (routing key = nama retry queue) |
-| `kaiwa.requeue` | `direct` | – | DLX dari retry queue; mengembalikan message **hanya** ke queue asal (routing key = nama queue asal) |
-| `kaiwa.dlx` | `direct` | – | Dead letter; routing key = nama queue asal → `<queue>.dlq` |
+| `kotoki.events` | `topic` | `alternate-exchange = kotoki.events.unrouted` | Exchange domain; routing key = `event_type` |
+| `kotoki.events.unrouted` | `fanout` | – | Menampung event tanpa binding (`evaluation.failed`, `memory.extracted`) |
+| `kotoki.retry` | `direct` | – | Consumer mem-publish ulang message gagal ke retry queue (routing key = nama retry queue) |
+| `kotoki.requeue` | `direct` | – | DLX dari retry queue; mengembalikan message **hanya** ke queue asal (routing key = nama queue asal) |
+| `kotoki.dlx` | `direct` | – | Dead letter; routing key = nama queue asal → `<queue>.dlq` |
 
-**Mengapa topic + `kaiwa.requeue` (tidak ada masalah fanout):** dokumen lama memakai fanout; itu salah karena `evaluation.completed` akan ikut masuk ke queue evaluation/memory/summary. Dengan topic exchange, setiap queue hanya menerima routing key yang di-bind. Selain itu, retry queue **tidak pernah** dead-letter kembali ke `kaiwa.events` (yang akan menggandakan message ke semua queue lain yang bind `session.completed`); retry selalu kembali lewat `kaiwa.requeue` dengan routing key = nama queue asal, sehingga hanya consumer yang gagal yang menerima ulang.
+**Mengapa topic + `kotoki.requeue` (tidak ada masalah fanout):** dokumen lama memakai fanout; itu salah karena `evaluation.completed` akan ikut masuk ke queue evaluation/memory/summary. Dengan topic exchange, setiap queue hanya menerima routing key yang di-bind. Selain itu, retry queue **tidak pernah** dead-letter kembali ke `kotoki.events` (yang akan menggandakan message ke semua queue lain yang bind `session.completed`); retry selalu kembali lewat `kotoki.requeue` dengan routing key = nama queue asal, sehingga hanya consumer yang gagal yang menerima ulang.
 
 #### 9.6.2 Queue, binding, prefetch
 
-| Queue (consumer) | Binding dari `kaiwa.events` | Prefetch = concurrency per pod | Handler timeout | Handler flag |
+| Queue (consumer) | Binding dari `kotoki.events` | Prefetch = concurrency per pod | Handler timeout | Handler flag |
 |---|---|---|---|---|
 | `evaluation.session_completed` | `session.completed` | 4 | 200 s | `evaluation` |
 | `memory.session_completed` | `session.completed` | 4 | 120 s | `memory` |
@@ -9680,18 +9681,18 @@ Per queue `Q` di atas ada 6 queue:
 
 | Queue | Argumen | Binding |
 |---|---|---|
-| `Q` | `x-queue-type=quorum`, `x-delivery-limit=10`, `x-dead-letter-exchange=kaiwa.dlx`, `x-dead-letter-routing-key=Q`, `x-dead-letter-strategy=at-least-once`, `x-overflow=reject-publish` | `kaiwa.events` (routing key tabel di atas); `kaiwa.requeue` (routing key `Q`) |
-| `Q.retry.5s` | quorum, `x-message-ttl=5000`, `x-dead-letter-exchange=kaiwa.requeue`, `x-dead-letter-routing-key=Q`, `x-dead-letter-strategy=at-least-once`, `x-overflow=reject-publish` | `kaiwa.retry` (routing key `Q.retry.5s`) |
-| `Q.retry.30s` | sama, `x-message-ttl=30000` | `kaiwa.retry` (`Q.retry.30s`) |
-| `Q.retry.2m` | sama, `x-message-ttl=120000` | `kaiwa.retry` (`Q.retry.2m`) |
-| `Q.retry.10m` | sama, `x-message-ttl=600000` | `kaiwa.retry` (`Q.retry.10m`) |
-| `Q.dlq` | quorum (tanpa TTL, tanpa consumer otomatis) | `kaiwa.dlx` (routing key `Q`) |
+| `Q` | `x-queue-type=quorum`, `x-delivery-limit=10`, `x-dead-letter-exchange=kotoki.dlx`, `x-dead-letter-routing-key=Q`, `x-dead-letter-strategy=at-least-once`, `x-overflow=reject-publish` | `kotoki.events` (routing key tabel di atas); `kotoki.requeue` (routing key `Q`) |
+| `Q.retry.5s` | quorum, `x-message-ttl=5000`, `x-dead-letter-exchange=kotoki.requeue`, `x-dead-letter-routing-key=Q`, `x-dead-letter-strategy=at-least-once`, `x-overflow=reject-publish` | `kotoki.retry` (routing key `Q.retry.5s`) |
+| `Q.retry.30s` | sama, `x-message-ttl=30000` | `kotoki.retry` (`Q.retry.30s`) |
+| `Q.retry.2m` | sama, `x-message-ttl=120000` | `kotoki.retry` (`Q.retry.2m`) |
+| `Q.retry.10m` | sama, `x-message-ttl=600000` | `kotoki.retry` (`Q.retry.10m`) |
+| `Q.dlq` | quorum (tanpa TTL, tanpa consumer otomatis) | `kotoki.dlx` (routing key `Q`) |
 
-Ditambah `kaiwa.events.unrouted`: quorum, `x-message-ttl=259200000` (3 hari), `x-max-length=100000`, `x-overflow=drop-head`, bind ke `kaiwa.events.unrouted` (fanout).
+Ditambah `kotoki.events.unrouted`: quorum, `x-message-ttl=259200000` (3 hari), `x-max-length=100000`, `x-overflow=drop-head`, bind ke `kotoki.events.unrouted` (fanout).
 
 Total: 5 exchange, 25 queue. TTL dipasang di level queue (bukan per message) karena quorum queue hanya meng-expire message di head; TTL seragam per queue menjamin FIFO expiry benar.
 
-`x-delivery-limit=10` adalah pengaman poison message (consumer crash berulang / `Nack(requeue=true)` berulang): setelah 10 redelivery, RabbitMQ men-dead-letter ke `Q.dlq` lewat `kaiwa.dlx`.
+`x-delivery-limit=10` adalah pengaman poison message (consumer crash berulang / `Nack(requeue=true)` berulang): setelah 10 redelivery, RabbitMQ men-dead-letter ke `Q.dlq` lewat `kotoki.dlx`.
 
 #### 9.6.3 Kode deklarasi (amqp091)
 
@@ -9700,12 +9701,12 @@ Total: 5 exchange, 25 queue. TTL dipasang di level queue (bukan per message) kar
 package amqp // library github.com/rabbitmq/amqp091-go diimpor sebagai amqp091
 
 const (
-    ExchangeEvents   = "kaiwa.events"
-    ExchangeUnrouted = "kaiwa.events.unrouted"
-    ExchangeRetry    = "kaiwa.retry"
-    ExchangeRequeue  = "kaiwa.requeue"
-    ExchangeDLX      = "kaiwa.dlx"
-    QueueUnrouted    = "kaiwa.events.unrouted"
+    ExchangeEvents   = "kotoki.events"
+    ExchangeUnrouted = "kotoki.events.unrouted"
+    ExchangeRetry    = "kotoki.retry"
+    ExchangeRequeue  = "kotoki.requeue"
+    ExchangeDLX      = "kotoki.dlx"
+    QueueUnrouted    = "kotoki.events.unrouted"
 )
 
 // Nama queue utama = nama consumer di processed_events. Konstantanya di internal/events (queues.go)
@@ -9799,7 +9800,7 @@ func DeclareTopology(ch *amqp091.Channel) error {
 }
 ```
 
-Aturan perubahan topologi: argumen queue tidak bisa diubah setelah dideklarasi (RabbitMQ menolak dengan `PRECONDITION_FAILED`). Mengubah argumen = buat queue baru dengan nama baru (mis. `evaluation.session_completed.v2`), bind, drain queue lama, hapus. Integration test (testcontainers RabbitMQ) MUST memverifikasi: publish `session.completed` → tepat 1 message di masing-masing dari 3 queue; publish `evaluation.completed` → tepat 1 message hanya di `learner.evaluation_completed`; publish `memory.extracted` → masuk `kaiwa.events.unrouted`; message di `Q.retry.5s` kembali hanya ke `Q` setelah ±5 s.
+Aturan perubahan topologi: argumen queue tidak bisa diubah setelah dideklarasi (RabbitMQ menolak dengan `PRECONDITION_FAILED`). Mengubah argumen = buat queue baru dengan nama baru (mis. `evaluation.session_completed.v2`), bind, drain queue lama, hapus. Integration test (testcontainers RabbitMQ) MUST memverifikasi: publish `session.completed` → tepat 1 message di masing-masing dari 3 queue; publish `evaluation.completed` → tepat 1 message hanya di `learner.evaluation_completed`; publish `memory.extracted` → masuk `kotoki.events.unrouted`; message di `Q.retry.5s` kembali hanya ke `Q` setelah ±5 s.
 
 ### 9.7 Consumer framework
 
@@ -9865,7 +9866,7 @@ func (r *ProcessedEventsReader) IsProcessed(ctx context.Context, consumer string
 
 Pola wajib untuk handler yang memanggil provider eksternal (evaluation, memory, summary): kerja mahal di luar transaksi → transaksi final singkat berisi `MarkProcessed` + semua write + outbox. Jika dua salinan event diproses paralel, salinan kedua gagal di `MarkProcessed` dan seluruh write-nya di-rollback. Selain `processed_events`, setiap domain punya guard alami (mis. `evaluations.session_id` UNIQUE).
 
-User yang dihapus (Bab 13 §13.9.3): setiap handler bisnis (evaluation, memory, summary, learner) MUST membaca `users.status` sebelum kerja mahal; jika `DELETED` → transaksi berisi `MarkProcessed` saja → ACK, metric `kaiwa_consumer_messages_total{result="skipped_deleted_user"}`. Tidak ada panggilan provider dan tidak ada write domain.
+User yang dihapus (Bab 13 §13.9.3): setiap handler bisnis (evaluation, memory, summary, learner) MUST membaca `users.status` sebelum kerja mahal; jika `DELETED` → transaksi berisi `MarkProcessed` saja → ACK, metric `kotoki_consumer_messages_total{result="skipped_deleted_user"}`. Tidak ada panggilan provider dan tidak ada write domain.
 
 #### 9.7.3 Klasifikasi error
 
@@ -9987,9 +9988,9 @@ Semantik:
 #### 9.7.5 Trace propagation
 
 - Saat `OutboxWriter.Enqueue`, trace context aktif disimpan ke `event_outbox.traceparent/tracestate` (kolom nullable; NULL jika ctx tidak membawa span).
-- Publisher membaca kedua kolom (SELECT §9.3.2) dan membuat span `kaiwa.events publish` (SpanKind PRODUCER) dengan parent = context yang direkonstruksi dari kolom tersebut (kolom NULL → span root baru), lalu menyuntikkan `traceparent`/`tracestate` span publish ke header AMQP (dan ke field envelope `traceparent`).
+- Publisher membaca kedua kolom (SELECT §9.3.2) dan membuat span `kotoki.events publish` (SpanKind PRODUCER) dengan parent = context yang direkonstruksi dari kolom tersebut (kolom NULL → span root baru), lalu menyuntikkan `traceparent`/`tracestate` span publish ke header AMQP (dan ke field envelope `traceparent`).
 - Consumer meng-extract dari header AMQP (fallback: field envelope `traceparent`) memakai `propagation.TraceContext{}` dengan carrier di atas `amqp091.Table`, lalu membuat span `<queue> process` (SpanKind CONSUMER) sebagai child.
-- Atribut span: `messaging.system=rabbitmq`, `messaging.destination.name=<queue>`, `messaging.rabbitmq.destination.routing_key=<event_type>`, `messaging.message.id=<event_id>`, `kaiwa.retry_count`, `kaiwa.session_id` (jika ada), `kaiwa.user_id`.
+- Atribut span: `messaging.system=rabbitmq`, `messaging.destination.name=<queue>`, `messaging.rabbitmq.destination.routing_key=<event_type>`, `messaging.message.id=<event_id>`, `kotoki.retry_count`, `kotoki.session_id` (jika ada), `kotoki.user_id`.
 - Log `slog` setiap delivery memuat `trace_id`, `span_id`, `event_id`, `event_type`, `queue`, `retry_count`, `worker_version` (build version).
 
 ```go
@@ -10018,25 +10019,25 @@ Urutan saat SIGTERM/SIGINT:
 
 #### 9.7.8 Operasi DLQ (replay)
 
-Subcommand: `worker dlq-replay --queue <Q> [--limit 100] [--dry-run]`. Algoritma: consume dari `<Q>.dlq` dengan prefetch 1; untuk setiap message: publish ke `kaiwa.requeue` routing key `<Q>` dengan header `x-retry-count = 0`, `x-replayed-at = now`, confirm, lalu ack message DLQ. `--dry-run` hanya mencetak `event_id`, `event_type`, `x-error-class`, `x-last-error`, lalu `Nack(requeue=true)`. Replay aman karena handler idempotent; evaluasi `FAILED` akan dicoba ulang (Bab 10 §10.10).
+Subcommand: `worker dlq-replay --queue <Q> [--limit 100] [--dry-run]`. Algoritma: consume dari `<Q>.dlq` dengan prefetch 1; untuk setiap message: publish ke `kotoki.requeue` routing key `<Q>` dengan header `x-retry-count = 0`, `x-replayed-at = now`, confirm, lalu ack message DLQ. `--dry-run` hanya mencetak `event_id`, `event_type`, `x-error-class`, `x-last-error`, lalu `Nack(requeue=true)`. Replay aman karena handler idempotent; evaluasi `FAILED` akan dicoba ulang (Bab 10 §10.10).
 
 #### 9.7.9 Metrics worker
 
 | Metric | Tipe | Label |
 |---|---|---|
-| `kaiwa_consumer_messages_total` | counter | `queue`, `result` = `ack`/`duplicate`/`retry`/`dead`/`requeue`/`skipped_deleted_user` |
-| `kaiwa_consumer_processing_seconds` | histogram | `queue` |
-| `kaiwa_consumer_inflight` | gauge | `queue` |
-| `kaiwa_outbox_published_total` | counter | `event_type` |
-| `kaiwa_outbox_publish_failures_total` | counter | `event_type`, `reason` = `nack`/`timeout` |
-| `kaiwa_outbox_pending` | gauge (dihitung tiap 15 s) | – |
-| `kaiwa_outbox_oldest_pending_age_seconds` | gauge | – |
-| `kaiwa_outbox_failed` | gauge | – |
-| `kaiwa_job_runs_total` | counter | `job`, `result` = `ok`/`error`/`skipped_locked` |
-| `kaiwa_job_duration_seconds` | histogram | `job` |
-| `kaiwa_job_items_total` | counter | `job`, `action` |
+| `kotoki_consumer_messages_total` | counter | `queue`, `result` = `ack`/`duplicate`/`retry`/`dead`/`requeue`/`skipped_deleted_user` |
+| `kotoki_consumer_processing_seconds` | histogram | `queue` |
+| `kotoki_consumer_inflight` | gauge | `queue` |
+| `kotoki_outbox_published_total` | counter | `event_type` |
+| `kotoki_outbox_publish_failures_total` | counter | `event_type`, `reason` = `nack`/`timeout` |
+| `kotoki_outbox_pending` | gauge (dihitung tiap 15 s) | – |
+| `kotoki_outbox_oldest_pending_age_seconds` | gauge | – |
+| `kotoki_outbox_failed` | gauge | – |
+| `kotoki_job_runs_total` | counter | `job`, `result` = `ok`/`error`/`skipped_locked` |
+| `kotoki_job_duration_seconds` | histogram | `job` |
+| `kotoki_job_items_total` | counter | `job`, `action` |
 
-Alert awal (detail di Bab 13): `kaiwa_outbox_oldest_pending_age_seconds > 60` selama 5 m; `kaiwa_outbox_failed > 0`; kedalaman `*.dlq > 0` selama 10 m (warning) dan `evaluation.session_completed.dlq > 10` (page); kedalaman queue utama naik terus 15 m.
+Alert awal (detail di Bab 13): `kotoki_outbox_oldest_pending_age_seconds > 60` selama 5 m; `kotoki_outbox_failed > 0`; kedalaman `*.dlq > 0` selama 10 m (warning) dan `evaluation.session_completed.dlq > 10` (page); kedalaman queue utama naik terus 15 m.
 
 ### 9.8 Proses worker & deployment (D-094)
 
@@ -10104,7 +10105,7 @@ Interval dan lock key adalah konstanta kode di `internal/jobs/scheduler.go`; set
 
 Aturan scheduler:
 - Satu goroutine per job dengan `time.Ticker`; jitter awal acak 0–interval; run berikutnya tidak dimulai jika run sebelumnya belum selesai di instance yang sama.
-- Hasil `ran=false` dicatat sebagai `kaiwa_job_runs_total{result="skipped_locked"}`.
+- Hasil `ran=false` dicatat sebagai `kotoki_job_runs_total{result="skipped_locked"}`.
 - Jika koneksi pemegang lock putus, lock lepas dan instance lain bisa mulai; karena itu setiap job MUST tetap idempotent dan memakai lock/kondisi baris sendiri (di bawah). Advisory lock hanya optimasi untuk mencegah kerja ganda.
 - Advisory lock session-level butuh koneksi langsung ke PostgreSQL (bukan PgBouncer transaction pooling) — lihat Bab 13.
 
@@ -10112,7 +10113,7 @@ Aturan scheduler:
 
 Tujuan: menutup sesi yang pemiliknya (pod realtime) mati atau timer-nya terlewat. **Semantik aturan dimiliki Bab 5 §5.6.4 (R-9); bab ini menetapkan mekanik job.** Setiap penutupan memanggil method `session.Service` yang sama dengan jalur realtime (Bab 5 §5.2: `BeginEnding`, `Finalize`, `FailActive`, `FailStart`) — idempotent, memakai optimistic `sessions.version`, dan (untuk sesi yang pernah `ACTIVE`) menulis `session.completed` ke outbox di transaksi terminal (Bab 5 §5.7). Setiap sesi diproses di transaksi sendiri; error satu sesi di-log dan tidak menghentikan run. Konflik versi / `ErrInvalidTransition` (owner pod ternyata masih hidup dan menulis duluan) → sesi dilewati (`result="noop"`). Batas 200 sesi per aturan per run. Urutan evaluasi aturan per tick: (e) → (a) → (b) → (c) → (d) [builder call: (e) lebih dulu agar sesi handoff yang tidak kembali ditutup dengan `billable_end = handoff_at`, S-10].
 
-Heartbeat (R-7; nama, format & TTL milik Bab 7 §7.9): key `kaiwa:session:{id}:hb`, nilai epoch ms terakhir runtime hidup, ditulis owner tiap 5 s, TTL 60 s. "Heartbeat hilang > 45 s" = key tidak ada **atau** `now − nilai > SWEEPER_HEARTBEAT_TIMEOUT` (45 s).
+Heartbeat (R-7; nama, format & TTL milik Bab 7 §7.9): key `kotoki:session:{id}:hb`, nilai epoch ms terakhir runtime hidup, ditulis owner tiap 5 s, TTL 60 s. "Heartbeat hilang > 45 s" = key tidak ada **atau** `now − nilai > SWEEPER_HEARTBEAT_TIMEOUT` (45 s).
 
 | Aturan | Query kandidat | Tindakan |
 |---|---|---|
@@ -10133,12 +10134,12 @@ Heartbeat (R-7; nama, format & TTL milik Bab 7 §7.9): key `kaiwa:session:{id}:h
    }
    // MGET heartbeat yang error juga me-reset redisHealthySince dan membatalkan (b) tick itu.
    suspended := s.redisHealthySince.IsZero() || now.Sub(s.redisHealthySince) < 45*time.Second
-   metrics.HeartbeatChecksSuspended.Set(bool01(suspended)) // kaiwa_sweeper_heartbeat_checks_suspended
+   metrics.HeartbeatChecksSuspended.Set(bool01(suspended)) // kotoki_sweeper_heartbeat_checks_suspended
    ```
    Proses sweeper yang baru start (atau baru mengambil lock) mulai dengan `redisHealthySince` nol, sehingga (b) baru aktif ≥ 45 s setelah ping sukses pertama. Aturan (a), (c), (d) tetap berjalan (hanya butuh Postgres).
-2. **Kehilangan heartbeat massal.** Jika dalam satu tick jumlah kandidat (b) ≥ 20 **dan** ≥ 50 % dari seluruh sesi `ACTIVE` yang dibaca (pembilang dan penyebut sama-sama **tanpa** sesi `handoff_at IS NOT NULL`, S-10) → (b) **di-skip untuk tick itu** (tidak ada sesi yang di-`FailActive`), log ERROR `sweeper.mass_heartbeat_loss` (jumlah kandidat, jumlah ACTIVE), naikkan `kaiwa_sweeper_mass_heartbeat_loss_total` (alert Bab 13). Indikasi Redis flush/failover, bukan crash pod.
+2. **Kehilangan heartbeat massal.** Jika dalam satu tick jumlah kandidat (b) ≥ 20 **dan** ≥ 50 % dari seluruh sesi `ACTIVE` yang dibaca (pembilang dan penyebut sama-sama **tanpa** sesi `handoff_at IS NOT NULL`, S-10) → (b) **di-skip untuk tick itu** (tidak ada sesi yang di-`FailActive`), log ERROR `sweeper.mass_heartbeat_loss` (jumlah kandidat, jumlah ACTIVE), naikkan `kotoki_sweeper_mass_heartbeat_loss_total` (alert Bab 13). Indikasi Redis flush/failover, bukan crash pod.
 
-Idempotency: transisi hanya sah dari status sumber yang diharapkan (D-051) dengan `WHERE id=$1 AND version=$2`; menjalankan ulang sweeper pada sesi yang sudah terminal adalah no-op. Ledger memakai idempotency key D-033. Metric: `kaiwa_sweeper_actions_total{rule="a|b|c|d|e",result="ok|noop|error"}` (Bab 5 §5.6.4); `rule="b",result="ok"` > 0 berkelanjutan menandakan pod realtime crash (alert Bab 13).
+Idempotency: transisi hanya sah dari status sumber yang diharapkan (D-051) dengan `WHERE id=$1 AND version=$2`; menjalankan ulang sweeper pada sesi yang sudah terminal adalah no-op. Ledger memakai idempotency key D-033. Metric: `kotoki_sweeper_actions_total{rule="a|b|c|d|e",result="ok|noop|error"}` (Bab 5 §5.6.4); `rule="b",result="ok"` > 0 berkelanjutan menandakan pod realtime crash (alert Bab 13).
 
 Index yang dibutuhkan dari Bab 5: `sessions (status, expires_at) WHERE status IN ('STARTING','ACTIVE','ENDING')` atau setara; untuk (e) `sessions (handoff_at) WHERE handoff_at IS NOT NULL` (partial, kecil).
 
@@ -10289,7 +10290,7 @@ Seed v1 (`seed/0070_prompts.sql`, key `SUMMARY`; `output_schema` NULL — output
 
 #### 9.9.7 `balance_reconcile`
 
-Jadwal & lock: tabel §9.9.1 (1 jam, `7100006`). Isi query (R1–R6), semantik pelanggaran, gauge `kaiwa_balance_invariant_violations{check}`, dan aturan "tidak ada auto-fix" didefinisikan Bab 4 §4.8; bab ini hanya menjalankannya. Read-only, setiap query dengan `SET LOCAL statement_timeout = '60s'` di transaksi `READ ONLY`; satu query gagal/timeout → log ERROR, lanjut ke query berikutnya, run dicatat `result="error"`.
+Jadwal & lock: tabel §9.9.1 (1 jam, `7100006`). Isi query (R1–R6), semantik pelanggaran, gauge `kotoki_balance_invariant_violations{check}`, dan aturan "tidak ada auto-fix" didefinisikan Bab 4 §4.8; bab ini hanya menjalankannya. Read-only, setiap query dengan `SET LOCAL statement_timeout = '60s'` di transaksi `READ ONLY`; satu query gagal/timeout → log ERROR, lanjut ke query berikutnya, run dicatat `result="error"`.
 
 #### 9.9.8 `account_purge`
 
@@ -10297,7 +10298,7 @@ Jadwal & lock: tabel §9.9.1 (15 menit, `7100007`). Memproses user `status='DELE
 
 #### 9.9.9 `memory_cleanup`
 
-Jadwal & lock: tabel §9.9.1 (1 jam, `7100008`). Menjalankan `SysDeleteExpiredMemories` (Bab 11 §11.8.3) per batch 1.000 sampai < 1.000 baris terhapus, lalu `INCR kaiwa:user:{user_id}:memver` untuk setiap `user_id` terdampak. Memory milik user `DELETED` dihapus oleh `account_purge` (§9.9.8), bukan job ini.
+Jadwal & lock: tabel §9.9.1 (1 jam, `7100008`). Menjalankan `SysDeleteExpiredMemories` (Bab 11 §11.8.3) per batch 1.000 sampai < 1.000 baris terhapus, lalu `INCR kotoki:user:{user_id}:memver` untuk setiap `user_id` terdampak. Memory milik user `DELETED` dihapus oleh `account_purge` (§9.9.8), bukan job ini.
 
 #### 9.9.10 `partition_maintenance` (S-6)
 
@@ -10322,7 +10323,7 @@ Per tabel `T ∈ {session_turns, session_events}`, berurutan:
    DROP TABLE session_turns_p202603;
    ```
    Partisi berstatus *detach pending* (run sebelumnya terputus) → `ALTER TABLE … DETACH PARTITION … FINALIZE` lalu `DROP`. Partisi yang batas atasnya ≥ awal bulan berjalan tidak pernah di-drop (guard kode).
-3. **Pemeriksaan.** Gauge `kaiwa_partition_months_ahead{table}` = jumlah partisi dengan batas bawah > now(); alert Bab 13 jika < 2 (insert ke bulan tanpa partisi akan gagal karena tidak ada `DEFAULT`). Counter `kaiwa_partitions_created_total{table}`, `kaiwa_partitions_dropped_total{table}`.
+3. **Pemeriksaan.** Gauge `kotoki_partition_months_ahead{table}` = jumlah partisi dengan batas bawah > now(); alert Bab 13 jika < 2 (insert ke bulan tanpa partisi akan gagal karena tidak ada `DEFAULT`). Counter `kotoki_partitions_created_total{table}`, `kotoki_partitions_dropped_total{table}`.
 
 Idempotent (`IF NOT EXISTS`, drop berbasis batas waktu). Job ini hanya melakukan DDL partisi; penghapusan baris di partisi batas tetap dilakukan `transcript_retention` (§9.9.4). Butuh koneksi langsung ke PostgreSQL (DDL + `CONCURRENTLY`), sama seperti advisory lock (Bab 13).
 
@@ -10340,7 +10341,7 @@ Idempotent (`IF NOT EXISTS`, drop berbasis batas waktu). Job ini hanya melakukan
 
 | Env | Default |
 |---|---|
-| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672/` (lokal: vhost `/`); produksi memakai vhost `/kaiwa`, di URL ditulis `%2Fkaiwa` (mis. `amqps://kaiwa:***@mq:5671/%2Fkaiwa`, Bab 13) |
+| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672/` (lokal: vhost `/`); produksi memakai vhost `/kotoki`, di URL ditulis `%2Fkotoki` (mis. `amqps://kotoki:***@mq:5671/%2Fkotoki`, Bab 13) |
 | `WORKER_HANDLERS` | – (wajib) |
 | `WORKER_HTTP_ADDR` | `:8081` |
 | `WORKER_SHUTDOWN_GRACE` | `25s` |
@@ -10363,14 +10364,14 @@ Nama env mengikuti katalog Bab 13 §13.2. Interval job lain tidak dikonfigurasi 
 - D-NEW-9-1: `session.completed` diterbitkan untuk transisi terminal `COMPLETED` **dan** `FAILED` asalkan sesi pernah `ACTIVE` (`started_at IS NOT NULL`); payload memuat `final_status` (R-10). Sesi CANCELLED/ABANDONED/STARTING→FAILED tidak menerbitkan event.
 - D-NEW-9-2: `event_outbox` tanpa status `PROCESSING`; lock baris dipegang selama publish+confirm dalam satu transaksi; status `PENDING`/`PUBLISHED`/`FAILED`, `OUTBOX_MAX_ATTEMPTS=10`, backoff `min(2^n, 300)` s. Kolom `traceparent`/`tracestate TEXT NULL` dipakai publisher sebagai parent span (R-31).
 - D-NEW-9-3: `aggregate_type` (`SESSION`/`EVALUATION`) dan `producer` (`API`/`REALTIME`/`WORKER`) memakai UPPER_SNAKE; `event_type` dan nama queue lowercase bertitik (routing key).
-- D-NEW-9-4: Topologi retry memakai exchange `kaiwa.retry` (masuk retry queue) dan `kaiwa.requeue` (keluar retry queue, hanya ke queue asal); DLQ via `kaiwa.dlx`. Alternate exchange `kaiwa.events.unrouted` menampung event tanpa consumer — `evaluation.failed`, `memory.extracted` (R-11) — TTL 3 hari.
+- D-NEW-9-4: Topologi retry memakai exchange `kotoki.retry` (masuk retry queue) dan `kotoki.requeue` (keluar retry queue, hanya ke queue asal); DLQ via `kotoki.dlx`. Alternate exchange `kotoki.events.unrouted` menampung event tanpa consumer — `evaluation.failed`, `memory.extracted` (R-11) — TTL 3 hari.
 - D-NEW-9-5: `x-delivery-limit=10` pada queue utama sebagai pengaman poison message.
 - D-NEW-9-6: Prefetch: evaluation 4, memory 4, summary 8, learner 16; timeout handler 200/120/60/30 s.
 - D-NEW-9-7: Retensi outbox `PUBLISHED` 7 hari; `processed_events` dan outbox `FAILED` 30 hari (R-21).
 - D-NEW-9-8: Tabel job §9.9.1 adalah satu-satunya sumber nama job, flag, interval, lock key (7100001–7100009), dan timeout (R-8). Flag `sweeper`: `session_sweeper`, `reservation_cleanup`; flag `cleanup`: `transcript_retention`, `audio_tmp_cleanup`, `outbox_retention`, `balance_reconcile`, `account_purge`, `memory_cleanup`, `partition_maintenance`.
-- D-NEW-9-9: Sweeper menerapkan aturan R-9: (a) expiry + 15 s → `COMPLETED`/`DURATION_ELAPSED`, `billable_end = LEAST(COALESCE(ending_at, ended_at), expires_at)`; (b) heartbeat `kaiwa:session:{id}:hb` hilang > 45 s → `FAILED`/`SERVER_ERROR`, `billable_end = LEAST(last_heartbeat_at, expires_at)` (heartbeat terakhir atau now − 45 s) — keduanya S-3, `BillableEnd` Bab 4 §4.5; (c) `ENDING` > 60 s → finalize; (d) `STARTING` > 30 s → `FAILED`, charge 0. Pengaman (b): nonaktif selama Redis tak terjangkau + 45 s setelah pulih; skip tick jika kandidat ≥ 20 dan ≥ 50 % sesi ACTIVE.
+- D-NEW-9-9: Sweeper menerapkan aturan R-9: (a) expiry + 15 s → `COMPLETED`/`DURATION_ELAPSED`, `billable_end = LEAST(COALESCE(ending_at, ended_at), expires_at)`; (b) heartbeat `kotoki:session:{id}:hb` hilang > 45 s → `FAILED`/`SERVER_ERROR`, `billable_end = LEAST(last_heartbeat_at, expires_at)` (heartbeat terakhir atau now − 45 s) — keduanya S-3, `BillableEnd` Bab 4 §4.5; (c) `ENDING` > 60 s → finalize; (d) `STARTING` > 30 s → `FAILED`, charge 0. Pengaman (b): nonaktif selama Redis tak terjangkau + 45 s setelah pulih; skip tick jika kandidat ≥ 20 dan ≥ 50 % sesi ACTIVE.
 - D-NEW-9-15 [builder call]: Aturan sweeper (e) (S-10): `ACTIVE` & `handoff_at < now − 30 s` → `BeginEnding(RECONNECT_TIMEOUT)` + `Finalize`, `billable_end = handoff_at` (`BillableEnd` Bab 4 §4.5), re-check `handoff_at` di `WHERE` transisi (attach yang menang → noop). Aturan (b) dan pengaman massal (pembilang & penyebut) mengecualikan sesi `handoff_at IS NOT NULL`. Urutan per tick (e) → (a) → (b) → (c) → (d).
-- D-NEW-9-16 [builder call]: Job `partition_maintenance` (S-6; `cleanup`, 24 h, lock `7100009`, timeout 10 m): membuat partisi bulanan UTC `{tabel}_pYYYYMM` sampai bulan berjalan + 3, men-drop (`DETACH … CONCURRENTLY` + `DROP`) partisi yang batas atasnya < now − 180 hari − 2 jam (`session_turns`) atau < now − 365 hari (`session_events`); tanpa partisi `DEFAULT`, gauge `kaiwa_partition_months_ahead` (alert < 2). `transcript_retention` tetap menghapus baris di partisi batas (DELETE batch berpredikat `created_at`) agar retensi tepat. Tidak ada FK ke `session_turns`/`session_events`.
+- D-NEW-9-16 [builder call]: Job `partition_maintenance` (S-6; `cleanup`, 24 h, lock `7100009`, timeout 10 m): membuat partisi bulanan UTC `{tabel}_pYYYYMM` sampai bulan berjalan + 3, men-drop (`DETACH … CONCURRENTLY` + `DROP`) partisi yang batas atasnya < now − 180 hari − 2 jam (`session_turns`) atau < now − 365 hari (`session_events`); tanpa partisi `DEFAULT`, gauge `kotoki_partition_months_ahead` (alert < 2). `transcript_retention` tetap menghapus baris di partisi batas (DELETE batch berpredikat `created_at`) agar retensi tepat. Tidak ada FK ke `session_turns`/`session_events`.
 - D-NEW-9-17 [builder call]: Summary worker memakai prompt DB key `SUMMARY` (`system_template` + `user_template`, struct `SummaryPromptData` §9.9.6); `max_output_tokens`/`temperature` dari `llm_params` version (nilai DB menang; default kode 400/0.3 hanya bila key tidak ada). Seed v1 di `seed/0070_prompts.sql`.
 - D-NEW-9-10: Semua consumer bisnis melewati event milik user `DELETED` (MarkProcessed + ACK, Bab 13 §13.9.3).
 - D-NEW-9-11: Retensi (R-21): `session_turns`, `sessions.summary_text`, `evaluation_findings` + teks feedback evaluasi (`details_purged_at`) 180 hari setelah `ended_at`; `session_events` 365 hari; skor evaluasi dipertahankan. Audio sementara: job `audio_tmp_cleanup` per jam (ambang 23 jam) menjamin batas 24 jam; lifecycle 1 hari = jaring pengaman (R-27).
@@ -10763,7 +10764,7 @@ func (e *LLMEvaluator) request(sessionID uuid.UUID, pv content.PromptVersion, ms
     return provider.StructuredRequest{
         Task:            "EVALUATION",                                 // = prompt key; label metrik Bab 8
         Messages:        msgs,                                         // [system, user] hasil prompt.Render (§10.6.2) (+ repair)
-        SchemaName:      fmt.Sprintf("kaiwa_evaluation_rubric_v%d", pv.Version),
+        SchemaName:      fmt.Sprintf("kotoki_evaluation_rubric_v%d", pv.Version),
         JSONSchema:      pv.OutputSchema,                              // prompt_versions.output_schema (§10.7.1)
         MaxOutputTokens: p.MaxOutputTokensOr(4000),                    // default kode hanya jika key tidak ada
         Temperature:     p.TemperatureOr(0),                           // 0 dikirim apa adanya
@@ -10806,7 +10807,7 @@ Return the complete corrected JSON object only. Follow the schema and all rules 
 
 Kolom hasil: `provider`/`model` = `StructuredResult.Provider`/`.Model` dari panggilan yang lolos validator (UPPERCASE, R-6); `used_fallback = true` jika hasil berasal dari call 3; `llm_call_count` = jumlah panggilan (1–3); `input_tokens`/`output_tokens` = jumlah `Usage` semua panggilan. Total waktu dibatasi handler timeout 200 s (Bab 9 §9.6.2); `context.DeadlineExceeded` → retry queue.
 
-Metric: `kaiwa_evaluation_llm_calls_total{provider, result="valid|invalid|error"}` (label `provider` UPPERCASE), `kaiwa_evaluation_latency_seconds` (session `ended_at` → `completed_at`; target P95 ≤ 120 s [builder call]). Fallback dicatat router sebagai `kaiwa_provider_fallback_total{capability="EVALUATION",reason="CALLER_DIRECTED"}` (Bab 8).
+Metric: `kotoki_evaluation_llm_calls_total{provider, result="valid|invalid|error"}` (label `provider` UPPERCASE), `kotoki_evaluation_latency_seconds` (session `ended_at` → `completed_at`; target P95 ≤ 120 s [builder call]). Fallback dicatat router sebagai `kotoki_provider_fallback_total{capability="EVALUATION",reason="CALLER_DIRECTED"}` (Bab 8).
 
 #### 10.6.2 Struktur prompt
 
@@ -10970,14 +10971,14 @@ Aturan:
 
 ### 10.7 Output LLM: JSON schema & validasi
 
-#### 10.7.1 JSON schema (`kaiwa_evaluation_rubric_v1`)
+#### 10.7.1 JSON schema (`kotoki_evaluation_rubric_v1`)
 
 Skema di bawah (dulu konstanta Go `RubricSchemaV1`) adalah isi **`prompt_versions.output_schema` seed EVALUATION v1** di `seed/0070_prompts.sql` (S-1) [builder call]; tidak ada salinan skema di kode. Worker mengirim `output_schema` version yang dipakai sebagai `JSONSchema` (§10.6.1), memvalidasi output terhadap skema yang sama (dikompilasi sekali dan di-cache per `prompt_version_id`), lalu mem-parse ke struct Go `evaluation.EvalOutput` (`internal/evaluation/rubric.go`, field = properti skema v1, `DisallowUnknownFields`). Version baru yang mengubah bentuk output wajib disertai perubahan kode parser/validator (ditangkap validator publish via contoh output, §10.6.2). Kompatibel dengan batasan strict mode Bab 8 §8.4.8 (semua properti `required`, `additionalProperties:false`, nullable via union type, hanya `pattern` sederhana). Adapter Gemini mengonversi skema bila perlu (Bab 8 §8.4.9); semua batas tetap ditegakkan oleh validator kode (§10.7.2). `$schema`/`$id` di bawah hanya dokumentasi; nilai yang di-seed tidak memuatnya.
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "kaiwa/evaluation-output/rubric-v1",
+  "$id": "kotoki/evaluation-output/rubric-v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["scores", "signals", "summary", "strengths", "focus_areas", "recommendations", "findings"],
@@ -11112,7 +11113,7 @@ Output **invalid** (memicu repair §10.6.1) jika:
 2. `summary`, salah satu `comment`, atau `explanation` tidak mengandung huruf Latin sama sekali (indikasi bukan bahasa Indonesia) — dicek: ≥ 50% rune adalah huruf Latin/spasi/tanda baca setelah membuang teks dalam 「」 dan karakter CJK.
 3. Lebih dari 50% findings ditolak oleh aturan per-finding di bawah.
 
-Aturan per-finding (finding yang melanggar **dibuang**, output tetap valid; metric `kaiwa_evaluation_findings_dropped_total{reason}`):
+Aturan per-finding (finding yang melanggar **dibuang**, output tetap valid; metric `kotoki_evaluation_findings_dropped_total{reason}`):
 - `finding_type` cocok dengan `dimension` sesuai tabel §10.1; `STRENGTH` → severity dipaksa `INFO`, `corrected` dipaksa null.
 - Field wajib/null sesuai tabel §10.1 (mis. `OBJECTIVE_NOT_MET` harus `turn_seq`/`original`/`corrected` null).
 - `turn_seq` (jika tidak null) adalah `sequence_number` turn yang memiliki baris USER di transcript.
@@ -11161,7 +11162,7 @@ Hasil yang disimpan: `pronunciation_utterance_count` = jumlah utterance sukses (
 - `MISPRONOUNCED_WORD`: kata dengan `AccuracyScore < 60` (severity `MAJOR` jika < 40, selain itu `MINOR`); ambil maksimal 5 kata dengan skor terendah di seluruh sesi, satu per kata unik (`Words[].Text`). `original_text` = kata; `explanation` = `Kata 「{word}」 kurang jelas diucapkan (akurasi {score}/100). Dengarkan contoh pelafalannya lalu ulangi perlahan, perhatikan panjang vokal dan konsonan ganda.`
 - `PROSODY_ISSUE`: maksimal 2 utterance dengan `ProsodyScore < 60` (severity `MINOR`; `ProsodyScore` nil → tidak dinilai). `original_text` = `user_text` (dipotong 60 rune); `explanation` = `Intonasi dan ritme kalimat ini terdengar kurang alami (prosodi {score}/100). Coba tiru irama penutur asli: beri jeda di batas frasa dan jangan memberi tekanan yang sama di setiap suku kata.`
 
-Kegagalan pronunciation tidak pernah menggagalkan evaluasi dan tidak memicu retry message. Jika `UNAVAILABLE`: `pronunciation_score=NULL`, overall dihitung dari 5 dimensi lainnya (D-096). Metric `kaiwa_pronunciation_assessments_total{result="assessed|unavailable", reason}`.
+Kegagalan pronunciation tidak pernah menggagalkan evaluasi dan tidak memicu retry message. Jika `UNAVAILABLE`: `pronunciation_score=NULL`, overall dihitung dari 5 dimensi lainnya (D-096). Metric `kotoki_pronunciation_assessments_total{result="assessed|unavailable", reason}`.
 
 ### 10.9 Publikasi `evaluation.completed`
 
@@ -11270,7 +11271,7 @@ Kode error endpoint ini (pemilik Bab 10, R-12) yang wajib ada di katalog Bab 5 �
 - Tiap sampel: 6–15 user turn, format input identik dengan worker (scenario context + transcript + statistik). ≥ 40 sampel menyertakan audio per utterance untuk kalibrasi pronunciation. Tambahan 8 sampel insufficient-evidence (tidak dinilai, menguji jalur §10.4).
 - Label: 2 rater independen (pengajar bahasa Jepang native/near-native) memberi skor 0–100 per dimensi + sinyal, dan daftar kesalahan MAJOR yang wajib terdeteksi (`turn_seq`, `original`, `finding_type`). Gold score = rata-rata 2 rater; selisih > 20 poin diadjudikasi rater ketiga.
 
-**Pengukuran** (tool `go run ./cmd/kaiwa-cli eval-golden --provider=<primary|fallback> --runs=3 --out report.json`):
+**Pengukuran** (tool `go run ./cmd/kotoki-cli eval-golden --provider=<primary|fallback> --runs=3 --out report.json`):
 
 | Metrik | Cara hitung | Kriteria lulus |
 |---|---|---|
@@ -11519,7 +11520,7 @@ consume session.completed (queue memory.session_completed)
        user_template via prompt.Render(pv, MemoryExtractionPromptData) → prompt.Rendered (S-1).
        Panggil provider.AsyncRouter.GenerateJSON (Bab 8 §8.2.5/§8.2.8; kapabilitas EVALUATION, retry &
        fallback di router §8.6.2) dengan StructuredRequest{Task:"MEMORY_EXTRACTION",
-       SchemaName: fmt.Sprintf("kaiwa_memory_extraction_v%d", pv.Version), JSONSchema: pv.OutputSchema,
+       SchemaName: fmt.Sprintf("kotoki_memory_extraction_v%d", pv.Version), JSONSchema: pv.OutputSchema,
        MaxOutputTokens: llm_params.max_output_tokens (default 2000), Temperature: llm_params.temperature
        (default 0), Seed: llm_params.seed (default nil), RequestID:"MEMORY_EXTRACTION:{session_id}"};
        nilai DB menang, default kode hanya bila key tidak ada; top_p diabaikan [builder call].
@@ -11536,11 +11537,11 @@ consume session.completed (queue memory.session_completed)
        tx.Processed().MarkProcessed(ctx, events.QueueMemory, env)   -- INSERT processed_events
        tx.Outbox().Enqueue(ctx, events.NewMemoryExtracted(…))       -- memory.extracted (payload Bab 9 §9.5.4)
      COMMIT
- 12. Redis INCR kaiwa:user:{user_id}:memver (EXPIRE 7 hari) — invalidasi cache sesi aktif (§11.7.5).
+ 12. Redis INCR kotoki:user:{user_id}:memver (EXPIRE 7 hari) — invalidasi cache sesi aktif (§11.7.5).
  13. ACK.
 ```
 
-Payload `memory.extracted` mengikuti schema kanonik Bab 9 §9.5.4 (routing key `memory.extracted`, tanpa consumer di MVP → `kaiwa.events.unrouted`, R-11): `created_memory_ids` = baris hasil INSERT, `updated_memory_ids` = baris hasil REINFORCE, `superseded_memory_ids` = baris lama yang di-SUPERSEDE, `category_counts` = jumlah dibuat per kategori, `prompt_version_id`, `provider`/`model` dari `StructuredResult` (UPPERCASE, R-6). Diterbitkan juga ketika tidak ada memory baru (array kosong).
+Payload `memory.extracted` mengikuti schema kanonik Bab 9 §9.5.4 (routing key `memory.extracted`, tanpa consumer di MVP → `kotoki.events.unrouted`, R-11): `created_memory_ids` = baris hasil INSERT, `updated_memory_ids` = baris hasil REINFORCE, `superseded_memory_ids` = baris lama yang di-SUPERSEDE, `category_counts` = jumlah dibuat per kategori, `prompt_version_id`, `provider`/`model` dari `StructuredResult` (UPPERCASE, R-6). Diterbitkan juga ketika tidak ada memory baru (array kosong).
 
 Format transcript yang dikirim ke LLM (satu baris per pihak, `seq` = `sequence_number`):
 
@@ -11714,7 +11715,7 @@ Contoh output:
 
 #### 11.5.3 Validasi deterministik (server, setelah LLM)
 
-Diterapkan berurutan; kandidat yang gagal dibuang dan dihitung di metric `kaiwa_memory_candidates_rejected_total{reason}`.
+Diterapkan berurutan; kandidat yang gagal dibuang dan dihitung di metric `kotoki_memory_candidates_rejected_total{reason}`.
 
 | # | Aturan | `reason` |
 |---|---|---|
@@ -11846,7 +11847,7 @@ type ContextItem struct {
 
 type MemoryContext struct {
     SessionID     uuid.UUID     `json:"session_id"`
-    UserMemVer    int64         `json:"user_mem_ver"`   // nilai kaiwa:user:{id}:memver saat dibangun
+    UserMemVer    int64         `json:"user_mem_ver"`   // nilai kotoki:user:{id}:memver saat dibangun
     Core          []ContextItem `json:"core"`           // PROFILE_FACT, PREFERENCE, LEARNING_PATTERN
     CoreTokens    int           `json:"core_tokens"`
     Episodic      []ContextItem `json:"episodic"`
@@ -11871,7 +11872,7 @@ type RetrievalService interface {
 type TurnText struct{ UserText, AssistantSpokenText string }
 ```
 
-`BuildSessionContext` dan `RefreshEpisodic` tidak pernah mengembalikan error yang menggagalkan sesi: pada error mereka mengembalikan hasil kosong/sebelumnya dengan `Degraded = true` dan mencatat metric `kaiwa_memory_retrieval_degraded_total{stage}`.
+`BuildSessionContext` dan `RefreshEpisodic` tidak pernah mengembalikan error yang menggagalkan sesi: pada error mereka mengembalikan hasil kosong/sebelumnya dengan `Degraded = true` dan mencatat metric `kotoki_memory_retrieval_degraded_total{stage}`.
 
 #### 11.7.2 Estimasi token & budget
 
@@ -11892,7 +11893,7 @@ Dipanggil runtime saat sesi `STARTING` (paralel dengan pembukaan koneksi provide
 ```text
 BuildSessionContext(in):
   if !profile.memory_enabled: return MemoryContext{} (kosong, tidak degraded)
-  ver := redis GET kaiwa:user:{u}:memver (missing → 0)
+  ver := redis GET kotoki:user:{u}:memver (missing → 0)
   qvec, err := Embed(in.ScenarioText)                       -- gagal → qvec = nil, Degraded = true
   rows := ListCoreCandidates(u)                             -- SQL §11.7.4, maks 200 baris
   for r in rows:
@@ -11907,7 +11908,7 @@ BuildSessionContext(in):
   episodic := trim sampai EpisodicTokens <= Budget.MemoryEpisodic (500)
   -- item.tokens = prompt.EstimateTokens(rendered line) (Bab 7 §7.8.1, §11.7.2)
   mc := MemoryContext{UserMemVer: ver, ...}
-  redis SET kaiwa:session:{session_id}:memctx <json mc> EX (duration_seconds + 900)
+  redis SET kotoki:session:{session_id}:memctx <json mc> EX (duration_seconds + 900)
   return mc
 ```
 
@@ -11978,19 +11979,19 @@ OnTurnPersisted(turn):                               -- dipanggil runtime setela
       eps, err := SearchEpisodic(u, vec, 0.75, 3, exclude=sessionID); if err: return
       eps := trim ≤ Budget.MemoryEpisodic (500) token, estimator Bab 7
       runtime.memctx.Episodic = eps                   -- dipakai pada generasi LLM berikutnya
-      redis SET kaiwa:session:{id}:memctx (TTL dipertahankan)
+      redis SET kotoki:session:{id}:memctx (TTL dipertahankan)
 
 PostTurnTask():                                      -- runtime Bab 7, tugas async pasca-turn (bukan tepat
                                                      -- sebelum generation; tidak di critical path)
   ReloadCoreIfChanged(ctx, &memctx):
-    ver := redis GET kaiwa:user:{u}:memver            -- 1 GET per turn
+    ver := redis GET kotoki:user:{u}:memver            -- 1 GET per turn
     if ver != memctx.UserMemVer:
         ulangi ListCoreCandidates + scoring (pakai qvec awal yang disimpan in-memory), buang item
         episodik yang id-nya sudah tidak ACTIVE, set UserMemVer = ver
   Prompt builder memakai memctx terakhir yang tersedia — tidak pernah menunggu retrieval.
 ```
 
-`kaiwa:user:{user_id}:memver` di-`INCR` oleh: memory worker setelah commit, endpoint hapus memory, cleanup job (per user yang terdampak). Saat pod lain mengambil alih sesi (D-084), runtime membaca `kaiwa:session:{id}:memctx`; jika tidak ada → `BuildSessionContext` ulang.
+`kotoki:user:{user_id}:memver` di-`INCR` oleh: memory worker setelah commit, endpoint hapus memory, cleanup job (per user yang terdampak). Saat pod lain mengambil alih sesi (D-084), runtime membaca `kotoki:session:{id}:memctx`; jika tidak ada → `BuildSessionContext` ulang.
 
 #### 11.7.6 Rendering ke prompt (input untuk Prompt builder Bab 7)
 
@@ -12046,7 +12047,7 @@ WHERE id IN (SELECT id FROM memories WHERE expires_at < now() ORDER BY expires_a
 RETURNING user_id;
 ```
 
-Diulang sampai < 1.000 baris terhapus; lalu `INCR kaiwa:user:{id}:memver` untuk setiap `user_id` unik. Satu query seragam untuk `ACTIVE` kedaluwarsa, `SUPERSEDED`, dan tombstone — semua hard delete.
+Diulang sampai < 1.000 baris terhapus; lalu `INCR kotoki:user:{id}:memver` untuk setiap `user_id` unik. Satu query seragam untuk `ACTIVE` kedaluwarsa, `SUPERSEDED`, dan tombstone — semua hard delete.
 
 Memory user `users.status = 'DELETED'` **tidak** ditangani job ini: job `account_purge` (Bab 9 §9.9.8) menjalankan `DELETE FROM memories WHERE user_id=$1` sebagai langkah 2 urutan purge Bab 13 §13.9.3, setelah `ACCOUNT_PURGE_DELAY`. Data learner (Bab 12) diperlakukan sama (§12.10).
 
@@ -12098,7 +12099,7 @@ BEGIN
       ON CONFLICT (user_id, category, memory_key) WHERE status='DELETED'
           DO UPDATE SET expires_at = EXCLUDED.expires_at, updated_at = now()
 COMMIT
-redis INCR kaiwa:user:{u}:memver
+redis INCR kotoki:user:{u}:memver
 ```
 
 Tombstone hanya menyimpan `category` + `memory_key` (tanpa konten) dan mencegah memory worker membuat ulang slot yang sama selama 90 hari. Tombstone tidak pernah ditampilkan di API.
@@ -12140,7 +12141,7 @@ Test wajib (Bab 14 menjalankannya):
 
 ### 11.12 Metrics
 
-`kaiwa_memory_extraction_duration_seconds`, `kaiwa_memory_candidates_total{category}`, `kaiwa_memory_candidates_rejected_total{reason}`, `kaiwa_memory_apply_total{action=created|reinforced|superseded}`, `kaiwa_memory_retrieval_duration_seconds{stage=start|turn}`, `kaiwa_memory_retrieval_degraded_total{stage}`, `kaiwa_memory_context_tokens{part=core|episodic}` (histogram), `kaiwa_memory_cleanup_deleted_total`.
+`kotoki_memory_extraction_duration_seconds`, `kotoki_memory_candidates_total{category}`, `kotoki_memory_candidates_rejected_total{reason}`, `kotoki_memory_apply_total{action=created|reinforced|superseded}`, `kotoki_memory_retrieval_duration_seconds{stage=start|turn}`, `kotoki_memory_retrieval_degraded_total{stage}`, `kotoki_memory_context_tokens{part=core|episodic}` (histogram), `kotoki_memory_cleanup_deleted_total`.
 
 ### Keputusan bab ini
 
@@ -12153,7 +12154,7 @@ Test wajib (Bab 14 menjalankannya):
 - D-NEW-11-7: "Ringkasan turn terakhir" (D-098) = gabungan 3 turn terakhir (600 rune) tanpa LLM; refresh episodik async setelah setiap turn, tidak pernah menahan generasi.
 - D-NEW-11-8: Prioritas core = `0.40*importance + 0.25*confidence + 0.15*recency(90 hari) + 0.20*relevance(scenario)`, ambang 0.45.
 - D-NEW-11-9: Skip extraction jika < 3 turn user dengan ≥ 5 rune, atau `memory_enabled = false`.
-- D-NEW-11-10: Redis key `kaiwa:session:{id}:memctx` (TTL durasi + 900 s) dan `kaiwa:user:{id}:memver` (counter invalidasi).
+- D-NEW-11-10: Redis key `kotoki:session:{id}:memctx` (TTL durasi + 900 s) dan `kotoki:user:{id}:memver` (counter invalidasi).
 - D-NEW-11-11: Batas per user: 100 PROFILE_FACT+PREFERENCE, 40 LEARNING_PATTERN, 200 EPISODIC.
 - D-NEW-11-12: Endpoint memory kanonik (R-18): `GET /api/v1/profile/memories`, `DELETE /api/v1/profile/memories`, `DELETE /api/v1/profile/memories/{memory_id}`; error `404 MEMORY_NOT_FOUND`. Admin tidak dapat membaca memory.
 - D-NEW-11-13: Memory user dengan `users.status='DELETED'` di-hard-delete oleh job `account_purge` (Bab 9 §9.9.8, urutan Bab 13 §13.9.3); memory worker melewati event milik user `DELETED`; FK `memories.user_id` `ON DELETE CASCADE`.
@@ -12521,7 +12522,7 @@ ReplaySkill(tx, u, skill):                     -- di dalam transaksi + advisory 
   WHERE user_id=$u AND skill=$skill
 ```
 
-Sifat: deterministik (fungsi murni dari himpunan baris + prior + konstanta), idempoten (replay ulang menghasilkan nilai sama; duplikat event ditahan `ON CONFLICT`), `last_evidence_at` = max `assessed_at`, trend selalu memakai urutan `assessed_at`. Biaya O(jumlah estimate skill) per replay — wajar karena out-of-order jarang (hanya saat evaluasi retry/DLQ). Metric `kaiwa_learner_replays_total{skill}`. Jalur normal §12.5.3 secara matematis sama dengan replay yang menambahkan satu baris di akhir.
+Sifat: deterministik (fungsi murni dari himpunan baris + prior + konstanta), idempoten (replay ulang menghasilkan nilai sama; duplikat event ditahan `ON CONFLICT`), `last_evidence_at` = max `assessed_at`, trend selalu memakai urutan `assessed_at`. Biaya O(jumlah estimate skill) per replay — wajar karena out-of-order jarang (hanya saat evaluasi retry/DLQ). Metric `kotoki_learner_replays_total{skill}`. Jalur normal §12.5.3 secara matematis sama dengan replay yang menambahkan satu baris di akhir.
 
 #### 12.5.4 Contoh perhitungan (golden test `TestProficiencyGolden_Grammar`)
 
@@ -13010,28 +13011,28 @@ Bab ini mendefinisikan semua yang dibutuhkan agar tiga binary (`cmd/api`, `cmd/r
                               │
                  Cloud L4 Load Balancer (TCP idle timeout ≥ 350 s)
                               │
-             Gateway API + Envoy Gateway (TLS termination, host api.<domain>)
+             Gateway API + Envoy Gateway (TLS termination, host api.kotoki.id dan realtime.kotoki.id)
                │  /api/v1/realtime  (WebSocket, cookie consistent-hash)
                │  /api/v1/*         (REST)
        ┌───────┴─────────┐
        ▼                 ▼
- kaiwa-realtime      kaiwa-api            kaiwa-worker-core      (outbox, sweeper, cleanup)
- (Deployment,        (Deployment,         kaiwa-worker-evaluation
-  node pool           2–6 pod)            kaiwa-worker-memory
-  "realtime",                             kaiwa-worker-learner   (learner, summary)
+ kotoki-realtime      kotoki-api            kotoki-worker-core      (outbox, sweeper, cleanup)
+ (Deployment,        (Deployment,         kotoki-worker-evaluation
+  node pool           2–6 pod)            kotoki-worker-memory
+  "realtime",                             kotoki-worker-learner   (learner, summary)
   3–20 pod)               │                        │
        │                  │                        │
        ├── Redis (managed, primary+replica) ◄──────┤
        ├── PostgreSQL 17 + pgvector (managed HA) ◄─┤
-       ├── Object storage (bucket kaiwa-audio-prod)◄┤
-       └── STT/LLM/TTS/Embedding providers         ├── RabbitMQ 3 node (namespace kaiwa-data, quorum queues)
+       ├── Object storage (bucket kotoki-audio-prod)◄┤
+       └── STT/LLM/TTS/Embedding providers         ├── RabbitMQ 3 node (namespace kotoki-data, quorum queues)
                                                    └── Evaluation/Embedding/Pronunciation providers
  Observability: OTel Collector (tail sampling) → Tempo; Grafana Alloy → Loki; Prometheus (kube-prometheus-stack) → Grafana; KEDA untuk autoscaling.
 ```
 
 Aturan:
-- `kaiwa-api` dan `kaiwa-realtime` **tidak** terhubung ke RabbitMQ. Event async ditulis ke `event_outbox` di Postgres dan dipublish oleh worker (D-090). Hanya pod worker yang membuka koneksi AMQP.
-- Frontend (repo terpisah) di-host di luar cluster ini (CDN). Frontend dan API MUST berada di bawah registrable domain yang sama (mis. `app.<domain>` dan `api.<domain>`) agar cookie refresh `SameSite=Strict` (D-021) terkirim.
+- `kotoki-api` dan `kotoki-realtime` **tidak** terhubung ke RabbitMQ. Event async ditulis ke `event_outbox` di Postgres dan dipublish oleh worker (D-090). Hanya pod worker yang membuka koneksi AMQP.
+- Frontend (repo terpisah) di-host di luar cluster ini (CDN). Frontend dan API MUST berada di bawah registrable domain yang sama (`app.kotoki.id`, `api.kotoki.id`, `realtime.kotoki.id`, D-008) agar cookie refresh `SameSite=Strict` (D-021) terkirim.
 - Region deployment: region cloud terdekat dengan pengguna Indonesia (Jakarta, fallback Singapura) [builder call]. Semua data store dan cluster di region yang sama.
 
 ### 13.2 Konfigurasi & environment variable
@@ -13039,7 +13040,7 @@ Aturan:
 #### 13.2.1 Konvensi
 
 1. Semua konfigurasi dibaca **sekali** di `main()` lewat `github.com/caarlos0/env/v11` ke struct bertipe di `internal/platform/config`, lalu di-inject (D-004). `os.Getenv` MUST NOT dipanggil di luar `internal/platform/config` (ditegakkan `forbidigo`, Bab 14).
-2. **Tanpa prefix aplikasi** (tidak ada `KAIWA_`). Nama = `UPPER_SNAKE_CASE` dengan prefix grup topik (`APP_`, `LOG_`, `HTTP_`, `OPS_`, `DB_`, `REDIS_`, `RABBITMQ_`, `OUTBOX_`, `WORKER_`, `S3_`, `AUTH_`, `MAIL_`/`SMTP_`, `CORS_`, `WS_`, `REALTIME_`, `VAD_`, `TURN_`, `BARGEIN_`, `PROVIDER_`, `FAKE_`, `EVAL_`, `PRONUNCIATION_`, `SWEEPER_`, `RETENTION_`, `CONTENT_`, `OTEL_`). Nama yang ditetapkan register (`PROVIDER_MODE`, `PROVIDER_PROFILE_*`, `INITIAL_BALANCE_SECONDS`, `WS_ALLOWED_ORIGINS`) dipakai persis.
+2. **Tanpa prefix aplikasi** (tidak ada `KOTOKI_`). Nama = `UPPER_SNAKE_CASE` dengan prefix grup topik (`APP_`, `LOG_`, `HTTP_`, `OPS_`, `DB_`, `REDIS_`, `RABBITMQ_`, `OUTBOX_`, `WORKER_`, `S3_`, `AUTH_`, `MAIL_`/`SMTP_`, `CORS_`, `WS_`, `REALTIME_`, `VAD_`, `TURN_`, `BARGEIN_`, `PROVIDER_`, `FAKE_`, `EVAL_`, `PRONUNCIATION_`, `SWEEPER_`, `RETENTION_`, `CONTENT_`, `OTEL_`). Nama yang ditetapkan register (`PROVIDER_MODE`, `PROVIDER_PROFILE_*`, `INITIAL_BALANCE_SECONDS`, `WS_ALLOWED_ORIGINS`) dipakai persis.
 3. **Pemilik nama = bab pemilik topik** (kolom "Sumber" tiap subbab: Bab 3 auth, Bab 6 konten, Bab 7 realtime, Bab 8 provider & fake, Bab 9 worker/outbox/job, Bab 10 evaluasi, Bab 13 infrastruktur umum, privasi, observability). Katalog ini **mengumpulkan** semua variabel dan MUST identik (nama & default) dengan tabel bab pemiliknya; jika berbeda, bab pemilik yang benar dan katalog ini diperbaiki. Interval, lock ID, dan timeout job terjadwal **bukan** env — konstanta tabel Bab 9 §9.9.1 (R-8).
 4. Durasi memakai format Go `time.ParseDuration` (`800ms`, `15s`, `720h`). Bilangan bulat tanpa satuan. Daftar dipisah koma. Boolean `true`/`false`. Identifier provider selalu UPPERCASE (R-6).
 5. Default per binary diisi dengan **prefill struct** sebelum `env.Parse` (caarlos0/env tidak menimpa field yang sudah terisi bila variabel tidak diset dan tag tidak punya `envDefault`):
@@ -13090,7 +13091,7 @@ func LoadRealtime() (Realtime, error) {
 
 | Variabel | Default | Wajib | Bin | Keterangan |
 |---|---|---|---|---|
-| `DB_URL` 🔒 | — | Ya | ARW | `postgres://user:pass@host:5432/kaiwa?sslmode=verify-full&sslrootcert=/etc/kaiwa/pg-ca.pem`. Lokal: `postgres://kaiwa:kaiwa@localhost:5432/kaiwa?sslmode=disable`. |
+| `DB_URL` 🔒 | — | Ya | ARW | `postgres://user:pass@host:5432/kotoki?sslmode=verify-full&sslrootcert=/etc/kotoki/pg-ca.pem`. Lokal: `postgres://kotoki:kotoki@localhost:5432/kotoki?sslmode=disable`. |
 | `DB_MAX_CONNS` | A `10`, R `6`, W `4` | — | ARW | `pgxpool` MaxConns per pod (§13.3.2). |
 | `DB_MIN_CONNS` | A `2`, R `2`, W `1` | — | ARW | |
 | `DB_MAX_CONN_LIFETIME` | `30m` | — | ARW | Ditambah jitter ±10% oleh pgxpool. Memastikan koneksi pindah ke primary baru pasca-failover. |
@@ -13099,9 +13100,9 @@ func LoadRealtime() (Realtime, error) {
 | `DB_STATEMENT_TIMEOUT` | A/R `5s`, W `30s` | — | ARW | Diset sebagai runtime param `statement_timeout` di setiap koneksi. |
 | `DB_LOCK_TIMEOUT` | `3s` | — | ARW | Runtime param `lock_timeout`. |
 | `DB_IDLE_IN_TX_TIMEOUT` | `15s` | — | ARW | Runtime param `idle_in_transaction_session_timeout`. |
-| `DB_MIGRATE_URL` 🔒 | — | Ya (Job) | Job migrate | Dipakai hanya oleh Job migration (role `kaiwa_migrator`). Tidak pernah diberikan ke pod aplikasi. |
+| `DB_MIGRATE_URL` 🔒 | — | Ya (Job) | Job migrate | Dipakai hanya oleh Job migration (role `kotoki_migrator`). Tidak pernah diberikan ke pod aplikasi. |
 
-`application_name` di-set otomatis = nama service (`kaiwa-api`, `kaiwa-realtime`, `kaiwa-worker`) agar terlihat di `pg_stat_activity`. Tool `kaiwa-cli provider-report` (Bab 8 §8.7) membaca `DATABASE_URL` (env tool CLI, bukan binary server).
+`application_name` di-set otomatis = nama service (`kotoki-api`, `kotoki-realtime`, `kotoki-worker`) agar terlihat di `pg_stat_activity`. Tool `kotoki-cli provider-report` (Bab 8 §8.7) membaca `DATABASE_URL` (env tool CLI, bukan binary server).
 
 #### 13.2.4 Redis (sumber: Bab 13)
 
@@ -13120,7 +13121,7 @@ func LoadRealtime() (Realtime, error) {
 
 | Variabel | Default | Wajib | Bin | Keterangan |
 |---|---|---|---|---|
-| `RABBITMQ_URL` 🔒 | `amqp://guest:guest@localhost:5672/` | Ya | W | Vhost mengikuti Bab 9 §9.6: lokal = vhost default `/`, staging/prod = vhost `/kaiwa` (path URI di-encode `%2Fkaiwa`) [builder call, S-20]. Lokal compose: `amqp://kaiwa:kaiwa@localhost:5672/`; prod `amqps://…:5671/%2Fkaiwa`. Prefetch & backoff reconnect = konstanta Bab 9 §9.6.2/§9.7.6 (bukan env). |
+| `RABBITMQ_URL` 🔒 | `amqp://guest:guest@localhost:5672/` | Ya | W | Vhost mengikuti Bab 9 §9.6: lokal = vhost default `/`, staging/prod = vhost `/kotoki` (path URI di-encode `%2Fkotoki`) [builder call, S-20]. Lokal compose: `amqp://kotoki:kotoki@localhost:5672/`; prod `amqps://…:5671/%2Fkotoki`. Prefetch & backoff reconnect = konstanta Bab 9 §9.6.2/§9.7.6 (bukan env). |
 | `OUTBOX_POLL_INTERVAL` | `500ms` | — | W | D-090. |
 | `OUTBOX_BATCH_SIZE` | `100` | — | W | |
 | `OUTBOX_CONFIRM_TIMEOUT` | `5s` | — | W | Publisher confirm. |
@@ -13133,7 +13134,7 @@ func LoadRealtime() (Realtime, error) {
 |---|---|---|---|---|
 | `S3_ENDPOINT` | `` | — | RW | Kosong = endpoint AWS default. Lokal `http://localhost:9000`. |
 | `S3_REGION` | `us-east-1` | Prod | RW | |
-| `S3_BUCKET_AUDIO` | `kaiwa-audio-local` | Prod | RW | Prod: `kaiwa-audio-prod`; staging: `kaiwa-audio-staging`. |
+| `S3_BUCKET_AUDIO` | `kotoki-audio-local` | Prod | RW | Prod: `kotoki-audio-prod`; staging: `kotoki-audio-staging`. |
 | `S3_ACCESS_KEY_ID` 🔒 | `` | — | RW | Kosong → default credential chain (IRSA / Workload Identity). |
 | `S3_SECRET_ACCESS_KEY` 🔒 | `` | — | RW | |
 | `S3_USE_PATH_STYLE` | `false` | — | RW | `true` untuk MinIO. |
@@ -13148,8 +13149,8 @@ Capture audio utterance dikendalikan `PRONUNCIATION_CAPTURE_ENABLED` (Bab 7, §1
 |---|---|---|---|---|
 | `AUTH_JWT_SECRET` 🔒 | — | Ya | A | HS256 (D-021). Base64, ≥ 32 byte setelah decode. Header JWT `kid` = 8 karakter hex pertama SHA-256 secret (Bab 3 §3.6). |
 | `AUTH_JWT_PREVIOUS_SECRET` 🔒 | `` | — | A | Secret lama, **hanya untuk verifikasi** selama rotasi (≥ 15 menit setelah rotasi lalu dihapus). |
-| `AUTH_JWT_ISSUER` | `kaiwa-api` | — | A | |
-| `AUTH_JWT_AUDIENCE` | `kaiwa` | — | A | |
+| `AUTH_JWT_ISSUER` | `kotoki-api` | — | A | |
+| `AUTH_JWT_AUDIENCE` | `kotoki` | — | A | |
 | `AUTH_ACCESS_TOKEN_TTL` | `15m` | — | A | D-021. |
 | `AUTH_REFRESH_TOKEN_TTL` | `720h` | — | A | 30 hari, D-021. |
 | `AUTH_REFRESH_REUSE_GRACE` | `10s` | — | A | Bab 3 §3.8. |
@@ -13161,12 +13162,12 @@ Capture audio utterance dikendalikan `PRONUNCIATION_CAPTURE_ENABLED` (Bab 7, §1
 | `AUTH_ARGON2_PARALLELISM` | `1` | — | A | |
 | `AUTH_ARGON2_MAX_CONCURRENT` | `8` | — | A | Semaphore hash/verify per pod. |
 | `WS_TICKET_TTL` | `30s` | — | A | D-022. |
-| `REALTIME_PUBLIC_URL` | `ws://localhost:8081` | Prod | A | Bab 3 §3.11: `realtime_url` = nilai ini + `/api/v1/realtime`. |
+| `REALTIME_PUBLIC_URL` | `ws://localhost:8081` | Prod | A | Bab 3 §3.11: `realtime_url` = nilai ini + `/api/v1/realtime`. Produksi: `wss://realtime.kotoki.id` (§13.2.17). |
 | `INITIAL_BALANCE_SECONDS` | `0` | — | A | D-031. Lokal `.env.example` = `3600`. |
 | `PRIVACY_POLICY_VERSION` | — | Ya | A | Versi terms+privacy saat ini, mis. `2026-10-01` (§13.9.1, Bab 3 §3.13). |
 | `ACCOUNT_PURGE_DELAY` | `1h` | — | W | Jeda sebelum job `account_purge` memproses akun `DELETED` (§13.9.3, Bab 9 §9.9.8). |
 | `MAIL_MODE` | `log` | Prod | A | `log` (isi email termasuk link reset dicetak ke log level `INFO` — hanya `local`/`dev`) atau `smtp`. |
-| `MAIL_FROM` | `Kaiwa <no-reply@localhost>` | Prod | A | |
+| `MAIL_FROM` | `Kotoki <no-reply@localhost>` | Prod | A | |
 | `SMTP_HOST` | `` | Prod* | A | *Wajib bila `MAIL_MODE=smtp`. |
 | `SMTP_PORT` | `587` | — | A | STARTTLS wajib. |
 | `SMTP_USERNAME` | `` | — | A | |
@@ -13201,7 +13202,7 @@ Capture audio utterance dikendalikan `PRONUNCIATION_CAPTURE_ENABLED` (Bab 7, §1
 | `PROVIDER_GEMINI_LLM_THINKING_BUDGET` | `0` | — | RW | Bab 8 §8.4.4 (`-1` = tidak dikirim). |
 | `OPENAI_API_KEY` 🔒, `GEMINI_API_KEY` 🔒 | `` | real | RW | |
 | `ELEVENLABS_API_KEY` 🔒, `DEEPGRAM_API_KEY` 🔒 | `` | real | R | |
-| `AZURE_SPEECH_KEY` 🔒, `AZURE_SPEECH_ENDPOINT` | `` / — | real | W | `AZURE_SPEECH_ENDPOINT` mis. `https://kaiwa-speech.cognitiveservices.azure.com`; tidak wajib bila `PROVIDER_PRONUNCIATION_PRIMARY=NONE`. |
+| `AZURE_SPEECH_KEY` 🔒, `AZURE_SPEECH_ENDPOINT` | `` / — | real | W | `AZURE_SPEECH_ENDPOINT` mis. `https://kotoki-speech.cognitiveservices.azure.com`; tidak wajib bila `PROVIDER_PRONUNCIATION_PRIMARY=NONE`. |
 | `ELEVENLABS_BASE_URL` / `ELEVENLABS_WS_BASE_URL` | `https://api.elevenlabs.io` / `wss://api.elevenlabs.io` | — | R | |
 | `DEEPGRAM_BASE_URL` / `DEEPGRAM_WS_BASE_URL` | `https://api.deepgram.com` / `wss://api.deepgram.com` | — | R | |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | — | RW | |
@@ -13236,7 +13237,7 @@ Variabel provider tambahan MUST didefinisikan dulu di Bab 8 dengan prefix `PROVI
 | `FAKE_LLM_TOKEN_INTERVAL_MS` / `FAKE_LLM_TEMPLATES_FILE` | `30` / `` | RW | |
 | `FAKE_TTS_MS_PER_CHAR` / `FAKE_TTS_CHUNK_INTERVAL_MS` / `FAKE_TTS_WAVEFORM` | `120` / `5` / `tone` | R | |
 | `FAKE_EVAL_FIXTURE_DIR` | `` (fixture ter-embed) | W | |
-| `FAKE_FAULTS_REDIS_KEY` | `kaiwa:fake:faults` | RW | Fault injection runtime (Bab 8 §8.9.6, D-NEW-13-8; §13.13.1). |
+| `FAKE_FAULTS_REDIS_KEY` | `kotoki:fake:faults` | RW | Fault injection runtime (Bab 8 §8.9.6, D-NEW-13-8; §13.13.1). |
 | `FAKE_FAULTS_POLL_INTERVAL` | `1s` | RW | |
 
 #### 13.2.10 Realtime (sumber: Bab 7 §7.2 — nama & default disalin persis)
@@ -13245,7 +13246,7 @@ Variabel provider tambahan MUST didefinisikan dulu di Bab 8 dengan prefix `PROVI
 |---|---|---|---|
 | `REALTIME_POD_ID` | `$HOSTNAME` | R | Identitas pod untuk owner key. |
 | `WS_ALLOWED_ORIGINS` | — (wajib) | R | D-022. |
-| `WS_ALLOW_EMPTY_ORIGIN` | `false` (dev: `true`) | R | Izinkan handshake tanpa `Origin` (`kaiwa-cli`). Ditolak `true` di staging/prod (§13.2.13). |
+| `WS_ALLOW_EMPTY_ORIGIN` | `false` (dev: `true`) | R | Izinkan handshake tanpa `Origin` (`kotoki-cli`). Ditolak `true` di staging/prod (§13.2.13). |
 | `REALTIME_READY_MAX_SESSIONS` | `95` | R | `/readyz` 503 (R-22). |
 | `REALTIME_MAX_SESSIONS` | `100` | R | `session.start` sesi baru ditolak 4503 (D-103, R-22). |
 | `REALTIME_HARD_MAX_SESSIONS` | `120` | R | Upgrade ditolak HTTP 503 (R-22). |
@@ -13275,7 +13276,7 @@ Variabel provider tambahan MUST didefinisikan dulu di Bab 8 dengan prefix `PROVI
 | `BALANCE_TICK_INTERVAL` | `10s` | R | |
 | `REPLAY_MAXLEN` / `REPLAY_TTL` | `500` / `120s` | R | D-083. |
 | `OWNER_TTL` / `OWNER_REFRESH_INTERVAL` | `15s` / `5s` | R | D-084. |
-| `HEARTBEAT_INTERVAL` / `HEARTBEAT_TTL` | `5s` / `60s` | R | Key `kaiwa:session:{id}:hb` (R-7). |
+| `HEARTBEAT_INTERVAL` / `HEARTBEAT_TTL` | `5s` / `60s` | R | Key `kotoki:session:{id}:hb` (R-7). |
 | `CONTEXT_RECENT_TURNS` / `CONTEXT_RECENT_TURNS_MAX` | `8` / `12` | R | |
 | `ROLLING_SUMMARY_TRIGGER_TURNS` / `ROLLING_SUMMARY_TIMEOUT` | `4` / `10s` | R | Model = profile `STANDARD` (Bab 8 `CompleteText`). |
 | `MAX_CONSECUTIVE_FAILED_TURNS` | `3` | R | |
@@ -13312,7 +13313,7 @@ Parameter LLM evaluasi (temperature, max output tokens, seed) **bukan env**: dib
 | Variabel | Default | Bin | Keterangan |
 |---|---|---|---|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `` | ARW | Kosong → tracer no-op. Lokal `http://localhost:4317`; prod `http://otel-collector.observability:4317`. |
-| `OTEL_SERVICE_NAME` | `kaiwa-api` / `kaiwa-realtime` / `kaiwa-worker` | ARW | Untuk worker di Kubernetes di-set per Deployment (`kaiwa-worker-evaluation`, dst). |
+| `OTEL_SERVICE_NAME` | `kotoki-api` / `kotoki-realtime` / `kotoki-worker` | ARW | Untuk worker di Kubernetes di-set per Deployment (`kotoki-worker-evaluation`, dst). |
 | `OTEL_RESOURCE_ATTRIBUTES` | `` | ARW | Mis. `deployment.environment.name=prod`. |
 | `OTEL_TRACES_SAMPLER` | `always_on` | ARW | Sampling dilakukan di collector (tail sampling, §13.7.2). |
 | `METRICS_ENABLED` | `true` | ARW | `/metrics` di listener internal. |
@@ -13339,6 +13340,20 @@ Parameter LLM evaluasi (temperature, max output tokens, seed) **bukan env**: dib
 | `REALTIME_READY_MAX_SESSIONS ≤ REALTIME_MAX_SESSIONS ≤ REALTIME_HARD_MAX_SESSIONS` tidak terpenuhi | tolak | tolak | tolak |
 | Nilai durasi ≤ 0 atau `DB_MIN_CONNS > DB_MAX_CONNS` | tolak | tolak | tolak |
 
+#### 13.2.17 Nilai produksi yang bergantung pada domain (D-008) [builder call]
+
+| Variabel | Produksi (`kotoki.id`) | Staging (`staging.kotoki.id`) |
+|---|---|---|
+| `CORS_ALLOWED_ORIGINS` | `https://app.kotoki.id` | `https://app.staging.kotoki.id` |
+| `WS_ALLOWED_ORIGINS` | `https://app.kotoki.id` | `https://app.staging.kotoki.id` |
+| `REALTIME_PUBLIC_URL` | `wss://realtime.kotoki.id` | `wss://realtime.staging.kotoki.id` |
+| `PASSWORD_RESET_URL_BASE` | `https://app.kotoki.id/reset-password` | `https://app.staging.kotoki.id/reset-password` |
+| `MAIL_FROM` | `Kotoki <no-reply@kotoki.id>` | `Kotoki <no-reply@staging.kotoki.id>` |
+| `AUTH_REFRESH_COOKIE_DOMAIN` | kosong (host-only `api.kotoki.id`) | kosong |
+| `AUTH_REFRESH_COOKIE_SECURE` | `true` | `true` |
+
+Nilai ini ditempatkan di ConfigMap overlay `prod`/`staging` (`deploy/k8s/overlays/*`), bukan di kode. Domain pengirim `kotoki.id` harus punya SPF, DKIM, dan DMARC untuk `no-reply@kotoki.id` (tugas operasional DNS; tidak diuji otomatis).
+
 ### 13.3 PostgreSQL
 
 #### 13.3.1 Deployment produksi
@@ -13356,20 +13371,20 @@ Role database (dibuat oleh tim infra / Terraform, bukan migration):
 
 | Role | Dipakai oleh | Hak | `CONNECTION LIMIT` |
 |---|---|---|---|
-| `kaiwa_migrator` | Job migration | Owner schema `public`, DDL | 5 |
-| `kaiwa_api` | `kaiwa-api` | DML semua tabel via default privileges | 80 |
-| `kaiwa_realtime` | `kaiwa-realtime` | DML semua tabel | 140 |
-| `kaiwa_worker` | semua Deployment worker | DML semua tabel | 100 |
-| `kaiwa_readonly` | operator/on-call | `SELECT` | 10 |
+| `kotoki_migrator` | Job migration | Owner schema `public`, DDL | 5 |
+| `kotoki_api` | `kotoki-api` | DML semua tabel via default privileges | 80 |
+| `kotoki_realtime` | `kotoki-realtime` | DML semua tabel | 140 |
+| `kotoki_worker` | semua Deployment worker | DML semua tabel | 100 |
+| `kotoki_readonly` | operator/on-call | `SELECT` | 10 |
 
-`REVOKE UPDATE, DELETE ON balance_ledger, admin_audit_logs FROM kaiwa_api, kaiwa_realtime, kaiwa_worker;` (append-only, D-032) dijalankan oleh migrator setelah migration `000016`/`000021` — ditulis di file migration tersebut sebagai `GRANT`/`REVOKE` bersyarat `IF EXISTS` role (lokal role tidak ada → dilewati) [builder call].
+`REVOKE UPDATE, DELETE ON balance_ledger, admin_audit_logs FROM kotoki_api, kotoki_realtime, kotoki_worker;` (append-only, D-032) dijalankan oleh migrator setelah migration `000016`/`000021` — ditulis di file migration tersebut sebagai `GRANT`/`REVOKE` bersyarat `IF EXISTS` role (lokal role tidak ada → dilewati) [builder call].
 
 Pool per pod (`DB_MAX_CONNS`) dan total pada beban 1.000 CCU:
 
 | Komponen | Pod @1.000 CCU | Max pod (HPA) | Conn/pod | Total @1.000 | Total @max |
 |---|---|---|---|---|---|
-| kaiwa-realtime | 15 | 20 | 6 | 90 | 120 |
-| kaiwa-api | 3 | 6 | 10 | 30 | 60 |
+| kotoki-realtime | 15 | 20 | 6 | 90 | 120 |
+| kotoki-api | 3 | 6 | 10 | 30 | 60 |
 | worker-core | 2 | 2 | 4 | 8 | 8 |
 | worker-evaluation | 6 | 8 | 4 | 24 | 32 |
 | worker-memory | 3 | 4 | 4 | 12 | 16 |
@@ -13379,7 +13394,7 @@ Pool per pod (`DB_MAX_CONNS`) dan total pada beban 1.000 CCU:
 
 Aturan pemakaian koneksi:
 - Transaksi MUST pendek; **tidak boleh** memegang koneksi/transaksi selama memanggil provider, Redis lambat, atau RabbitMQ.
-- PgBouncer **tidak dipakai** di versi ini. Kriteria memperkenalkan PgBouncer (transaction mode, `max_prepared_statements` diaktifkan): total koneksi max > 70% `max_connections`, atau `kaiwa_db_pool_acquire_wait_seconds` P99 > 50 ms berkelanjutan 15 menit pada CPU DB < 60%.
+- PgBouncer **tidak dipakai** di versi ini. Kriteria memperkenalkan PgBouncer (transaction mode, `max_prepared_statements` diaktifkan): total koneksi max > 70% `max_connections`, atau `kotoki_db_pool_acquire_wait_seconds` P99 > 50 ms berkelanjutan 15 menit pada CPU DB < 60%.
 
 #### 13.3.3 Timeout
 
@@ -13396,7 +13411,7 @@ Query cleanup/retensi MUST bekerja dalam batch (ukuran batch per langkah di Bab 
 
 - Managed: automated backup harian + PITR (WAL) dengan **window 7 hari**; snapshot harian disimpan **14 hari**. Tidak ada snapshot bulanan jangka panjang (privasi: data akun yang dihapus hilang dari backup ≤ 14 hari, §13.9.3).
 - Enkripsi at rest (KMS provider) dan backup terenkripsi.
-- **Restore drill bulanan**: restore PITR ke instance sementara, jalankan `go run ./test/load/cmd/kaiwa-verify --db <url>` (invariant balance & FK, §13.12.6), catat waktu restore. Gagal → insiden SEV3.
+- **Restore drill bulanan**: restore PITR ke instance sementara, jalankan `go run ./test/load/cmd/kotoki-verify --db <url>` (invariant balance & FK, §13.12.6), catat waktu restore. Gagal → insiden SEV3.
 
 #### 13.3.5 Partitioning
 
@@ -13441,15 +13456,15 @@ Kriteria pemicu evaluasi ulang (granularitas partisi mingguan, tablespace/storag
 
 | Prefix | Pemilik | Isi |
 |---|---|---|
-| `kaiwa:ws_ticket:{sha256}` | Bab 3/7 | Ticket WS (D-022). |
-| `kaiwa:session:{id}:*` | Bab 7 | Owner, state, heartbeat, replay stream, generation (D-083, D-084). |
-| `kaiwa:ratelimit:{policy}:{subject}` | Bab 13 | Token bucket. |
-| `kaiwa:lock:{resource}` | Bab 7/9 | Lock pendek `SET NX PX` dengan value unik. |
-| `kaiwa:fake:faults` | Bab 13/8 | JSON fault injection, hanya `PROVIDER_MODE=fake`. |
+| `kotoki:ws_ticket:{sha256}` | Bab 3/7 | Ticket WS (D-022). |
+| `kotoki:session:{id}:*` | Bab 7 | Owner, state, heartbeat, replay stream, generation (D-083, D-084). |
+| `kotoki:ratelimit:{policy}:{subject}` | Bab 13 | Token bucket. |
+| `kotoki:lock:{resource}` | Bab 7/9 | Lock pendek `SET NX PX` dengan value unik. |
+| `kotoki:fake:faults` | Bab 13/8 | JSON fault injection, hanya `PROVIDER_MODE=fake`. |
 
 #### 13.4.3 Rate limiting
 
-Algoritma: **token bucket atomik via Lua** (`EVALSHA`), state di hash `kaiwa:ratelimit:{policy}:{subject}`; waktu memakai `redis.call('TIME')` (bebas clock skew pod). Implementasi di `internal/redisstore/ratelimit.go` (adapter), tanpa library tambahan; middleware pemakainya ada di `internal/httpapi` dan `internal/wsgateway`.
+Algoritma: **token bucket atomik via Lua** (`EVALSHA`), state di hash `kotoki:ratelimit:{policy}:{subject}`; waktu memakai `redis.call('TIME')` (bebas clock skew pod). Implementasi di `internal/redisstore/ratelimit.go` (adapter), tanpa library tambahan; middleware pemakainya ada di `internal/httpapi` dan `internal/wsgateway`.
 
 ```lua
 -- KEYS[1]=bucket key; ARGV[1]=capacity; ARGV[2]=refill tokens per ms (float); ARGV[3]=cost
@@ -13516,9 +13531,9 @@ Kebijakan (path persis endpoint mengikuti Bab 3/5; nama policy kanonik):
 | `api_user_default` | user | 60 | 300 / menit | endpoint terautentikasi lain (termasuk `GET /api/v1/me`, `PUT /api/v1/me/consents`, `GET`/`PATCH /api/v1/profile`, `GET /api/v1/profile/skills`, `GET /api/v1/profile/skills/{skill}/history`, `DELETE /api/v1/profile/skills`, `GET`/`DELETE /api/v1/profile/memories`, `DELETE /api/v1/profile/memories/{memory_id}`; R-18) |
 | `api_ip_default` | ip | 120 | 600 / menit | endpoint tanpa auth lain (termasuk `GET /api/v1/auth/terms`) |
 
-Respons ditolak: HTTP `429`, body format D-013 dengan `code = "RATE_LIMITED"`, header `Retry-After` (detik, dibulatkan ke atas). Respons diterima menyertakan `RateLimit-Remaining`. Metrik `kaiwa_ratelimit_rejected_total{policy}`.
+Respons ditolak: HTTP `429`, body format D-013 dengan `code = "RATE_LIMITED"`, header `Retry-After` (detik, dibulatkan ke atas). Respons diterima menyertakan `RateLimit-Remaining`. Metrik `kotoki_ratelimit_rejected_total{policy}`.
 
-**Saat Redis tidak tersedia:** limiter **fail-open ke limiter lokal** — token bucket in-memory per pod (implementasi sendiri, `sync.Mutex` + map dengan LRU 100.000 entri) memakai kebijakan yang sama. Error Redis di-log `warn` maksimal 1×/10 s dan dihitung `kaiwa_ratelimit_backend_errors_total`. Alasan: memblok login total saat Redis down lebih merugikan daripada melonggarkan limit sementara.
+**Saat Redis tidak tersedia:** limiter **fail-open ke limiter lokal** — token bucket in-memory per pod (implementasi sendiri, `sync.Mutex` + map dengan LRU 100.000 entri) memakai kebijakan yang sama. Error Redis di-log `warn` maksimal 1×/10 s dan dihitung `kotoki_ratelimit_backend_errors_total`. Alasan: memblok login total saat Redis down lebih merugikan daripada melonggarkan limit sementara.
 
 #### 13.4.4 Kebijakan saat Redis down
 
@@ -13529,37 +13544,37 @@ Respons ditolak: HTTP `429`, body format D-013 dengan `code = "RATE_LIMITED"`, h
 | API — endpoint lain | Normal (tidak bergantung Redis). |
 | Realtime — koneksi baru / reconnect | Rate limit fallback lokal; `GETDEL` ticket gagal → close `4503 SERVICE_UNAVAILABLE` setelah upgrade (Bab 7 §7.3.1 langkah 5b); client backoff 1, 2, 4, 8 s. |
 | Realtime — sesi berjalan | Mengikuti Bab 7 (runtime in-memory tetap jalan; replay buffer, heartbeat, mirror state terdegradasi). Postgres tetap otoritas; balance tetap benar. |
-| Worker — sweeper (D-054, R-9) | Semantik aturan milik Bab 5 §5.6, mekanik job Bab 9 §9.9.2. Aturan (b) "heartbeat hilang > 45 s" (key `kaiwa:session:{id}:hb`, R-7) **dinonaktifkan** selama Redis tidak terjangkau **dan** sampai Redis terjangkau terus-menerus ≥ `SWEEPER_HEARTBEAT_TIMEOUT` (45 s) setelah pulih (heartbeat yang hilang karena restart Redis bukan bukti sesi mati). Pengaman kedua: bila dalam satu tick kandidat (b) ≥ 20 sesi **dan** ≥ 50 % sesi `ACTIVE` → (b) di-skip tick itu + log ERROR + alert. Aturan (a) `expires_at + 15 s`, (c) `ENDING` > 60 s, (d) `STARTING` > 30 s tetap berjalan (hanya butuh Postgres). Metrik `kaiwa_sweeper_heartbeat_checks_suspended` (gauge 0/1). |
+| Worker — sweeper (D-054, R-9) | Semantik aturan milik Bab 5 §5.6, mekanik job Bab 9 §9.9.2. Aturan (b) "heartbeat hilang > 45 s" (key `kotoki:session:{id}:hb`, R-7) **dinonaktifkan** selama Redis tidak terjangkau **dan** sampai Redis terjangkau terus-menerus ≥ `SWEEPER_HEARTBEAT_TIMEOUT` (45 s) setelah pulih (heartbeat yang hilang karena restart Redis bukan bukti sesi mati). Pengaman kedua: bila dalam satu tick kandidat (b) ≥ 20 sesi **dan** ≥ 50 % sesi `ACTIVE` → (b) di-skip tick itu + log ERROR + alert. Aturan (a) `expires_at + 15 s`, (c) `ENDING` > 60 s, (d) `STARTING` > 30 s tetap berjalan (hanya butuh Postgres). Metrik `kotoki_sweeper_heartbeat_checks_suspended` (gauge 0/1). |
 | Worker — consumer | Tidak bergantung Redis. |
 
 ### 13.5 RabbitMQ produksi
 
-- **3 node RabbitMQ 4.x** via RabbitMQ Cluster Kubernetes Operator (`RabbitmqCluster`, namespace `kaiwa-data`), satu pod per zone (pod anti-affinity wajib), 1 vCPU / 2 GiB request, limit 2 vCPU / 2 GiB, PVC 20 Gi SSD per node [builder call: self-hosted operator sebagai default; managed RabbitMQ boleh bila mendukung quorum queue dan 3 node].
+- **3 node RabbitMQ 4.x** via RabbitMQ Cluster Kubernetes Operator (`RabbitmqCluster`, namespace `kotoki-data`), satu pod per zone (pod anti-affinity wajib), 1 vCPU / 2 GiB request, limit 2 vCPU / 2 GiB, PVC 20 Gi SSD per node [builder call: self-hosted operator sebagai default; managed RabbitMQ boleh bila mendukung quorum queue dan 3 node].
 - Semua queue **quorum** (D-092), replication factor 3; exchange & queue durable; message persistent (`delivery_mode=2`); publisher confirms wajib; manual ack. Topologi & retry didefinisikan di Bab 9.
-- Vhost `/kaiwa` (Bab 9 §9.6; di URI `%2Fkaiwa`) [builder call, S-20]; user `kaiwa-worker` (configure/write/read pada `^(kaiwa\.|evaluation\.|memory\.|learner\.|summary\.).*`), user `keda` (read-only monitoring), user `admin` hanya untuk operator.
+- Vhost `/kotoki` (Bab 9 §9.6; di URI `%2Fkotoki`) [builder call, S-20]; user `kotoki-worker` (configure/write/read pada `^(kotoki\.|evaluation\.|memory\.|learner\.|summary\.).*`), user `keda` (read-only monitoring), user `admin` hanya untuk operator.
 - TLS (amqps 5671) via cert-manager; port 5672 non-TLS dimatikan di prod.
 - `vm_memory_high_watermark.relative = 0.6`, `disk_free_limit.absolute = 2GB`.
-- Plugin `rabbitmq_prometheus` (port 15692) di-scrape Prometheus; gunakan endpoint `/metrics/detailed?vhost=%2Fkaiwa&family=queue_coarse_metrics` untuk metrik per queue.
+- Plugin `rabbitmq_prometheus` (port 15692) di-scrape Prometheus; gunakan endpoint `/metrics/detailed?vhost=%2Fkotoki&family=queue_coarse_metrics` untuk metrik per queue.
 - Monitoring wajib (alert §13.7.5): node down, quorum queue tanpa leader/kehilangan mayoritas, memory/disk alarm, kedalaman `*.dlq` > 0, backlog queue utama, unacked tumbuh terus.
-- Worker outbox juga mengekspor `kaiwa_rabbitmq_queue_messages{queue}` (via `QueueDeclarePassive` tiap 30 s) sehingga alert dan KEDA tidak bergantung pada format exporter.
+- Worker outbox juga mengekspor `kotoki_rabbitmq_queue_messages{queue}` (via `QueueDeclarePassive` tiap 30 s) sehingga alert dan KEDA tidak bergantung pada format exporter.
 
 ### 13.6 Object storage
 
 - Provider: S3-compatible (S3 / GCS interoperability / MinIO lokal) via `aws-sdk-go-v2` (D-003).
-- Bucket: `kaiwa-audio-{env}` (`kaiwa-audio-prod`, `kaiwa-audio-staging`, `kaiwa-audio-local`). Satu bucket per environment, **private**, Block Public Access aktif, versioning **nonaktif** (agar DELETE benar-benar menghapus), bucket policy menolak request tanpa TLS (`aws:SecureTransport=false` → Deny).
+- Bucket: `kotoki-audio-{env}` (`kotoki-audio-prod`, `kotoki-audio-staging`, `kotoki-audio-local`). Satu bucket per environment, **private**, Block Public Access aktif, versioning **nonaktif** (agar DELETE benar-benar menghapus), bucket policy menolak request tanpa TLS (`aws:SecureTransport=false` → Deny).
 - Key (D-099): `audio/tmp/{session_id}/{turn_id}.wav` — WAV PCM16 mono 16 kHz. Tidak ada `user_id`, email, atau nama file dari user di key/metadata. Metadata object: `x-amz-meta-session-id`, `x-amz-meta-turn-id` saja. `Content-Type: audio/wav`.
 - Enkripsi at rest: SSE `AES256` (`S3_SSE`), atau default encryption bucket dengan KMS bila provider mendukung. In transit: HTTPS.
 - Akses:
 
 | Principal | Aksi | Resource |
 |---|---|---|
-| `kaiwa-realtime` | `PutObject` | `audio/tmp/*` |
-| `kaiwa-worker` (evaluation, cleanup) | `GetObject`, `DeleteObject`, `ListBucket` (prefix `audio/tmp/`) | `audio/tmp/*` |
-| `kaiwa-api` | tidak ada | — |
+| `kotoki-realtime` | `PutObject` | `audio/tmp/*` |
+| `kotoki-worker` (evaluation, cleanup) | `GetObject`, `DeleteObject`, `ListBucket` (prefix `audio/tmp/`) | `audio/tmp/*` |
+| `kotoki-api` | tidak ada | — |
 
 - **Presigned URL tidak dipakai** di versi ini: browser tidak pernah membaca/menulis audio langsung [builder call].
 - **Lifecycle rule (D-099):** rule `expire-audio-tmp`: prefix `audio/tmp/`, `Expiration.Days = 1`, plus `AbortIncompleteMultipartUpload.DaysAfterInitiation = 1`. Karena granularitas lifecycle adalah hari (penghapusan aktual bisa sampai ±48 jam), **batas 24 jam dijamin oleh job `audio_tmp_cleanup`** (R-27; flag `cleanup`, per jam — jadwal & lock Bab 9 §9.9.1): `ListObjectsV2` prefix `audio/tmp/`, hapus object dengan `LastModified < now − RETENTION_AUDIO_TMP`. Worker evaluation menghapus object segera setelah evaluasi selesai; audio evaluasi `FAILED` dibiarkan sampai batas 24 jam (R-27). Lifecycle rule hanya jaring pengaman. Realtime hanya meng-upload bila `PRONUNCIATION_CAPTURE_ENABLED` **dan** `users.audio_consent = true` (R-19, Bab 7 §7.5.5).
-- Kegagalan upload audio di realtime: di-log `warn` + `kaiwa_storage_errors_total{op="put"}`, `session_turns.user_audio_object_key` tetap `NULL`, percakapan tidak terganggu (pronunciation turn itu `UNAVAILABLE`). Upload dilakukan asinkron (goroutine dengan timeout `S3_REQUEST_TIMEOUT`), bukan di jalur latensi turn.
+- Kegagalan upload audio di realtime: di-log `warn` + `kotoki_storage_errors_total{op="put"}`, `session_turns.user_audio_object_key` tetap `NULL`, percakapan tidak terganggu (pronunciation turn itu `UNAVAILABLE`). Upload dilakukan asinkron (goroutine dengan timeout `S3_REQUEST_TIMEOUT`), bukan di jalur latensi turn.
 
 ### 13.7 Observability
 
@@ -13574,7 +13589,7 @@ Field wajib di setiap baris:
 | `time` | RFC3339Nano UTC |
 | `level` | `DEBUG`/`INFO`/`WARN`/`ERROR` |
 | `msg` | pesan statis (bukan string terinterpolasi) |
-| `service` | `kaiwa-api` / `kaiwa-realtime` / `kaiwa-worker-<deployment>` |
+| `service` | `kotoki-api` / `kotoki-realtime` / `kotoki-worker-<deployment>` |
 | `version`, `git_commit` | dari ldflags `internal/platform/buildinfo` |
 | `env` | `APP_ENV` |
 | `trace_id`, `span_id` | bila context punya span aktif (handler slog membaca `trace.SpanContextFromContext`) |
@@ -13596,23 +13611,23 @@ Span wajib:
 
 | Span (nama) | Kind | Binary | Atribut penting |
 |---|---|---|---|
-| `HTTP {method} {route}` | server | A, R | semconv HTTP, `kaiwa.user_id` |
+| `HTTP {method} {route}` | server | A, R | semconv HTTP, `kotoki.user_id` |
 | `db.{sqlc_query_name}` | client | ARW | `db.system=postgresql`, `db.operation.name`; via `pgx.QueryTracer` sendiri (tanpa library tambahan), SQL text tidak dicatat |
-| `balance.reserve`, `session.create` | internal | A | `kaiwa.session_id` |
-| `realtime.connect` | server | R | `kaiwa.session_id`, `kaiwa.resume` |
-| `session.start` | internal | R | `kaiwa.session_id`, `kaiwa.provider_profile` |
-| `turn` (root trace baru per turn) | internal | R | `kaiwa.session_id`, `kaiwa.turn_id`, `kaiwa.turn_seq`, `kaiwa.generation`, `kaiwa.turn_status` |
-| `turn.stt_final_wait` | internal | R | `kaiwa.provider` |
-| `provider.stt.stream` (per sesi koneksi; span pendek per reconnect STT) | client | R | `kaiwa.provider`, `kaiwa.model` |
-| `provider.llm.stream` | client | R W | `kaiwa.provider`, `kaiwa.model`, `kaiwa.first_token_ms`, `kaiwa.input_tokens`, `kaiwa.output_tokens`, `kaiwa.used_fallback` |
-| `provider.tts.stream` | client | R | `kaiwa.provider`, `kaiwa.model`, `kaiwa.first_audio_ms`, `kaiwa.characters` |
-| event `first_audio_sent` di span `turn` | — | R | `kaiwa.turn_end_to_first_audio_ms` |
-| event `barge_in` di span `turn` | — | R | `kaiwa.barge_in_stop_ms` |
-| `session.end` / `session.settle` | internal | R W | `kaiwa.end_reason`, `kaiwa.charged_seconds` |
-| `outbox.publish {event_type}` | producer | W | `messaging.system=rabbitmq`, `messaging.destination.name=kaiwa.events`, `messaging.message.id` |
-| `rabbitmq.consume {queue}` | consumer | W | `messaging.*`, `kaiwa.attempt` |
-| `evaluation.run`, `memory.extract`, `learner.update`, `summary.generate` | internal | W | `kaiwa.session_id` |
-| `provider.evaluation`, `provider.embedding`, `provider.pronunciation` | client | W R | `kaiwa.provider`, `kaiwa.model` |
+| `balance.reserve`, `session.create` | internal | A | `kotoki.session_id` |
+| `realtime.connect` | server | R | `kotoki.session_id`, `kotoki.resume` |
+| `session.start` | internal | R | `kotoki.session_id`, `kotoki.provider_profile` |
+| `turn` (root trace baru per turn) | internal | R | `kotoki.session_id`, `kotoki.turn_id`, `kotoki.turn_seq`, `kotoki.generation`, `kotoki.turn_status` |
+| `turn.stt_final_wait` | internal | R | `kotoki.provider` |
+| `provider.stt.stream` (per sesi koneksi; span pendek per reconnect STT) | client | R | `kotoki.provider`, `kotoki.model` |
+| `provider.llm.stream` | client | R W | `kotoki.provider`, `kotoki.model`, `kotoki.first_token_ms`, `kotoki.input_tokens`, `kotoki.output_tokens`, `kotoki.used_fallback` |
+| `provider.tts.stream` | client | R | `kotoki.provider`, `kotoki.model`, `kotoki.first_audio_ms`, `kotoki.characters` |
+| event `first_audio_sent` di span `turn` | — | R | `kotoki.turn_end_to_first_audio_ms` |
+| event `barge_in` di span `turn` | — | R | `kotoki.barge_in_stop_ms` |
+| `session.end` / `session.settle` | internal | R W | `kotoki.end_reason`, `kotoki.charged_seconds` |
+| `outbox.publish {event_type}` | producer | W | `messaging.system=rabbitmq`, `messaging.destination.name=kotoki.events`, `messaging.message.id` |
+| `rabbitmq.consume {queue}` | consumer | W | `messaging.*`, `kotoki.attempt` |
+| `evaluation.run`, `memory.extract`, `learner.update`, `summary.generate` | internal | W | `kotoki.session_id` |
+| `provider.evaluation`, `provider.embedding`, `provider.pronunciation` | client | W R | `kotoki.provider`, `kotoki.model` |
 | `sweeper.tick`, `cleanup.{job}` | internal | W | jumlah baris diproses |
 
 **Propagasi end-to-end lintas RabbitMQ:** saat `session.completed` (dan event lain) di-INSERT ke `event_outbox` di dalam transaksi bisnis, nilai `traceparent` dan `tracestate` dari context aktif disimpan di baris outbox (kolom yang didefinisikan Bab 9 — lihat D-NEW-13-6). Publisher memasang keduanya sebagai AMQP header `traceparent`/`tracestate`; consumer meng-extract via `propagation.TraceContext{}` dan memulai span consumer sebagai child. Retry (republish dari retry queue) mempertahankan header. Hasil: satu trace dari `session.end` di realtime → publish → evaluation/memory/summary → `evaluation.completed` → learner.
@@ -13631,7 +13646,7 @@ Setiap request/turn/message menghasilkan rantai span yang melewati **semua layer
 | Job terjadwal | `jobs` | satu root span per tick | `{job}.tick` |
 | **Service** | semua paket fitur | **setiap method publik `Service`/`RuntimeService`/`AdminService`/`RetrievalService`** memanggil `otel.Start` + `defer otel.End` (contoh di bawah) | `{fitur}.{Method}`, mis. `session.Create`, `balance.Settle`, `memory.RefreshEpisodic` |
 | Repository | `postgres` | `pgx.QueryTracer` (sudah ada) untuk setiap query; `postgres.Store.WithinTx` membuat span pembungkus | `db.{sqlc_query_name}`, `db.tx` |
-| Redis | `redisstore` | hook go-redis v9 buatan sendiri (`redis.Hook`: `ProcessHook`, `ProcessPipelineHook`) — tanpa dependensi tambahan | `redis.{command}` (mis. `redis.EVALSHA`), atribut `db.system=redis`; nilai key/argumen **tidak** dicatat, hanya prefix key (`kaiwa:session:*:rt`) |
+| Redis | `redisstore` | hook go-redis v9 buatan sendiri (`redis.Hook`: `ProcessHook`, `ProcessPipelineHook`) — tanpa dependensi tambahan | `redis.{command}` (mis. `redis.EVALSHA`), atribut `db.system=redis`; nilai key/argumen **tidak** dicatat, hanya prefix key (`kotoki:session:*:rt`) |
 | Object storage | `objectstore` | span manual di setiap method publik | `s3.{Operation}` (mis. `s3.PutObject`), atribut bucket + prefix key |
 | Provider | `provider` + adapter vendor | span client (sudah ada di tabel di atas); adapter menambah atribut `http.response.status_code` / kode error vendor | `provider.{cap}.{op}` |
 | Realtime runtime | `conversation` | root span per turn (sudah ada) + child per tahap (`turn.stt_final_wait`, `provider.llm.stream`, `provider.tts.stream`) | — |
@@ -13650,17 +13665,17 @@ func Start(ctx context.Context, name string, attrs ...attribute.KeyValue) (conte
 //       span.RecordError(err, trace.WithStackTrace(true))
 //       span.SetStatus(codes.Error, errs.CodeOf(err))
 //   - error bisnis yang diharapkan (validasi, saldo kurang, not found, conflict → 4xx):
-//       TIDAK set status Error; hanya atribut kaiwa.error_code = errs.CodeOf(err)
+//       TIDAK set status Error; hanya atribut kotoki.error_code = errs.CodeOf(err)
 //   - selalu: atribut lokasi asal error dari errs.LocationOf(err) (lihat di bawah):
 //       code.function.name, code.file.path, code.line.number   (OTel semconv code.*)
-//       plus kaiwa.error_code
+//       plus kotoki.error_code
 func End(span trace.Span, errp *error)
 ```
 
 ```go
 // pemakaian di setiap method publik service
 func (s *Service) Create(ctx context.Context, in CreateInput) (_ Session, err error) {
-    ctx, span := otel.Start(ctx, "session.Create", attribute.String("kaiwa.user_id", in.UserID.String()))
+    ctx, span := otel.Start(ctx, "session.Create", attribute.String("kotoki.user_id", in.UserID.String()))
     defer otel.End(span, &err)
     ...
 }
@@ -13684,7 +13699,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (_ Session, err er
 
 #### 13.7.3 Metrik
 
-Library: `github.com/prometheus/client_golang` (lihat D-NEW-13-9), endpoint `/metrics` di `OPS_ADDR`, di-scrape tiap 15 s oleh `PodMonitor`. Prefix `kaiwa_`. Satuan detik untuk histogram. **Label MUST NOT berisi** `user_id`, `session_id`, `turn_id`, email, atau nilai bebas lain (kardinalitas).
+Library: `github.com/prometheus/client_golang` (lihat D-NEW-13-9), endpoint `/metrics` di `OPS_ADDR`, di-scrape tiap 15 s oleh `PodMonitor`. Prefix `kotoki_`. Satuan detik untuk histogram. **Label MUST NOT berisi** `user_id`, `session_id`, `turn_id`, email, atau nilai bebas lain (kardinalitas).
 
 Bucket standar:
 - `HTTP_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 2.5, 5]`
@@ -13696,64 +13711,64 @@ Bucket standar:
 
 | Metrik | Tipe | Label |
 |---|---|---|
-| `kaiwa_http_requests_total` | counter | `service`, `method`, `route`, `status` |
-| `kaiwa_http_request_duration_seconds` | histogram (HTTP) | `service`, `method`, `route` |
-| `kaiwa_ratelimit_rejected_total` | counter | `policy` |
-| `kaiwa_ratelimit_backend_errors_total` | counter | — |
-| `kaiwa_auth_events_total` | counter | `event` (`login`, `refresh`, `refresh_reuse`, `password_reset`, `register`), `result` (`success`, `failure`) |
-| `kaiwa_sessions_created_total` | counter | `result` (`ok`, `insufficient_balance`, `error`) |
+| `kotoki_http_requests_total` | counter | `service`, `method`, `route`, `status` |
+| `kotoki_http_request_duration_seconds` | histogram (HTTP) | `service`, `method`, `route` |
+| `kotoki_ratelimit_rejected_total` | counter | `policy` |
+| `kotoki_ratelimit_backend_errors_total` | counter | — |
+| `kotoki_auth_events_total` | counter | `event` (`login`, `refresh`, `refresh_reuse`, `password_reset`, `register`), `result` (`success`, `failure`) |
+| `kotoki_sessions_created_total` | counter | `result` (`ok`, `insufficient_balance`, `error`) |
 
-**Realtime (latensi D-100/D-101)** — kanonik di **Bab 7 §7.14** (prefix `kaiwa_realtime_`, satuan detik, bucket di atas). Yang dipakai dashboard/alert/KEDA/load test bab ini:
+**Realtime (latensi D-100/D-101)** — kanonik di **Bab 7 §7.14** (prefix `kotoki_realtime_`, satuan detik, bucket di atas). Yang dipakai dashboard/alert/KEDA/load test bab ini:
 
 | Metrik (Bab 7 §7.14) | Dipakai untuk |
 |---|---|
-| `kaiwa_realtime_sessions_active{state}` | **metrik KEDA** (`sum` lintas `state`), kapasitas |
-| `kaiwa_realtime_session_capacity`, `kaiwa_realtime_draining` | alert kapasitas, dashboard |
-| `kaiwa_realtime_connections_total{result}` | K6, alert `RealtimeRejectingCapacity`, `WSConnectFailureHigh` |
-| `kaiwa_realtime_turn_end_to_first_audio_seconds{kind,provider_profile,used_fallback}` | D-100, K1, alert latensi |
-| `kaiwa_realtime_server_overhead_seconds` | K2, `ServerOverheadHigh` |
-| `kaiwa_realtime_stt_final_seconds`, `kaiwa_realtime_llm_first_sentence_seconds`, `kaiwa_realtime_tts_first_audio_seconds` | dashboard per stage |
-| `kaiwa_realtime_bargein_stop_seconds` | D-101 (server, R-26), K3 |
-| `kaiwa_realtime_slow_consumer_total`, `kaiwa_realtime_protocol_violations_total{kind}` | K9, `RealtimeOutboundDrops` |
-| `kaiwa_realtime_reconnect_total{result,replay}` | K8, F6/F9/F16 |
-| `kaiwa_realtime_frame_processing_seconds{stage}` | CPU per sesi (§13.11) |
-| `kaiwa_realtime_turns_total{status}`, `kaiwa_realtime_fence_lost_total` | dashboard |
+| `kotoki_realtime_sessions_active{state}` | **metrik KEDA** (`sum` lintas `state`), kapasitas |
+| `kotoki_realtime_session_capacity`, `kotoki_realtime_draining` | alert kapasitas, dashboard |
+| `kotoki_realtime_connections_total{result}` | K6, alert `RealtimeRejectingCapacity`, `WSConnectFailureHigh` |
+| `kotoki_realtime_turn_end_to_first_audio_seconds{kind,provider_profile,used_fallback}` | D-100, K1, alert latensi |
+| `kotoki_realtime_server_overhead_seconds` | K2, `ServerOverheadHigh` |
+| `kotoki_realtime_stt_final_seconds`, `kotoki_realtime_llm_first_sentence_seconds`, `kotoki_realtime_tts_first_audio_seconds` | dashboard per stage |
+| `kotoki_realtime_bargein_stop_seconds` | D-101 (server, R-26), K3 |
+| `kotoki_realtime_slow_consumer_total`, `kotoki_realtime_protocol_violations_total{kind}` | K9, `RealtimeOutboundDrops` |
+| `kotoki_realtime_reconnect_total{result,replay}` | K8, F6/F9/F16 |
+| `kotoki_realtime_frame_processing_seconds{stage}` | CPU per sesi (§13.11) |
+| `kotoki_realtime_turns_total{status}`, `kotoki_realtime_fence_lost_total` | dashboard |
 
 **Lintas binary (Bab 13)**
 
 | Metrik | Tipe | Label |
 |---|---|---|
-| `kaiwa_sessions_ended_total` | counter | `service`, `end_reason`, `status` |
-| `kaiwa_storage_errors_total` | counter | `op` |
+| `kotoki_sessions_ended_total` | counter | `service`, `end_reason`, `status` |
+| `kotoki_storage_errors_total` | counter | `op` |
 
-**Provider** — kanonik di **Bab 8 §8.8** (`kaiwa_provider_requests_total{provider,capability,model,outcome}`, `kaiwa_provider_errors_total{provider,capability,kind,vendor_code}`, `kaiwa_provider_latency_seconds{…,phase}`, `kaiwa_provider_fallback_total{capability,from,to,reason}`, `kaiwa_provider_circuit_state{provider,capability}` dengan nilai **0 CLOSED, 1 OPEN, 2 HALF_OPEN**, `kaiwa_provider_active`, `kaiwa_provider_usage_total`, `kaiwa_provider_cost_usd_total`, …). Nilai label `provider` dan `capability` UPPERCASE (R-6: `ELEVENLABS`, `FAKE_PRIMARY`, `STT`, `EVALUATION`, …).
+**Provider** — kanonik di **Bab 8 §8.8** (`kotoki_provider_requests_total{provider,capability,model,outcome}`, `kotoki_provider_errors_total{provider,capability,kind,vendor_code}`, `kotoki_provider_latency_seconds{…,phase}`, `kotoki_provider_fallback_total{capability,from,to,reason}`, `kotoki_provider_circuit_state{provider,capability}` dengan nilai **0 CLOSED, 1 OPEN, 2 HALF_OPEN**, `kotoki_provider_active`, `kotoki_provider_usage_total`, `kotoki_provider_cost_usd_total`, …). Nilai label `provider` dan `capability` UPPERCASE (R-6: `ELEVENLABS`, `FAKE_PRIMARY`, `STT`, `EVALUATION`, …).
 
-**Worker, outbox, job** — kanonik di **Bab 9 §9.7.9** (`kaiwa_consumer_messages_total{queue,result}` termasuk `result="skipped_deleted_user"`, `kaiwa_consumer_processing_seconds`, `kaiwa_outbox_pending`, `kaiwa_outbox_oldest_pending_age_seconds` (**outbox lag**), `kaiwa_outbox_failed`, `kaiwa_job_runs_total{job,result}`, `kaiwa_job_duration_seconds{job}`, `kaiwa_job_items_total{job,action}`; label `job` = nama job tabel Bab 9 §9.9.1). Tambahan yang diwajibkan bab ini (diekspor proses worker):
+**Worker, outbox, job** — kanonik di **Bab 9 §9.7.9** (`kotoki_consumer_messages_total{queue,result}` termasuk `result="skipped_deleted_user"`, `kotoki_consumer_processing_seconds`, `kotoki_outbox_pending`, `kotoki_outbox_oldest_pending_age_seconds` (**outbox lag**), `kotoki_outbox_failed`, `kotoki_job_runs_total{job,result}`, `kotoki_job_duration_seconds{job}`, `kotoki_job_items_total{job,action}`; label `job` = nama job tabel Bab 9 §9.9.1). Tambahan yang diwajibkan bab ini (diekspor proses worker):
 
 | Metrik | Tipe | Label |
 |---|---|---|
-| `kaiwa_job_last_success_timestamp_seconds` | gauge | `job` (nama Bab 9 §9.9.1: `session_sweeper`, `reservation_cleanup`, `transcript_retention`, `audio_tmp_cleanup`, `outbox_retention`, `balance_reconcile`, `account_purge`, `memory_cleanup`, `partition_maintenance`) |
-| `kaiwa_rabbitmq_queue_messages` | gauge | `queue` (termasuk `*.retry.*` dan `*.dlq` → **DLQ depth**; diekspor proses dengan handler `outbox`) |
-| `kaiwa_sweeper_heartbeat_checks_suspended` | gauge | — (0/1, §13.4.4; Bab 9 §9.9.2) |
-| `kaiwa_balance_invariant_violations` | gauge | `check` (`R1`…`R6`; hasil job `balance_reconcile`, query Bab 4 §4.8) |
+| `kotoki_job_last_success_timestamp_seconds` | gauge | `job` (nama Bab 9 §9.9.1: `session_sweeper`, `reservation_cleanup`, `transcript_retention`, `audio_tmp_cleanup`, `outbox_retention`, `balance_reconcile`, `account_purge`, `memory_cleanup`, `partition_maintenance`) |
+| `kotoki_rabbitmq_queue_messages` | gauge | `queue` (termasuk `*.retry.*` dan `*.dlq` → **DLQ depth**; diekspor proses dengan handler `outbox`) |
+| `kotoki_sweeper_heartbeat_checks_suspended` | gauge | — (0/1, §13.4.4; Bab 9 §9.9.2) |
+| `kotoki_balance_invariant_violations` | gauge | `check` (`R1`…`R6`; hasil job `balance_reconcile`, query Bab 4 §4.8) |
 
 **Infrastruktur klien (semua binary)**
 
 | Metrik | Tipe | Label |
 |---|---|---|
-| `kaiwa_db_pool_acquired_conns`, `kaiwa_db_pool_idle_conns`, `kaiwa_db_pool_max_conns` | gauge | — (dari `pgxpool.Stat()`) |
-| `kaiwa_db_pool_acquire_wait_seconds` | histogram `[0.001,0.005,0.01,0.05,0.1,0.5,1]` | — |
-| `kaiwa_db_query_duration_seconds` | histogram (HTTP) | `query` (nama query sqlc) |
-| `kaiwa_redis_command_errors_total` | counter | `op` |
-| `kaiwa_redis_pool_timeouts_total` | counter | — |
+| `kotoki_db_pool_acquired_conns`, `kotoki_db_pool_idle_conns`, `kotoki_db_pool_max_conns` | gauge | — (dari `pgxpool.Stat()`) |
+| `kotoki_db_pool_acquire_wait_seconds` | histogram `[0.001,0.005,0.01,0.05,0.1,0.5,1]` | — |
+| `kotoki_db_query_duration_seconds` | histogram (HTTP) | `query` (nama query sqlc) |
+| `kotoki_redis_command_errors_total` | counter | `op` |
+| `kotoki_redis_pool_timeouts_total` | counter | — |
 | Go runtime (`go_goroutines`, `go_memstats_*`, `go_gc_duration_seconds`), process | default collector | — |
 
 #### 13.7.4 Dashboard awal (Grafana, disimpan sebagai JSON di `deploy/k8s/base/observability/dashboards/`)
 
-1. **Kaiwa Overview** — sesi aktif total vs kapasitas, sesi dibuat/berakhir per `end_reason`, error rate API & WS, P95 D-100/D-101/D-102, status alert.
-2. **Realtime Latency** — heatmap `kaiwa_realtime_turn_end_to_first_audio_seconds` dan histogram per stage (`stt_final`, `llm_first_sentence`, `tts_first_audio`), P50/P95/P99 per `provider_profile`, `server_overhead_seconds`, `bargein_stop_seconds`, `frame_processing_seconds`, `slow_consumer_total`, CPU/memory per pod (nama Bab 7 §7.14).
+1. **Kotoki Overview** — sesi aktif total vs kapasitas, sesi dibuat/berakhir per `end_reason`, error rate API & WS, P95 D-100/D-101/D-102, status alert.
+2. **Realtime Latency** — heatmap `kotoki_realtime_turn_end_to_first_audio_seconds` dan histogram per stage (`stt_final`, `llm_first_sentence`, `tts_first_audio`), P50/P95/P99 per `provider_profile`, `server_overhead_seconds`, `bargein_stop_seconds`, `frame_processing_seconds`, `slow_consumer_total`, CPU/memory per pod (nama Bab 7 §7.14).
 3. **Providers** — request rate & error ratio per provider/capability, latency per stage, fallback rate, circuit state, active streams vs kuota vendor, usage (token/karakter/detik audio) → estimasi biaya.
-4. **Async** — outbox pending & lag, queue depth per queue (termasuk retry/DLQ), processing time, hasil per queue (Bab 9 §9.7.9), `kaiwa_job_runs_total` & `kaiwa_job_last_success_timestamp_seconds` per job Bab 9 §9.9.1.
+4. **Async** — outbox pending & lag, queue depth per queue (termasuk retry/DLQ), processing time, hasil per queue (Bab 9 §9.7.9), `kotoki_job_runs_total` & `kotoki_job_last_success_timestamp_seconds` per job Bab 9 §9.9.1.
 5. **Data stores** — PG (CPU, koneksi per role, pool wait, query P95 teratas, replication/failover), Redis (ops/s, memori, error), RabbitMQ (node, memori, disk, unacked).
 6. **Business integrity** — `balance_invariant_violations`, settlement per `end_reason`, charged seconds/jam, sesi `FAILED` per jam.
 
@@ -13763,31 +13778,31 @@ Bucket standar:
 
 | Alert | Ekspresi (ringkas) | For | Severity |
 |---|---|---|---|
-| `TurnLatencyP95High` | P95 `kaiwa_realtime_turn_end_to_first_audio_seconds{kind="reply"}` > 1.5 | 10m | warning |
+| `TurnLatencyP95High` | P95 `kotoki_realtime_turn_end_to_first_audio_seconds{kind="reply"}` > 1.5 | 10m | warning |
 | `TurnLatencyP95Critical` | sama > 2.5 | 5m | critical |
-| `ServerOverheadHigh` | P95 `kaiwa_realtime_server_overhead_seconds` > 0.15 | 10m | warning |
-| `BargeInStopP95High` | P95 `kaiwa_realtime_bargein_stop_seconds` > 0.15 | 10m | warning |
-| `RealtimeCapacityHigh` | `sum(kaiwa_realtime_sessions_active)/sum(kaiwa_realtime_session_capacity)` > 0.8 | 5m | warning |
-| `RealtimeRejectingCapacity` | `rate(kaiwa_realtime_connections_total{result="rejected_capacity"}[5m])` > 0 | 5m | critical |
-| `RealtimeOutboundDrops` | `rate(kaiwa_realtime_slow_consumer_total[5m])` > 0.1 | 10m | warning |
-| `WSConnectFailureHigh` | rasio `kaiwa_realtime_connections_total` non-`accepted` (kecuali `rejected_ratelimit`/`rejected_ticket`/`rejected_draining`) > 0.1% | 10m | warning |
+| `ServerOverheadHigh` | P95 `kotoki_realtime_server_overhead_seconds` > 0.15 | 10m | warning |
+| `BargeInStopP95High` | P95 `kotoki_realtime_bargein_stop_seconds` > 0.15 | 10m | warning |
+| `RealtimeCapacityHigh` | `sum(kotoki_realtime_sessions_active)/sum(kotoki_realtime_session_capacity)` > 0.8 | 5m | warning |
+| `RealtimeRejectingCapacity` | `rate(kotoki_realtime_connections_total{result="rejected_capacity"}[5m])` > 0 | 5m | critical |
+| `RealtimeOutboundDrops` | `rate(kotoki_realtime_slow_consumer_total[5m])` > 0.1 | 10m | warning |
+| `WSConnectFailureHigh` | rasio `kotoki_realtime_connections_total` non-`accepted` (kecuali `rejected_ratelimit`/`rejected_ticket`/`rejected_draining`) > 0.1% | 10m | warning |
 | `ApiErrorRateHigh` | rasio 5xx > 1% | 5m | critical |
 | `ApiLatencyP95High` | P95 non-realtime > 0.2 s, atau `route="/api/v1/sessions" method=POST` > 0.3 s | 10m | warning |
-| `ProviderErrorRateHigh` | `rate(kaiwa_provider_errors_total[5m]) / rate(kaiwa_provider_requests_total[5m])` per (provider, capability) > 5% | 5m | warning |
-| `ProviderCircuitOpen` | `kaiwa_provider_circuit_state == 1` (OPEN, Bab 8) | 2m | warning |
-| `ProviderAllDown` | primary **dan** fallback satu capability `kaiwa_provider_circuit_state == 1` | 1m | critical |
-| `ProviderFallbackRateHigh` | `kaiwa_provider_fallback_total` / `kaiwa_provider_requests_total` > 10% | 15m | warning |
-| `OutboxLagHigh` | `kaiwa_outbox_oldest_pending_age_seconds` > 60 | 5m | warning |
+| `ProviderErrorRateHigh` | `rate(kotoki_provider_errors_total[5m]) / rate(kotoki_provider_requests_total[5m])` per (provider, capability) > 5% | 5m | warning |
+| `ProviderCircuitOpen` | `kotoki_provider_circuit_state == 1` (OPEN, Bab 8) | 2m | warning |
+| `ProviderAllDown` | primary **dan** fallback satu capability `kotoki_provider_circuit_state == 1` | 1m | critical |
+| `ProviderFallbackRateHigh` | `kotoki_provider_fallback_total` / `kotoki_provider_requests_total` > 10% | 15m | warning |
+| `OutboxLagHigh` | `kotoki_outbox_oldest_pending_age_seconds` > 60 | 5m | warning |
 | `OutboxLagCritical` | > 300 | 5m | critical |
-| `DLQNotEmpty` | `kaiwa_rabbitmq_queue_messages{queue=~".*\\.dlq"}` > 0 | 10m | warning |
+| `DLQNotEmpty` | `kotoki_rabbitmq_queue_messages{queue=~".*\\.dlq"}` > 0 | 10m | warning |
 | `DLQGrowing` | DLQ > 50 | 5m | critical |
-| `QueueBacklog` | queue utama `kaiwa_rabbitmq_queue_messages` > 200 pesan selama naik terus | 15m | warning |
-| `OutboxFailed` | `kaiwa_outbox_failed` > 0 | 5m | warning |
-| `SweeperStale` | `time() - kaiwa_job_last_success_timestamp_seconds{job="session_sweeper"}` > 60 | 2m | critical |
-| `SweeperHeartbeatSuspended` | `kaiwa_sweeper_heartbeat_checks_suspended == 1` | 10m | warning |
-| `CleanupStale` | `time() - kaiwa_job_last_success_timestamp_seconds{job=~"transcript_retention|audio_tmp_cleanup|outbox_retention|balance_reconcile|memory_cleanup"}` > 3h, `job="reservation_cleanup"` > 5m, `job="account_purge"` > 1h, atau `job="partition_maintenance"` > 26h (S-6) | 10m | warning |
-| `BalanceInvariantViolation` | `kaiwa_balance_invariant_violations` > 0 | 0m | critical |
-| `PartitionsRunningOut` | `min by (table) (kaiwa_partition_months_ahead)` < 2 (Bab 9 §9.9.10) | 30m | critical |
+| `QueueBacklog` | queue utama `kotoki_rabbitmq_queue_messages` > 200 pesan selama naik terus | 15m | warning |
+| `OutboxFailed` | `kotoki_outbox_failed` > 0 | 5m | warning |
+| `SweeperStale` | `time() - kotoki_job_last_success_timestamp_seconds{job="session_sweeper"}` > 60 | 2m | critical |
+| `SweeperHeartbeatSuspended` | `kotoki_sweeper_heartbeat_checks_suspended == 1` | 10m | warning |
+| `CleanupStale` | `time() - kotoki_job_last_success_timestamp_seconds{job=~"transcript_retention|audio_tmp_cleanup|outbox_retention|balance_reconcile|memory_cleanup"}` > 3h, `job="reservation_cleanup"` > 5m, `job="account_purge"` > 1h, atau `job="partition_maintenance"` > 26h (S-6) | 10m | warning |
+| `BalanceInvariantViolation` | `kotoki_balance_invariant_violations` > 0 | 0m | critical |
+| `PartitionsRunningOut` | `min by (table) (kotoki_partition_months_ahead)` < 2 (Bab 9 §9.9.10) | 30m | critical |
 | `DBPoolSaturated` | `acquired/max` > 0.9 per deployment | 5m | warning |
 | `PostgresDown` / `PostgresCPUHigh` | dari exporter/managed metrics; CPU > 80% | 1m / 15m | critical / warning |
 | `RedisDown` / `RedisMemoryHigh` | up == 0 / memori > 80% | 1m / 10m | critical / warning |
@@ -13809,7 +13824,7 @@ Target: **OWASP ASVS 5.0 Level 2** [builder call]. Checklist ASVS L2 disimpan di
 #### 13.8.2 CORS, Origin, header, CSRF
 
 - CORS middleware ditulis sendiri (`internal/httpapi/middleware_cors.go`, tanpa library tambahan): origin cocok persis dengan `CORS_ALLOWED_ORIGINS` → `Access-Control-Allow-Origin: <origin>`, `Vary: Origin`, `Access-Control-Allow-Credentials: true`; preflight: methods `GET, POST, PUT, PATCH, DELETE, OPTIONS`, headers `Authorization, Content-Type, Idempotency-Key, X-Request-ID`, `Access-Control-Max-Age: 600`; expose `X-Request-ID, Retry-After, RateLimit-Remaining`. Origin tidak cocok → tanpa header CORS (browser memblok).
-- WebSocket: handler realtime membandingkan header `Origin` **persis** (scheme+host+port) dengan `WS_ALLOWED_ORIGINS` sebelum memanggil `websocket.Accept`; tidak cocok, atau kosong (kecuali `WS_ALLOW_EMPTY_ORIGIN=true`, hanya local/dev) → HTTP `403` tanpa upgrade, `kaiwa_realtime_connections_total{result="rejected_origin"}`. Setelah lolos, `websocket.AcceptOptions{InsecureSkipVerify: true}` (verifikasi sudah dilakukan sendiri). `kaiwa-cli` mengirim `Origin` dari flag `--origin`.
+- WebSocket: handler realtime membandingkan header `Origin` **persis** (scheme+host+port) dengan `WS_ALLOWED_ORIGINS` sebelum memanggil `websocket.Accept`; tidak cocok, atau kosong (kecuali `WS_ALLOW_EMPTY_ORIGIN=true`, hanya local/dev) → HTTP `403` tanpa upgrade, `kotoki_realtime_connections_total{result="rejected_origin"}`. Setelah lolos, `websocket.AcceptOptions{InsecureSkipVerify: true}` (verifikasi sudah dilakukan sendiri). `kotoki-cli` mengirim `Origin` dari flag `--origin`.
 - CSRF: refresh cookie `SameSite=Strict; Path=/api/v1/auth` (D-021) + endpoint `POST /api/v1/auth/refresh` dan `/logout` mewajibkan header `Origin` ada di `CORS_ALLOWED_ORIGINS` (tolak `403` bila tidak). Endpoint lain memakai Bearer token (tidak rentan CSRF).
 - Header respons API: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `Cache-Control: no-store` untuk semua respons `/api/v1/auth/*` dan `/api/v1/me*`.
 - `X-Request-ID`: diterima dari client bila UUID valid, jika tidak dibuat UUIDv7; dikembalikan di respons dan di `error.request_id` (D-013).
@@ -13834,10 +13849,10 @@ Input validation: JSON decoder `DisallowUnknownFields`; DTO divalidasi manual di
 
 | Secret | Kunci |
 |---|---|
-| `kaiwa-api-secrets` | `DB_URL`, `REDIS_URL`, `AUTH_JWT_SECRET`, `AUTH_JWT_PREVIOUS_SECRET`, `SMTP_PASSWORD` |
-| `kaiwa-realtime-secrets` | `DB_URL`, `REDIS_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (put-only), `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, `DEEPGRAM_API_KEY` |
-| `kaiwa-worker-secrets` | `DB_URL`, `REDIS_URL`, `RABBITMQ_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `AZURE_SPEECH_KEY` |
-| `kaiwa-migrate-secrets` | `DB_MIGRATE_URL` |
+| `kotoki-api-secrets` | `DB_URL`, `REDIS_URL`, `AUTH_JWT_SECRET`, `AUTH_JWT_PREVIOUS_SECRET`, `SMTP_PASSWORD` |
+| `kotoki-realtime-secrets` | `DB_URL`, `REDIS_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (put-only), `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, `DEEPGRAM_API_KEY` |
+| `kotoki-worker-secrets` | `DB_URL`, `REDIS_URL`, `RABBITMQ_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `AZURE_SPEECH_KEY` |
+| `kotoki-migrate-secrets` | `DB_MIGRATE_URL` |
 
 - Kubernetes Secret dienkripsi at rest (KMS envelope encryption cluster). Tidak ada secret di ConfigMap, image, Git, log, payload RabbitMQ, atau Redis.
 - Rotasi: JWT via `AUTH_JWT_PREVIOUS_SECRET` (rotasi tiap 90 hari); kunci provider tiap 90 hari atau segera saat dicurigai bocor (runbook §13.14.2 R8). Pod di-restart (rollout) setelah Secret berubah — ESO + annotation checksum di Deployment.
@@ -13873,7 +13888,7 @@ purged_at                TIMESTAMPTZ NULL,                   -- saat purge seles
 
 Kontrak:
 - `POST /api/v1/auth/register` menambah field body `terms_version` (string, wajib, MUST sama dengan `PRIVACY_POLICY_VERSION`, jika tidak → `400 VALIDATION_FAILED` pada field `terms_version`, Bab 3 §3.13) dan `audio_consent` (boolean, opsional, default `false`). Teks persetujuan (ditampilkan frontend) mencakup: pemrosesan mikrofon real-time, pemrosesan oleh provider AI pihak ketiga (STT/LLM/TTS/evaluasi), penyimpanan transcript 180 hari, memory & profil belajar, evaluasi. `audio_consent` terpisah: penyimpanan sementara audio ≤ 24 jam untuk penilaian pelafalan.
-- `GET /api/v1/auth/terms` (publik, tanpa auth) → `200 {"terms_version":"2026-10-01"}` (= `PRIVACY_POLICY_VERSION`); dipakai frontend & `kaiwa-cli` sebelum registrasi.
+- `GET /api/v1/auth/terms` (publik, tanpa auth) → `200 {"terms_version":"2026-10-01"}` (= `PRIVACY_POLICY_VERSION`); dipakai frontend & `kotoki-cli` sebelum registrasi.
 - `GET /api/v1/me` mengembalikan `terms_version`, `terms_current_version` (= `PRIVACY_POLICY_VERSION`), `audio_consent`.
 - `PUT /api/v1/me/consents` body `{"terms_version":"2026-10-01","audio_consent":true}` → `200` dengan nilai baru; menulis log audit `consent_updated`.
 - Jika `users.terms_version != PRIVACY_POLICY_VERSION`, `POST /api/v1/sessions` menolak dengan `403`, `code = "TERMS_NOT_ACCEPTED"` (endpoint lain tetap jalan) — D-NEW-13-2.
@@ -13899,7 +13914,7 @@ Kontrak:
 | Log aplikasi / audit | 30 / 400 hari | Loki |
 | Backup DB | ≤ 14 hari | managed backup |
 
-Semua job retensi berjalan di Deployment `kaiwa-worker-core` (flag `cleanup`). Nama job, interval, advisory lock ID, dan timeout **hanya** di tabel Bab 9 §9.9.1 (R-8); bab ini tidak mendefinisikan lock/interval sendiri. Metrik: `kaiwa_job_items_total{job,action}` (Bab 9) dan `kaiwa_job_last_success_timestamp_seconds{job}` (§13.7.3).
+Semua job retensi berjalan di Deployment `kotoki-worker-core` (flag `cleanup`). Nama job, interval, advisory lock ID, dan timeout **hanya** di tabel Bab 9 §9.9.1 (R-8); bab ini tidak mendefinisikan lock/interval sendiri. Metrik: `kotoki_job_items_total{job,action}` (Bab 9) dan `kotoki_job_last_success_timestamp_seconds{job}` (§13.7.3).
 
 #### 13.9.3 Hak hapus akun
 
@@ -13914,7 +13929,7 @@ Langkah sinkron (API, satu transaksi):
 
 Setelah langkah ini: login ditolak (status `DELETED`); `POST /api/v1/sessions` dan issue ticket memeriksa `users.status='ACTIVE'` di transaksi DB → ditolak. Access token yang masih berlaku (≤ 15 menit) hanya dapat membaca data sampai purge.
 
-Consumer worker (evaluation, memory, learner, summary) MUST memeriksa status user: bila `DELETED`, tulis `processed_events` dan ack tanpa efek (`kaiwa_consumer_messages_total{result="skipped_deleted_user"}`, Bab 9 §9.7.9).
+Consumer worker (evaluation, memory, learner, summary) MUST memeriksa status user: bila `DELETED`, tulis `processed_events` dan ack tanpa efek (`kotoki_consumer_messages_total{result="skipped_deleted_user"}`, Bab 9 §9.7.9).
 
 Purge asinkron — job `account_purge` (flag `cleanup`, tiap 15 menit; lock & timeout di tabel Bab 9 §9.9.1, R-8) memproses user dengan `status='DELETED' AND purged_at IS NULL AND deleted_at < now() − ACCOUNT_PURGE_DELAY` (default 1 jam, melebihi total jendela retry RabbitMQ ±13 menit). Urutan per user (setiap langkah idempoten, transaksi batch sendiri, aman diulang dari awal bila crash):
 
@@ -13941,24 +13956,24 @@ Purge asinkron — job `account_purge` (flag `cleanup`, tiap 15 menit; lock & ti
 - Node pool:
   - `realtime`: 8 vCPU / 16 GiB (compute-optimized), taint `workload=realtime:NoSchedule`, autoscaler 3–8 node.
   - `general`: 4 vCPU / 16 GiB, autoscaler 3–8 node (api, worker, RabbitMQ, observability).
-- Namespace: `kaiwa` (aplikasi), `kaiwa-data` (RabbitMQ), `envoy-gateway-system`, `observability`, `keda`.
+- Namespace: `kotoki` (aplikasi), `kotoki-data` (RabbitMQ), `envoy-gateway-system`, `observability`, `keda`.
 
 #### 13.10.2 Deployment per binary
 
 | Deployment | Command | Replika (min/max) | Requests | Limits | `GOMEMLIMIT` | Grace |
 |---|---|---|---|---|---|---|
-| `kaiwa-api` | `/usr/local/bin/api` | 2 / 6 | 250m, 256Mi | 1 CPU, 512Mi | `450MiB` | 30 s |
-| `kaiwa-realtime` | `/usr/local/bin/realtime` | 3 / 20 | 2 CPU, 1Gi | 3 CPU, 2Gi | `1800MiB` | 40 s |
-| `kaiwa-worker-core` | `worker --handlers=outbox,sweeper,cleanup` | 2 / 2 | 100m, 128Mi | 500m, 256Mi | `220MiB` | 35 s |
-| `kaiwa-worker-evaluation` | `worker --handlers=evaluation` | 2 / 8 | 250m, 256Mi | 1 CPU, 512Mi | `450MiB` | 210 s |
-| `kaiwa-worker-memory` | `worker --handlers=memory` | 1 / 4 | 250m, 256Mi | 1 CPU, 512Mi | `450MiB` | 130 s |
-| `kaiwa-worker-learner` | `worker --handlers=learner,summary` | 1 / 3 | 100m, 128Mi | 500m, 256Mi | `220MiB` | 70 s |
+| `kotoki-api` | `/usr/local/bin/api` | 2 / 6 | 250m, 256Mi | 1 CPU, 512Mi | `450MiB` | 30 s |
+| `kotoki-realtime` | `/usr/local/bin/realtime` | 3 / 20 | 2 CPU, 1Gi | 3 CPU, 2Gi | `1800MiB` | 40 s |
+| `kotoki-worker-core` | `worker --handlers=outbox,sweeper,cleanup` | 2 / 2 | 100m, 128Mi | 500m, 256Mi | `220MiB` | 35 s |
+| `kotoki-worker-evaluation` | `worker --handlers=evaluation` | 2 / 8 | 250m, 256Mi | 1 CPU, 512Mi | `450MiB` | 210 s |
+| `kotoki-worker-memory` | `worker --handlers=memory` | 1 / 4 | 250m, 256Mi | 1 CPU, 512Mi | `450MiB` | 130 s |
+| `kotoki-worker-learner` | `worker --handlers=learner,summary` | 1 / 3 | 100m, 128Mi | 500m, 256Mi | `220MiB` | 70 s |
 
 Nama Deployment worker dan grace mengikuti Bab 9 §9.8 (grace = `WORKER_SHUTDOWN_GRACE` + 10 s; env per Deployment: core `25s`, evaluation `200s`, memory `120s`, learner `60s` — ≥ handler timeout Bab 9 §9.6.2). Replika min/max dan autoscaling ditetapkan bab ini (§13.10.3). Worker men-set `WORKER_HTTP_ADDR=:9090` (port `ops`); api/realtime men-set `OPS_ADDR=:9090`.
 
 Go 1.25 menyetel `GOMAXPROCS` sesuai CPU limit container secara otomatis; jangan override. Angka resource adalah titik awal dan divalidasi load test (§13.12); perubahan dicatat di register.
 
-Semua Deployment: `strategy.rollingUpdate.maxSurge: 25%`, `maxUnavailable: 0`; `topologySpreadConstraints` zone (`maxSkew: 1`, `DoNotSchedule`) dan hostname (`maxSkew: 1`, `ScheduleAnyway`); `priorityClassName`: realtime `kaiwa-realtime-high`, lainnya `kaiwa-default`; label standar `app.kubernetes.io/name`, `app.kubernetes.io/component`, `app.kubernetes.io/version`.
+Semua Deployment: `strategy.rollingUpdate.maxSurge: 25%`, `maxUnavailable: 0`; `topologySpreadConstraints` zone (`maxSkew: 1`, `DoNotSchedule`) dan hostname (`maxSkew: 1`, `ScheduleAnyway`); `priorityClassName`: realtime `kotoki-realtime-high`, lainnya `kotoki-default`; label standar `app.kubernetes.io/name`, `app.kubernetes.io/component`, `app.kubernetes.io/version`.
 
 Contoh lengkap Deployment realtime (`deploy/k8s/base/realtime/deployment.yaml`):
 
@@ -13966,8 +13981,8 @@ Contoh lengkap Deployment realtime (`deploy/k8s/base/realtime/deployment.yaml`):
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kaiwa-realtime
-  labels: {app.kubernetes.io/name: kaiwa, app.kubernetes.io/component: realtime}
+  name: kotoki-realtime
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: realtime}
 spec:
   replicas: 3
   revisionHistoryLimit: 5
@@ -13975,12 +13990,12 @@ spec:
     type: RollingUpdate
     rollingUpdate: {maxSurge: 25%, maxUnavailable: 0}
   selector:
-    matchLabels: {app.kubernetes.io/name: kaiwa, app.kubernetes.io/component: realtime}
+    matchLabels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: realtime}
   template:
     metadata:
-      labels: {app.kubernetes.io/name: kaiwa, app.kubernetes.io/component: realtime}
+      labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: realtime}
     spec:
-      priorityClassName: kaiwa-realtime-high
+      priorityClassName: kotoki-realtime-high
       terminationGracePeriodSeconds: 40   # R-22: preStop 5 + safepoint 20 + flush 5 + margin 10
       automountServiceAccountToken: false
       securityContext:
@@ -13989,7 +14004,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       tolerations:
         - {key: workload, operator: Equal, value: realtime, effect: NoSchedule}
-      nodeSelector: {kaiwa.io/pool: realtime}
+      nodeSelector: {kotoki.io/pool: realtime}
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
@@ -14006,9 +14021,9 @@ spec:
             - {name: http, containerPort: 8081}
             - {name: ops, containerPort: 9090}
           envFrom:
-            - configMapRef: {name: kaiwa-common-config}
-            - configMapRef: {name: kaiwa-realtime-config}
-            - secretRef: {name: kaiwa-realtime-secrets}
+            - configMapRef: {name: kotoki-common-config}
+            - configMapRef: {name: kotoki-realtime-config}
+            - secretRef: {name: kotoki-realtime-secrets}
           env:
             - {name: OPS_ADDR, value: ":9090"}
             - {name: HTTP_ADDR, value: ":8081"}
@@ -14050,19 +14065,19 @@ spec:
 
 | Target | Trigger | Ambang | Behavior |
 |---|---|---|---|
-| `kaiwa-realtime` | Prometheus `sum(kaiwa_realtime_sessions_active{namespace="kaiwa"})` (Bab 7 §7.14), `metricType: AverageValue` | **70 sesi/pod** (R-22; 70% dari `REALTIME_MAX_SESSIONS=100`), min 3, max 20 | Scale-up: stabilisasi 0 s, maks +4 pod atau +100% per 60 s. Scale-down: stabilisasi 600 s, maks −1 pod per 300 s. Fallback KEDA bila Prometheus tak terjangkau: `failureThreshold: 3`, `replicas: 15`. Trigger sekunder CPU utilization 70%. |
-| `kaiwa-api` | CPU utilization | 65% | Scale-down stabilisasi 300 s. |
-| `kaiwa-worker-evaluation` | RabbitMQ `queueLength` `evaluation.session_completed` | 5 pesan/pod | min 2, max 8 |
-| `kaiwa-worker-memory` | RabbitMQ `queueLength` `memory.session_completed` | 10 pesan/pod | min 1, max 4 |
-| `kaiwa-worker-learner` | RabbitMQ `queueLength` `learner.evaluation_completed` | 20 pesan/pod | min 1, max 3 |
-| `kaiwa-worker-core` | tidak di-autoscale | — | 2 replika tetap |
+| `kotoki-realtime` | Prometheus `sum(kotoki_realtime_sessions_active{namespace="kotoki"})` (Bab 7 §7.14), `metricType: AverageValue` | **70 sesi/pod** (R-22; 70% dari `REALTIME_MAX_SESSIONS=100`), min 3, max 20 | Scale-up: stabilisasi 0 s, maks +4 pod atau +100% per 60 s. Scale-down: stabilisasi 600 s, maks −1 pod per 300 s. Fallback KEDA bila Prometheus tak terjangkau: `failureThreshold: 3`, `replicas: 15`. Trigger sekunder CPU utilization 70%. |
+| `kotoki-api` | CPU utilization | 65% | Scale-down stabilisasi 300 s. |
+| `kotoki-worker-evaluation` | RabbitMQ `queueLength` `evaluation.session_completed` | 5 pesan/pod | min 2, max 8 |
+| `kotoki-worker-memory` | RabbitMQ `queueLength` `memory.session_completed` | 10 pesan/pod | min 1, max 4 |
+| `kotoki-worker-learner` | RabbitMQ `queueLength` `learner.evaluation_completed` | 20 pesan/pod | min 1, max 3 |
+| `kotoki-worker-core` | tidak di-autoscale | — | 2 replika tetap |
 
 ```yaml
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
-metadata: {name: kaiwa-realtime}
+metadata: {name: kotoki-realtime}
 spec:
-  scaleTargetRef: {name: kaiwa-realtime}
+  scaleTargetRef: {name: kotoki-realtime}
   minReplicaCount: 3
   maxReplicaCount: 20
   fallback: {failureThreshold: 3, replicas: 15}
@@ -14083,7 +14098,7 @@ spec:
     - type: prometheus
       metadata:
         serverAddress: http://kube-prometheus-stack-prometheus.observability:9090
-        query: sum(kaiwa_realtime_sessions_active{namespace="kaiwa"})
+        query: sum(kotoki_realtime_sessions_active{namespace="kotoki"})
         threshold: "70"
     - type: cpu
       metricType: Utilization
@@ -14094,7 +14109,7 @@ Batas per pod (R-22, Bab 7 §7.12.2): `/readyz` 503 pada 95 runtime, `session.st
 
 #### 13.10.4 PDB & probes
 
-PDB: `kaiwa-api` `maxUnavailable: 1`; `kaiwa-realtime` `maxUnavailable: 1` (node drain menguras satu pod realtime sekaligus); setiap worker `maxUnavailable: 1`.
+PDB: `kotoki-api` `maxUnavailable: 1`; `kotoki-realtime` `maxUnavailable: 1` (node drain menguras satu pod realtime sekaligus); setiap worker `maxUnavailable: 1`.
 
 Endpoint di `OPS_ADDR` (port `ops` 9090 di Kubernetes):
 
@@ -14120,37 +14135,39 @@ Rolling update realtime: `maxSurge 25%`, `maxUnavailable 0` → pod baru Ready d
 
 #### 13.10.6 Gateway & WebSocket
 
-Satu host publik `api.<domain>`:
+Dua host publik (D-008), satu `Gateway` dengan listener 443 yang melayani keduanya; sertifikat TLS cert-manager untuk `api.kotoki.id` dan `realtime.kotoki.id` (SAN, satu secret) [builder call]:
 
-| Route | Backend | Kebijakan |
-|---|---|---|
-| `PathPrefix /api/v1/realtime` | Service `kaiwa-realtime:8081` | `HTTPRoute.timeouts.request: 0s` (tanpa batas durasi request), idle timeout koneksi **120 s** (ping 15 s menjaga koneksi), tanpa max connection duration; load balancing **consistent hash cookie** `kaiwa_rt` (TTL 3600 s, D-084 sticky sebagai optimasi) |
-| `PathPrefix /api/v1` | Service `kaiwa-api:8080` | request timeout 30 s, idle 120 s, round robin |
+| Host | Route | Backend | Kebijakan |
+|---|---|---|---|
+| `realtime.kotoki.id` | `PathPrefix /api/v1/realtime` | Service `kotoki-realtime:8081` | `HTTPRoute.timeouts.request: 0s` (tanpa batas durasi request), idle timeout koneksi **120 s** (ping 15 s menjaga koneksi), tanpa max connection duration; load balancing **consistent hash cookie** `kotoki_rt` (TTL 3600 s, D-084 sticky sebagai optimasi). Hanya path ini yang dilayani host ini; path lain → `404`. |
+| `api.kotoki.id` | `PathPrefix /api/v1` | Service `kotoki-api:8080` | request timeout 30 s, idle 120 s, round robin. `/api/v1/realtime` **tidak** dirutekan di host ini (404); ticket WS tetap diminta lewat `POST /api/v1/sessions/{id}/realtime-ticket` di host `api.kotoki.id`. |
+
+Konsekuensi dua host: browser (origin `https://app.kotoki.id`) memanggil API lintas-origin (CORS dengan credentials, `CORS_ALLOWED_ORIGINS=https://app.kotoki.id`) dan membuka WebSocket ke `wss://realtime.kotoki.id/api/v1/realtime` dengan header `Origin: https://app.kotoki.id` (`WS_ALLOWED_ORIGINS=https://app.kotoki.id`). Cookie refresh `kotoki_refresh` host-only di `api.kotoki.id` (`AUTH_REFRESH_COOKIE_DOMAIN` kosong, Path `/api/v1/auth`); cookie afinitas `kotoki_rt` diset gateway di `realtime.kotoki.id`. Frontend, API, dan realtime berada di site yang sama (`kotoki.id`), sehingga `SameSite=Strict` tidak memblokir.
 
 Cloud L4 load balancer di depan Envoy: TCP idle timeout ≥ 350 s. Envoy listener HTTP/1.1 harus diizinkan (WS upgrade).
 
-Perilaku handshake & kapasitas di realtime handler: urutan kanonik Bab 7 §7.3.1 — (1) `Origin` → `403`; (2) rate limit `ws_connect_ip` → `429`; (3) draining atau runtime ≥ `REALTIME_HARD_MAX_SESSIONS` (120) → `503` + `Retry-After: 1` + `Set-Cookie: kaiwa_rt=; Max-Age=0; Path=/api/v1/realtime; Secure; HttpOnly` (agar percobaan berikutnya di-hash ulang ke pod lain); (4) upgrade; (5) baru konsumsi ticket (GETDEL). Langkah 1–3 terjadi sebelum upgrade dan sebelum ticket dikonsumsi sehingga ticket tidak hangus saat ditolak (R-22). Sticky = cookie consistent-hash `kaiwa_rt` saja, bukan hash ticket (R-23); ownership sebenarnya dijamin fencing Bab 7 §7.9.
+Perilaku handshake & kapasitas di realtime handler: urutan kanonik Bab 7 §7.3.1 — (1) `Origin` → `403`; (2) rate limit `ws_connect_ip` → `429`; (3) draining atau runtime ≥ `REALTIME_HARD_MAX_SESSIONS` (120) → `503` + `Retry-After: 1` + `Set-Cookie: kotoki_rt=; Max-Age=0; Path=/api/v1/realtime; Secure; HttpOnly` (agar percobaan berikutnya di-hash ulang ke pod lain); (4) upgrade; (5) baru konsumsi ticket (GETDEL). Langkah 1–3 terjadi sebelum upgrade dan sebelum ticket dikonsumsi sehingga ticket tidak hangus saat ditolak (R-22). Sticky = cookie consistent-hash `kotoki_rt` saja, bukan hash ticket (R-23); ownership sebenarnya dijamin fencing Bab 7 §7.9.
 
 Kriteria penerimaan gateway (staging): satu koneksi WS bertahan 65 menit tanpa putus; reconnect setelah `kubectl rollout restart` mendarat di pod lain dalam < 5 s.
 
 #### 13.10.7 NetworkPolicy
 
-Default deny ingress+egress di namespace `kaiwa`, lalu allow:
+Default deny ingress+egress di namespace `kotoki`, lalu allow:
 
 | Dari → Ke | Port |
 |---|---|
-| Semua pod `kaiwa` → kube-dns | 53 UDP/TCP |
-| `envoy-gateway-system` → `kaiwa-api` | 8080 |
-| `envoy-gateway-system` → `kaiwa-realtime` | 8081 |
-| `observability` (Prometheus) → semua pod `kaiwa` | 9090 |
+| Semua pod `kotoki` → kube-dns | 53 UDP/TCP |
+| `envoy-gateway-system` → `kotoki-api` | 8080 |
+| `envoy-gateway-system` → `kotoki-realtime` | 8081 |
+| `observability` (Prometheus) → semua pod `kotoki` | 9090 |
 | api, realtime, worker → PostgreSQL (ipBlock subnet DB managed) | 5432 |
 | api, realtime, worker → Redis (ipBlock subnet Redis managed) | 6379/6380 |
-| worker → RabbitMQ (`kaiwa-data`) | 5671 |
+| worker → RabbitMQ (`kotoki-data`) | 5671 |
 | realtime, worker → internet 443 (`0.0.0.0/0` kecuali `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) | 443 (provider AI, object storage) |
 | api → internet 587 | SMTP |
 | semua pod → `observability` OTel Collector | 4317 |
 
-`kaiwa-api` tidak punya egress ke 443 internet maupun RabbitMQ. FQDN policy (mis. Cilium) boleh mempersempit egress ke domain vendor, tidak wajib.
+`kotoki-api` tidak punya egress ke 443 internet maupun RabbitMQ. FQDN policy (mis. Cilium) boleh mempersempit egress ke domain vendor, tidak wajib.
 
 #### 13.10.8 Struktur `deploy/`
 
@@ -14174,7 +14191,7 @@ deploy/
     │   ├── worker-evaluation/        # deployment, pdb, scaledobject
     │   ├── worker-memory/
     │   ├── worker-learner/
-    │   ├── migrate/job.yaml          # Job golang-migrate (image kaiwa migrate)
+    │   ├── migrate/job.yaml          # Job golang-migrate (image kotoki migrate)
     │   ├── seed/job.yaml             # Job psql seed/*.sql (idempoten)
     │   ├── gateway/                  # gateway.yaml, httproute-api.yaml, httproute-realtime.yaml, policies (BackendTrafficPolicy, ClientTrafficPolicy)
     │   ├── networkpolicy/            # default-deny.yaml, api.yaml, realtime.yaml, worker.yaml
@@ -14185,11 +14202,11 @@ deploy/
         └── prod/       # ExternalSecret, replika & resource §13.10.2, hostname, image digest
 ```
 
-Urutan deploy (pipeline): (1) `kubectl apply -k overlays/<env>` untuk Job `kaiwa-migrate` dan tunggu `Complete` (gagal → stop); (2) Job `kaiwa-seed`; (3) apply sisa manifest (rolling update). Migration MUST backward-compatible dengan versi aplikasi sebelumnya (pola expand → deploy → contract), karena pod lama masih berjalan selama rollout.
+Urutan deploy (pipeline): (1) `kubectl apply -k overlays/<env>` untuk Job `kotoki-migrate` dan tunggu `Complete` (gagal → stop); (2) Job `kotoki-seed`; (3) apply sisa manifest (rolling update). Migration MUST backward-compatible dengan versi aplikasi sebelumnya (pola expand → deploy → contract), karena pod lama masih berjalan selama rollout.
 
 #### 13.10.9 Dockerfile
 
-`realtime` (dan `kaiwa-cli`) membutuhkan cgo: `gopkg.in/hraban/opus.v2` (butuh header `libopus-dev` + `libopusfile-dev` saat build dan shared library `libopus0` + `libopusfile0` saat runtime; build tag tidak dipakai) dan `github.com/maxhawkins/go-webrtcvad` (source C WebRTC VAD ikut dikompilasi, tanpa library runtime). `api` dan `worker` dibangun `CGO_ENABLED=0` — package graph keduanya MUST NOT mengimpor `internal/conversation/audio` (satu-satunya paket cgo, §2.2 aturan 5; hanya diimpor `cmd/realtime` dan `internal/kaiwaclient`) atau package cgo lain (dicek CI: `make arch-check` = `CGO_ENABLED=0 go build ./cmd/api ./cmd/worker` + `go list -deps`, §14.9.5). Karena itu hanya `realtime.Dockerfile` yang memasang toolchain & library opus; `api.Dockerfile`/`worker.Dockerfile` membangun dengan `CGO_ENABLED=0` ke image distroless static (build image gagal bila graf impornya menyentuh `internal/conversation/audio`). `kaiwa-cli` tidak punya image; dibangun lokal/CI dengan `make cli` (cgo).
+`realtime` (dan `kotoki-cli`) membutuhkan cgo: `gopkg.in/hraban/opus.v2` (butuh header `libopus-dev` + `libopusfile-dev` saat build dan shared library `libopus0` + `libopusfile0` saat runtime; build tag tidak dipakai) dan `github.com/maxhawkins/go-webrtcvad` (source C WebRTC VAD ikut dikompilasi, tanpa library runtime). `api` dan `worker` dibangun `CGO_ENABLED=0` — package graph keduanya MUST NOT mengimpor `internal/conversation/audio` (satu-satunya paket cgo, §2.2 aturan 5; hanya diimpor `cmd/realtime` dan `internal/kotokiclient`) atau package cgo lain (dicek CI: `make arch-check` = `CGO_ENABLED=0 go build ./cmd/api ./cmd/worker` + `go list -deps`, §14.9.5). Karena itu hanya `realtime.Dockerfile` yang memasang toolchain & library opus; `api.Dockerfile`/`worker.Dockerfile` membangun dengan `CGO_ENABLED=0` ke image distroless static (build image gagal bila graf impornya menyentuh `internal/conversation/audio`). `kotoki-cli` tidak punya image; dibangun lokal/CI dengan `make cli` (cgo).
 
 `deploy/docker/realtime.Dockerfile`:
 
@@ -14307,16 +14324,16 @@ Kapasitas sistem = min(realtime compute, PG, Redis, RabbitMQ, **kuota STT/LLM/TT
 
 #### 13.12.1 Harness
 
-- **Harness Go di `test/load`** [builder call], bukan k6: memerlukan encode Opus, header frame biner D-073, reaksi terhadap event server (generation, barge-in, resume) — semuanya sudah ada di library klien `internal/kaiwaclient` yang juga dipakai `cmd/kaiwa-cli` (Bab 14 §14.11).
-- Binary: `test/load/cmd/kaiwa-load` (generator) dan `test/load/cmd/kaiwa-verify` (verifikasi invariant data pasca-run).
-- Efisiensi generator: fixture WAV di-encode ke paket Opus **sekali** saat startup dan di-cache; paket silence pra-encode; audio balasan **tidak** di-decode (hanya dihitung frame & generation). Satu instance ≤ 500 VU (2 vCPU / 2 GiB); dijalankan sebagai Kubernetes Job di namespace `kaiwa-load` (node pool general, terpisah dari realtime) dengan `--instances N --instance-index i`.
+- **Harness Go di `test/load`** [builder call], bukan k6: memerlukan encode Opus, header frame biner D-073, reaksi terhadap event server (generation, barge-in, resume) — semuanya sudah ada di library klien `internal/kotokiclient` yang juga dipakai `cmd/kotoki-cli` (Bab 14 §14.11).
+- Binary: `test/load/cmd/kotoki-load` (generator) dan `test/load/cmd/kotoki-verify` (verifikasi invariant data pasca-run).
+- Efisiensi generator: fixture WAV di-encode ke paket Opus **sekali** saat startup dan di-cache; paket silence pra-encode; audio balasan **tidak** di-decode (hanya dihitung frame & generation). Satu instance ≤ 500 VU (2 vCPU / 2 GiB); dijalankan sebagai Kubernetes Job di namespace `kotoki-load` (node pool general, terpisah dari realtime) dengan `--instances N --instance-index i`.
 - Flag utama:
 
 ```text
-kaiwa-load \
-  --api-url https://api.staging.<domain> --ws-url wss://api.staging.<domain>/api/v1/realtime \
-  --origin https://app.staging.<domain> \
-  --users-file users.csv            # email,password (dibuat oleh `kaiwa-load seed-users`)
+kotoki-load \
+  --api-url https://api.staging.kotoki.id --ws-url wss://realtime.staging.kotoki.id/api/v1/realtime \
+  --origin https://app.staging.kotoki.id \
+  --users-file users.csv            # email,password (dibuat oleh `kotoki-load seed-users`)
   --vus 250 --ramp 5m --hold 30m \
   --fixtures testdata/audio --profile default \
   --instances 2 --instance-index 0 \
@@ -14324,7 +14341,7 @@ kaiwa-load \
   --gate g2 --out results/g2-0.json
 ```
 
-- `kaiwa-load seed-users --count N --balance 36000` membuat user `load-{i}@load.test` via REST lalu memberi balance via admin API (`POST /api/v1/admin/users/{id}/balance-grants`, token admin dari `--admin-email/--admin-password`).
+- `kotoki-load seed-users --count N --balance 36000` membuat user `load-{i}@load.test` via REST lalu memberi balance via admin API (`POST /api/v1/admin/users/{id}/balance-grants`, token admin dari `--admin-email/--admin-password`).
 - Output: JSON per instance (persentil sisi client) + evaluasi kriteria server-side via query Prometheus di akhir run; exit code ≠ 0 bila gate gagal.
 
 #### 13.12.2 Model perilaku per VU
@@ -14363,29 +14380,29 @@ Gate dijalankan berurutan di staging dengan topologi produksi. Gate berikutnya h
 |---|---|---|
 | K1 | D-100 server: P95 `turn_end_to_first_audio` | ≤ 1,5 s (fake & real) |
 | K2 | `server_overhead` P95 (fake) | ≤ 150 ms |
-| K3 | D-101 server (R-26): P95 `kaiwa_realtime_bargein_stop_seconds` | ≤ 150 ms |
+| K3 | D-101 server (R-26): P95 `kotoki_realtime_bargein_stop_seconds` | ≤ 150 ms |
 | K4 | D-101 client: user mulai bicara (frame pertama dikirim) → frame terakhir generation lama diterima | P95 ≤ 600 ms |
 | K5 | D-102: REST P95 ≤ 200 ms; `POST /api/v1/sessions` P95 ≤ 300 ms | |
 | K6 | WS connect sukses | ≥ 99,9% |
 | K7 | Sesi `FAILED` (`SERVER_ERROR`) | ≤ 0,1% sesi |
 | K8 | Resume sukses (2% sesi yang diputus) | ≥ 99% kembali dalam reconnect window |
-| K9 | `kaiwa_realtime_slow_consumer_total`, `kaiwa_realtime_protocol_violations_total` | 0 |
+| K9 | `kotoki_realtime_slow_consumer_total`, `kotoki_realtime_protocol_violations_total` | 0 |
 | K10 | Resource realtime | CPU < 80% limit, memori < 80% limit, 0 OOMKilled/restart; G4a: setiap pod ±100 sesi |
 | K11 | PG | `pool_acquire_wait` P99 < 50 ms, CPU < 60% |
 | K12 | Redis | CPU < 50%, 0 error command |
 | K13 | Async | outbox lag P99 < 5 s; semua sesi `COMPLETED` punya evaluasi (fake) ≤ 5 menit setelah run; DLQ = 0 |
-| K14 | Integritas (`kaiwa-verify`) | 0 pelanggaran (§13.12.6) |
+| K14 | Integritas (`kotoki-verify`) | 0 pelanggaran (§13.12.6) |
 | K15 | Soak | RSS & goroutine per pod stabil (selisih jam ke-1 vs ke-4 < 10%) |
 
 #### 13.12.5 Alur eksekusi
 
 1. `make load-env ENV=staging` (deploy overlay staging dengan `PROVIDER_MODE=fake`, set knob fake).
-2. `kaiwa-load seed-users --count 1200`.
+2. `kotoki-load seed-users --count 1200`.
 3. Jalankan gate (Job per instance), simpan `results/*.json` + snapshot dashboard.
-4. `kaiwa-verify --db $STAGING_DB_READONLY_URL --since <start>`.
+4. `kotoki-verify --db $STAGING_DB_READONLY_URL --since <start>`.
 5. Laporan `docs/loadtest/<tanggal>-<gate>.md`: hasil per kriteria, angka resource per pod, keputusan perubahan (mis. resource/`REALTIME_MAX_SESSIONS`) yang lalu dicatat di register.
 
-#### 13.12.6 Verifikasi integritas (`kaiwa-verify`, juga dipakai job `balance_reconcile`)
+#### 13.12.6 Verifikasi integritas (`kotoki-verify`, juga dipakai job `balance_reconcile`)
 
 Query yang semuanya harus mengembalikan 0 baris:
 1. Akun dengan `available_seconds + reserved_seconds ≠` saldo yang dihitung dari ledger (rumus saldo per D-032/Bab 4).
@@ -14396,13 +14413,13 @@ Query yang semuanya harus mengembalikan 0 baris:
 6. `session_turns` duplikat `(session_id, sequence_number)` — UNIQUE DB memuat `created_at` (S-6), sehingga keunikan ini hanya dijamin aplikasi dan query ini adalah pemeriksaan sesungguhnya.
 7. Evaluasi ganda per sesi; baris `processed_events` hilang untuk efek yang ada (sampling).
 
-Job `balance_reconcile` (flag `cleanup`, **per jam**; jadwal, lock, timeout di Bab 9 §9.9.1, R-8) menjalankan query rekonsiliasi Bab 4 §4.8 (R1–R6, mencakup query 1–5 di atas) dan menulis jumlah pelanggaran per check ke `kaiwa_balance_invariant_violations{check}`.
+Job `balance_reconcile` (flag `cleanup`, **per jam**; jadwal, lock, timeout di Bab 9 §9.9.1, R-8) menjalankan query rekonsiliasi Bab 4 §4.8 (R1–R6, mencakup query 1–5 di atas) dan menulis jumlah pelanggaran per check ke `kotoki_balance_invariant_violations{check}`.
 
 ### 13.13 Failure injection
 
 #### 13.13.1 Mekanisme
 
-- **Fault fake provider** (D-NEW-13-8; mekanisme & semantik kanonik Bab 8 §8.9.6): untuk kapabilitas yang berjalan mode fake, setiap proses membaca JSON dari Redis key `FAKE_FAULTS_REDIS_KEY` (default `kaiwa:fake:faults`) tiap `FAKE_FAULTS_POLL_INTERVAL` (1 s). Kunci entri = `"<CAPABILITY>.<INSTANCE>"` UPPERCASE; instance fake = `FAKE_PRIMARY` / `FAKE_FALLBACK` (R-6), bukan nama vendor:
+- **Fault fake provider** (D-NEW-13-8; mekanisme & semantik kanonik Bab 8 §8.9.6): untuk kapabilitas yang berjalan mode fake, setiap proses membaca JSON dari Redis key `FAKE_FAULTS_REDIS_KEY` (default `kotoki:fake:faults`) tiap `FAKE_FAULTS_POLL_INTERVAL` (1 s). Kunci entri = `"<CAPABILITY>.<INSTANCE>"` UPPERCASE; instance fake = `FAKE_PRIMARY` / `FAKE_FALLBACK` (R-6), bukan nama vendor:
 
 ```json
 {
@@ -14414,7 +14431,7 @@ Job `balance_reconcile` (flag `cleanup`, **per jam**; jadwal, lock, timeout di B
 ```
   `mode`: `error`, `timeout`, `slow` (`delay_ms`), `fail_after_first_audio` (TTS), `disconnect_mid_stream` (STT) — pemetaan ke perilaku fake di Bab 8 §8.9.6. Router memperlakukan `FAKE_FALLBACK` persis seperti vendor fallback nyata, sehingga fallback (D-042/D-043), breaker, epoch TTS, dan replay STT teruji apa adanya.
 - **Infrastruktur**: Chaos Mesh di staging (`PodChaos`, `NetworkChaos`) [builder call], atau `kubectl` manual.
-- **Skrip**: `test/chaos/<skenario>.sh` — jalankan `kaiwa-load` 100 CCU, injeksi fault pada T+5 m, hentikan pada T+15 m, lalu `kaiwa-verify`. Seluruh skenario dijalankan sebelum go-live dan setelah perubahan besar di realtime/provider/messaging.
+- **Skrip**: `test/chaos/<skenario>.sh` — jalankan `kotoki-load` 100 CCU, injeksi fault pada T+5 m, hentikan pada T+15 m, lalu `kotoki-verify`. Seluruh skenario dijalankan sebelum go-live dan setelah perubahan besar di realtime/provider/messaging.
 
 #### 13.13.2 Skenario
 
@@ -14423,14 +14440,14 @@ Job `balance_reconcile` (flag `cleanup`, **per jam**; jadwal, lock, timeout di B
 | F1 | STT primary timeout di tengah utterance | fault `"STT.FAKE_PRIMARY": timeout` | Router switch ke `FAKE_FALLBACK` dengan replay ring buffer 15 s (D-080, Bab 8 §8.5.8); turn `COMPLETED`, `used_fallback=true` | `provider_fallback_total{capability="stt"}` naik; P95 turn terdampak ≤ 3 s; 0 sesi `FAILED` |
 | F2 | LLM primary first-token timeout | fault `"LLM.FAKE_PRIMARY": timeout` | Fallback LLM (`RESET`, Bab 7 §7.7.4) sebelum audio pertama (D-042) | turn `COMPLETED`; P95 turn terdampak ≤ 3,5 s |
 | F3 | TTS gagal setelah audio pertama | fault `"TTS.FAKE_PRIMARY": fail_after_first_audio` | Generation `FAILED`, pesan maaf pendek, turn `FAILED`, sesi lanjut (D-042) | turn berikutnya normal; 0 sesi berakhir karena F3 |
-| F4 | Provider primary down total 2 menit | fault `"<CAP>.FAKE_PRIMARY": {"mode":"error","rate":1.0}` | Circuit open setelah 5 gagal/30 s; request langsung ke fallback; half-open 20 s; pulih otomatis | `kaiwa_provider_circuit_state` 0→1→2→0 (CLOSED→OPEN→HALF_OPEN→CLOSED, Bab 8); alert `ProviderCircuitOpen` menyala lalu padam |
-| F5 | Primary **dan** fallback down | fault `"<CAP>.FAKE_PRIMARY"` dan `"<CAP>.FAKE_FALLBACK"` | Perilaku Bab 7/8 (sesi `ENDING`/`FAILED` dengan `PROVIDER_FAILURE`); charge sesuai D-036 | `kaiwa-verify` 0 pelanggaran; alert `ProviderAllDown` |
+| F4 | Provider primary down total 2 menit | fault `"<CAP>.FAKE_PRIMARY": {"mode":"error","rate":1.0}` | Circuit open setelah 5 gagal/30 s; request langsung ke fallback; half-open 20 s; pulih otomatis | `kotoki_provider_circuit_state` 0→1→2→0 (CLOSED→OPEN→HALF_OPEN→CLOSED, Bab 8); alert `ProviderCircuitOpen` menyala lalu padam |
+| F5 | Primary **dan** fallback down | fault `"<CAP>.FAKE_PRIMARY"` dan `"<CAP>.FAKE_FALLBACK"` | Perilaku Bab 7/8 (sesi `ENDING`/`FAILED` dengan `PROVIDER_FAILURE`); charge sesuai D-036 | `kotoki-verify` 0 pelanggaran; alert `ProviderAllDown` |
 | F6 | Redis restart / failover | `PodChaos` kill Redis (self-hosted) atau trigger failover managed | §13.4.4: ticket baru `503` sementara; sesi berjalan per Bab 7; sweeper tidak menutup sesi karena heartbeat hilang | 0 sesi `heartbeat_lost` palsu; koneksi baru pulih ≤ 30 s setelah Redis kembali; balance benar |
 | F7 | RabbitMQ 1 dari 3 node mati | delete pod node | Quorum tetap; publish & consume lanjut | 0 pesan hilang; lag < 30 s |
 | F8 | RabbitMQ seluruhnya down 10 menit | scale `RabbitmqCluster` ke 0 / NetworkChaos | Sesi tetap `COMPLETED`; `event_outbox` menumpuk; setelah pulih outbox terkuras; tidak ada efek ganda (D-093) | `outbox_pending` naik lalu 0; evaluasi = jumlah sesi; alert `OutboxLagCritical` menyala |
-| F9 | Pod realtime dibunuh paksa saat sesi | `kubectl delete pod --grace-period=0 --force` | Client reconnect ≤ 30 s ke pod lain, takeover ownership (D-084), turn berjalan `FAILED`, sesi lanjut; client yang tidak reconnect → `RECONNECT_TIMEOUT`/sweeper | ≥ 99% sesi terdampak lanjut; disconnected seconds tidak dicharge; `kaiwa-verify` 0 |
+| F9 | Pod realtime dibunuh paksa saat sesi | `kubectl delete pod --grace-period=0 --force` | Client reconnect ≤ 30 s ke pod lain, takeover ownership (D-084), turn berjalan `FAILED`, sesi lanjut; client yang tidak reconnect → `RECONNECT_TIMEOUT`/sweeper | ≥ 99% sesi terdampak lanjut; disconnected seconds tidak dicharge; `kotoki-verify` 0 |
 | F10 | Rolling restart realtime saat beban | `kubectl rollout restart` | Drain Bab 7 §7.12.1 / §13.10.5, close 4100, reconnect + takeover | 0 sesi `FAILED`; P95 waktu reconnect < 5 s |
-| F11 | PG failover | managed: trigger failover; CNPG: hapus pod primary | 30–120 s tulis gagal: REST `503`; realtime mengikuti Bab 7 (retry persist dengan backoff); pool tersambung ulang otomatis | 0 double-charge; 0 sesi stuck `ENDING` > 5 menit setelah pulih; `kaiwa-verify` 0 |
+| F11 | PG failover | managed: trigger failover; CNPG: hapus pod primary | 30–120 s tulis gagal: REST `503`; realtime mengikuti Bab 7 (retry persist dengan backoff); pool tersambung ulang otomatis | 0 double-charge; 0 sesi stuck `ENDING` > 5 menit setelah pulih; `kotoki-verify` 0 |
 | F12 | Worker evaluation dibunuh saat memproses | delete pod | Pesan redelivered, diproses sekali (D-093) | tepat 1 evaluasi per sesi |
 | F13 | Pesan duplikat | publish ulang `session.completed` manual via management UI | Consumer skip (`result="duplicate"`) | tidak ada evaluasi/memory ganda |
 | F14 | Object storage tidak tersedia | NetworkChaos blok egress S3 dari realtime | Upload gagal, `storage_errors_total` naik, pronunciation `UNAVAILABLE`, percakapan normal | turn latency tidak berubah |
@@ -14494,31 +14511,31 @@ Langkah umum: akui alert → tentukan severity → buka kanal insiden → mitiga
 | R4 | `RedisDown` | Status managed Redis | Tunggu failover (≤ 1–2 menit); verifikasi sweeper menahan heartbeat check (§13.4.4); setelah pulih, cek `resumes_total` & sesi `FAILED`. |
 | R5 | `PostgresDown`, `DBPoolSaturated` | Failover sedang berlangsung? Query lambat di `pg_stat_statements`, lock di `pg_locks` | Failover: tunggu, verifikasi pool reconnect. Saturasi: hentikan query berat, `pg_terminate_backend` pada idle-in-tx, scale vertikal DB. |
 | R6 | `RealtimeRejectingCapacity`, `PodCrashLooping` realtime | KEDA/HPA status, Prometheus terjangkau? event OOMKilled | Naikkan `minReplicaCount`; OOM → naikkan limit memori sementara + profil heap (`PPROF_ENABLED` di satu pod). |
-| R7 | `BalanceInvariantViolation` (SEV1) | `kaiwa-verify` untuk daftar akun | Bekukan pembuatan sesi (scale `kaiwa-api` session create via feature flag/rate limit 0), investigasi ledger; koreksi hanya via `balance-adjustments` admin (D-031) dengan reason, tidak pernah UPDATE manual. |
+| R7 | `BalanceInvariantViolation` (SEV1) | `kotoki-verify` untuk daftar akun | Bekukan pembuatan sesi (scale `kotoki-api` session create via feature flag/rate limit 0), investigasi ledger; koreksi hanya via `balance-adjustments` admin (D-031) dengan reason, tidak pernah UPDATE manual. |
 | R8 | Secret bocor | Sumber kebocoran | Rotasi di secret manager → ESO sync → rollout restart; JWT: set secret baru + `AUTH_JWT_PREVIOUS_SECRET` kosong (paksa login ulang); refresh token: `DELETE FROM refresh_tokens` bila perlu. Catat sebagai SEV1. |
-| R9 | `SweeperStale`, `CleanupStale` | Pod outbox hidup? Advisory lock tertahan? | Restart `kaiwa-worker-core`; cek `pg_locks` advisory. Retensi tertunda > 24 jam untuk audio = insiden privasi SEV2. |
+| R9 | `SweeperStale`, `CleanupStale` | Pod outbox hidup? Advisory lock tertahan? | Restart `kotoki-worker-core`; cek `pg_locks` advisory. Retensi tertunda > 24 jam untuk audio = insiden privasi SEV2. |
 
 ### Keputusan bab ini
 
-- D-NEW-13-23 [builder call]: Span wajib di setiap layer (handler, service — setiap method publik, repository, Redis, S3, provider, consumer, job) lewat `internal/platform/otel` (`Start`/`End`); error internal → status Error + `RecordError` dengan stack + atribut semconv `code.function.name`/`code.file.path`/`code.line.number` dari lokasi asal (`errs.New`/`errs.Wrap` merekam `runtime.Caller`); error bisnis 4xx hanya atribut `kaiwa.error_code`; panic dicatat sebagai exception; log ERROR boundary memuat `error_location` (§13.7.2.1–13.7.2.2).
+- D-NEW-13-23 [builder call]: Span wajib di setiap layer (handler, service — setiap method publik, repository, Redis, S3, provider, consumer, job) lewat `internal/platform/otel` (`Start`/`End`); error internal → status Error + `RecordError` dengan stack + atribut semconv `code.function.name`/`code.file.path`/`code.line.number` dari lokasi asal (`errs.New`/`errs.Wrap` merekam `runtime.Caller`); error bisnis 4xx hanya atribut `kotoki.error_code`; panic dicatat sebagai exception; log ERROR boundary memuat `error_location` (§13.7.2.1–13.7.2.2).
 - D-NEW-13-1: Tabel `users` (Bab 3) wajib punya `terms_version`, `terms_accepted_at`, `audio_consent`, `audio_consent_updated_at`, `deleted_at`, `purged_at`, dan `status` mendukung `DELETED`. Registrasi wajib `terms_version` = `PRIVACY_POLICY_VERSION`; `audio_consent` opsional default `false`; tanpa consent audio tidak ada upload audio.
 - D-NEW-13-2: Endpoint `GET /api/v1/auth/terms` (publik) dan `PUT /api/v1/me/consents`; `POST /api/v1/sessions` menolak `403 TERMS_NOT_ACCEPTED` bila versi terms usang. Kode error baru untuk Bab 5: `TERMS_NOT_ACCEPTED`, `ACCOUNT_HAS_ACTIVE_SESSION`, `SERVICE_UNAVAILABLE` (503).
 - D-NEW-13-3: Hapus akun `DELETE /api/v1/me` (password re-auth, 409 bila sesi aktif, cancel sesi `RESERVED`) → status `DELETED` → purge asinkron oleh job `account_purge` (flag `cleanup`, 15 menit; tabel Bab 9 §9.9.1, R-8) setelah `ACCOUNT_PURGE_DELAY=1h` dengan urutan §13.9.3; ledger & baris sessions dipertahankan, user dianonimkan. Consumer async melewati event milik user `DELETED`.
 - D-NEW-13-4: Retensi (R-21): `session_turns` dihapus, `sessions.summary_text` di-NULL, teks feedback evaluasi & findings dipurge 180 hari setelah `ended_at`; `session_events` 365 hari (keduanya job `transcript_retention`); skor evaluasi, profil selama akun ada; memory per kategori Bab 11; outbox published 7 hari, outbox `FAILED` & `processed_events` 30 hari (`outbox_retention`); audio tmp ≤ 24 jam (`audio_tmp_cleanup`, R-27).
 - D-NEW-13-5: Katalog env var §13.2 mengumpulkan semua variabel dengan nama & default **bab pemilik topik** (Bab 3/6/7/8/9/10; Bab 13 untuk infrastruktur umum); tanpa prefix aplikasi. Listener ops terpisah `OPS_ADDR` (api/realtime) dan `WORKER_HTTP_ADDR` (worker, Bab 9). Interval/lock job bukan env (Bab 9 §9.9.1).
 - D-NEW-13-6: `event_outbox.traceparent`/`tracestate TEXT NULL` (R-31, DDL Bab 9), diteruskan sebagai AMQP header untuk tracing end-to-end.
-- D-NEW-13-7: Rate limiting token bucket Lua di `kaiwa:ratelimit:{policy}:{subject}` dengan tabel policy §13.4.3 (termasuk `ws_connect_ip` 30/menit dan `ws_attach_user` 10/menit, Bab 7); Redis down → fallback limiter lokal per pod.
-- D-NEW-13-8: Fake provider mendukung fault injection runtime via Redis key `kaiwa:fake:faults` (hanya kapabilitas mode fake; semantik Bab 8 §8.9.6), kunci entri `"<CAPABILITY>.<INSTANCE>"` UPPERCASE, mis. `"STT.FAKE_PRIMARY"`.
+- D-NEW-13-7: Rate limiting token bucket Lua di `kotoki:ratelimit:{policy}:{subject}` dengan tabel policy §13.4.3 (termasuk `ws_connect_ip` 30/menit dan `ws_attach_user` 10/menit, Bab 7); Redis down → fallback limiter lokal per pod.
+- D-NEW-13-8: Fake provider mendukung fault injection runtime via Redis key `kotoki:fake:faults` (hanya kapabilitas mode fake; semantik Bab 8 §8.9.6), kunci entri `"<CAPABILITY>.<INSTANCE>"` UPPERCASE, mis. `"STT.FAKE_PRIMARY"`.
 - D-NEW-13-9: Metrik memakai `github.com/prometheus/client_golang` (OTel hanya untuk trace, R-30); instrumentasi HTTP memakai `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp`; tracer pgx ditulis sendiri. Nama metrik kanonik milik bab pemilik (realtime Bab 7 §7.14, provider Bab 8 §8.8, worker/job Bab 9 §9.7.9); label provider/capability UPPERCASE (R-6).
 - D-NEW-13-10: Produksi: managed PostgreSQL 17 HA (alternatif CloudNativePG), managed Redis non-cluster primary+replica (alternatif Sentinel), RabbitMQ 3 node via Cluster Operator, Gateway API + Envoy Gateway, KEDA, External Secrets Operator, cert-manager, Grafana stack (Tempo/Loki/Prometheus/Alloy), Chaos Mesh di staging.
 - D-NEW-13-11 (direvisi S-6, S-20): `session_turns`/`session_events` dipartisi RANGE bulanan pada `created_at` sejak hari pertama; partisi dikelola job `partition_maintenance` (buat 3 bulan ke depan, DROP partisi kedaluwarsa), `transcript_retention` hanya di partisi batas; estimasi disk steady-state ±0,6 TB. PgBouncer tidak dipakai. Kriteria pemicu §13.3.2 (PgBouncer) dan §13.3.5 (evaluasi ulang granularitas partisi) [builder call].
 - D-NEW-13-21: Tidak ada index vektor ANN; pgvector dipakai dengan exact scan per user (D-NEW-11-4), tanpa parameter infrastruktur khusus [builder call, S-20].
-- D-NEW-13-22: Katalog §13.2 disamakan dengan bab pemilik: `PROVIDER_SESSION_GRACE=15s` (S-7), konkurensi STT realtime 125/pod (S-14), `EVAL_LLM_TEMPERATURE`/`EVAL_MAX_OUTPUT_TOKENS`/`EVAL_LLM_SEED` dihapus (parameter dari `prompt_versions.llm_params`, S-1), `PROVIDER_TOKEN_PER_RUNE_ESTIMATE` dihapus (konstanta Bab 8). Vhost RabbitMQ = `/kaiwa` di staging/prod, `/` di lokal (Bab 9 §9.6) [builder call, S-20].
+- D-NEW-13-22: Katalog §13.2 disamakan dengan bab pemilik: `PROVIDER_SESSION_GRACE=15s` (S-7), konkurensi STT realtime 125/pod (S-14), `EVAL_LLM_TEMPERATURE`/`EVAL_MAX_OUTPUT_TOKENS`/`EVAL_LLM_SEED` dihapus (parameter dari `prompt_versions.llm_params`, S-1), `PROVIDER_TOKEN_PER_RUNE_ESTIMATE` dihapus (konstanta Bab 8). Vhost RabbitMQ = `/kotoki` di staging/prod, `/` di lokal (Bab 9 §9.6) [builder call, S-20].
 - D-NEW-13-12: Pool `DB_MAX_CONNS` api 10 / realtime 6 / worker 4; `statement_timeout` 5 s (api/realtime) / 30 s (worker); PG `max_connections=400`; role DB per binary dengan `CONNECTION LIMIT`.
-- D-NEW-13-13: Autoscaling realtime (R-22): KEDA target 70 sesi/pod (`kaiwa_realtime_sessions_active`), min 3, max 20; drain mengikuti Bab 7 (safepoint 20 s, flush 5 s, close 4100), `terminationGracePeriodSeconds: 40`, `preStop: sleep 5`; grace worker mengikuti Bab 9.
-- D-NEW-13-14: Realtime menolak upgrade (HTTP 503) saat draining atau ≥ 120 runtime **sebelum** mengonsumsi ticket (R-22, Bab 7 §7.3.1), dan menghapus cookie affinity `kaiwa_rt`; sticky = cookie consistent-hash `kaiwa_rt` saja (R-23).
-- D-NEW-13-15: Load test memakai harness Go `test/load` (library `internal/kaiwaclient`), gate G1 100 → G2 250 → G3 500 → G4a/G4b 1.000 + soak 500×4 jam + run real 20 CCU, kriteria K1–K15.
-- D-NEW-13-16: Job `balance_reconcile` per jam (R-8, Bab 9 §9.9.1) menulis `kaiwa_balance_invariant_violations{check}`; load test gate G4a menaikkan sementara `REALTIME_READY_MAX_SESSIONS=101`.
+- D-NEW-13-13: Autoscaling realtime (R-22): KEDA target 70 sesi/pod (`kotoki_realtime_sessions_active`), min 3, max 20; drain mengikuti Bab 7 (safepoint 20 s, flush 5 s, close 4100), `terminationGracePeriodSeconds: 40`, `preStop: sleep 5`; grace worker mengikuti Bab 9.
+- D-NEW-13-14: Realtime menolak upgrade (HTTP 503) saat draining atau ≥ 120 runtime **sebelum** mengonsumsi ticket (R-22, Bab 7 §7.3.1), dan menghapus cookie affinity `kotoki_rt`; sticky = cookie consistent-hash `kotoki_rt` saja (R-23).
+- D-NEW-13-15: Load test memakai harness Go `test/load` (library `internal/kotokiclient`), gate G1 100 → G2 250 → G3 500 → G4a/G4b 1.000 + soak 500×4 jam + run real 20 CCU, kriteria K1–K15.
+- D-NEW-13-16: Job `balance_reconcile` per jam (R-8, Bab 9 §9.9.1) menulis `kotoki_balance_invariant_violations{check}`; load test gate G4a menaikkan sementara `REALTIME_READY_MAX_SESSIONS=101`.
 - D-NEW-13-17: Target keamanan OWASP ASVS 5.0 Level 2; region deployment Jakarta (fallback Singapura).
 - D-NEW-13-18: Presigned URL tidak dipakai; akses object storage dibatasi per binary (realtime put-only, worker get/delete/list).
 - D-NEW-13-19: Sweeper aturan (b) di-suspend selama Redis tak terjangkau dan sampai Redis terjangkau terus-menerus ≥ 45 s, plus skip massal (≥ 20 sesi dan ≥ 50 % sesi `ACTIVE`) (R-9); audio tmp dijamin ≤ 24 jam oleh job `audio_tmp_cleanup`, lifecycle 1 hari hanya jaring pengaman (R-27).
@@ -14567,7 +14584,7 @@ Aturan umum:
 
 ### 14.2 Unit test
 
-**Test tracing & error (wajib per paket fitur/adapter)** [builder call]: helper `internal/testutil.NewTraceRecorder(t)` memasang `sdktrace.NewTracerProvider` dengan `tracetest.NewInMemoryExporter()`. Untuk setiap method publik service minimal satu test memastikan: (a) span `{fitur}.{Method}` ada dan menjadi parent span repository/adapter yang dipanggil; (b) jalur error internal → status `Error`, event exception, atribut `code.file.path`/`code.line.number` menunjuk file adapter/fitur tempat `errs.New`/`errs.Wrap` dipanggil; (c) jalur error bisnis → status bukan `Error`, atribut `kaiwa.error_code` terisi. `internal/platform/errs` punya test table-driven untuk `LocationOf` menembus beberapa lapis `%w`, `Wrap` tidak menimpa lokasi asal, dan `KindOf` untuk seluruh kode §5.10.
+**Test tracing & error (wajib per paket fitur/adapter)** [builder call]: helper `internal/testutil.NewTraceRecorder(t)` memasang `sdktrace.NewTracerProvider` dengan `tracetest.NewInMemoryExporter()`. Untuk setiap method publik service minimal satu test memastikan: (a) span `{fitur}.{Method}` ada dan menjadi parent span repository/adapter yang dipanggil; (b) jalur error internal → status `Error`, event exception, atribut `code.file.path`/`code.line.number` menunjuk file adapter/fitur tempat `errs.New`/`errs.Wrap` dipanggil; (c) jalur error bisnis → status bukan `Error`, atribut `kotoki.error_code` terisi. `internal/platform/errs` punya test table-driven untuk `LocationOf` menembus beberapa lapis `%w`, `Wrap` tidak menimpa lokasi asal, dan `KindOf` untuk seluruh kode §5.10.
 
 Unit test berada di samping kode setiap paket fitur (D-005, §2.2): `internal/auth`, `balance`, `session`, `content`, `conversation`, `prompt`, `provider`, `evaluation`, `memory`, `learner`, `summary`, `admin`, `events`.
 
@@ -14614,7 +14631,7 @@ Build tag `//go:build integration`. Test integration adapter berada di paket ada
 
 | Helper | Image | Isolasi per test |
 |---|---|---|
-| `testutil.NewPostgres(t) *pgxpool.Pool` | `pgvector/pgvector:pg17` | Container dimulai sekali per package (`sync.Once`); DB `kaiwa_template` dimigrasi sekali; tiap test `CREATE DATABASE t_<uuid> TEMPLATE kaiwa_template`, `DROP … WITH (FORCE)` di `t.Cleanup` |
+| `testutil.NewPostgres(t) *pgxpool.Pool` | `pgvector/pgvector:pg17` | Container dimulai sekali per package (`sync.Once`); DB `kotoki_template` dimigrasi sekali; tiap test `CREATE DATABASE t_<uuid> TEMPLATE kotoki_template`, `DROP … WITH (FORCE)` di `t.Cleanup` |
 | `testutil.NewRedis(t) *redis.Client` | `redis:7.4` | `FLUSHALL` di awal test; test Redis tidak memakai `t.Parallel()` |
 | `testutil.NewRabbitMQ(t) (url string)` | `rabbitmq:4-management` | vhost unik `t_<uuid>` dibuat via management API, dihapus di cleanup |
 | `testutil.NewMinIO(t) (*s3.Client, bucket string)` | image MinIO sama dengan compose | bucket unik `t-<uuid>` |
@@ -14634,7 +14651,7 @@ Cakupan wajib integration:
 
 ### 14.4 Contract test
 
-Golden contract adalah fixture bersama lintas paket (server, `internal/kaiwaclient`, e2e) dan karena itu disimpan di root `testdata/api/` (§2.2), dibaca lewat `testutil.TestdataPath`:
+Golden contract adalah fixture bersama lintas paket (server, `internal/kotokiclient`, e2e) dan karena itu disimpan di root `testdata/api/` (§2.2), dibaca lewat `testutil.TestdataPath`:
 
 ```text
 testdata/api/
@@ -14650,7 +14667,7 @@ testdata/api/
 - Test (a) marshal struct Go berisi nilai tetap → `require.JSONEq` dengan golden; (b) unmarshal golden → re-marshal → sama; (c) decoder menolak field tak dikenal dan `type` tak dikenal; (d) **kelengkapan**: setiap tipe yang terdaftar di registry event protocol punya golden, dan setiap golden punya tipe terdaftar.
 - Frame biner D-073: golden hex `testdata/api/ws/frames/{upstream_audio,downstream_audio}.hex` + test encode/decode header big-endian, termasuk frame terlalu pendek/terlalu besar → error.
 - Regenerasi: `go test ./internal/conversation/protocol -run Golden -update`. Mengubah golden = mengubah kontrak protokol: wajib menyertakan update Bab 7 dan pertimbangan versi protokol (D-070) di PR yang sama.
-- `cmd/kaiwa-cli`, `internal/kaiwaclient`, dan `test/load` memakai package `internal/conversation/protocol` yang sama (paket ini tanpa cgo dan tanpa library infrastruktur), sehingga client uji tidak bisa menyimpang dari server.
+- `cmd/kotoki-cli`, `internal/kotokiclient`, dan `test/load` memakai package `internal/conversation/protocol` yang sama (paket ini tanpa cgo dan tanpa library infrastruktur), sehingga client uji tidak bisa menyimpang dari server.
 
 **REST** — test di `internal/httpapi` (per fitur, `<fitur>_handler_test.go`): golden per endpoint & kasus `testdata/api/rest/<operation>_<case>.json` (sukses dan setiap kode error D-013), dihasilkan lewat `httptest` dengan service fake (port service didefinisikan di `httpapi`, fake lokal di `_test.go` atau `internal/testutil/fakes`). Regenerasi: `go test ./internal/httpapi -run Golden -update`. Header penting (`Cache-Control`, `Retry-After`, CORS) diassert eksplisit. Validasi skema OpenAPI otomatis tidak dipakai (butuh library di luar allowlist).
 
@@ -14659,7 +14676,7 @@ testdata/api/
 Lokasi `test/e2e/`, tag `e2e`. `TestMain`:
 1. Menyalakan container PG/Redis/RabbitMQ/MinIO (helper §14.3), menjalankan migration + `seed/*.sql`.
 2. `go build -race` ketiga binary ke direktori temp, menjalankannya sebagai **subprocess** dengan env uji (`APP_ENV=local`, `PROVIDER_MODE=fake`, port bebas acak, `INITIAL_BALANCE_SECONDS=3600`, `ACCOUNT_PURGE_DELAY=1s`, `WS_ALLOW_EMPTY_ORIGIN=true`), menunggu `/readyz` 200 (timeout 30 s). Stdout/stderr disimpan ke file dan dicetak bila test gagal. Binary asli diuji apa adanya (wiring manual D-004 ikut teruji).
-3. Test memakai `internal/kaiwaclient` (§14.11).
+3. Test memakai `internal/kotokiclient` (§14.11).
 4. Env subprocess dibangun eksplisit (`cmd.Env` = daftar di atas + `PATH`), **tidak** mewarisi `os.Environ()`, sehingga `.env` developer tidak memengaruhi hasil e2e.
 
 Skenario wajib:
@@ -14672,13 +14689,13 @@ Skenario wajib:
 | E4 | Reconnect | putus TCP di tengah sesi, ticket baru, `session.resume {last_server_seq}` → event yang terlewat diterima tanpa duplikat; sesi lanjut; `disconnected_seconds > 0` |
 | E5 | Takeover lintas pod | dua proses realtime; `kill -9` pemilik; reconnect ke proses lain → takeover (D-084), turn berjalan `FAILED`, sesi lanjut |
 | E6 | Cancel sesi `RESERVED` | `CANCELLED`, reservation `RELEASED`, saldo kembali |
-| E7 | Fallback provider | set `kaiwa:fake:faults` = `{"STT.FAKE_PRIMARY":{"mode":"timeout","rate":1.0}}` (Bab 8 §8.9.6) → `stt_provider = FAKE_FALLBACK`, turn `COMPLETED`, `used_fallback=true` |
+| E7 | Fallback provider | set `kotoki:fake:faults` = `{"STT.FAKE_PRIMARY":{"mode":"timeout","rate":1.0}}` (Bab 8 §8.9.6) → `stt_provider = FAKE_FALLBACK`, turn `COMPLETED`, `used_fallback=true` |
 | E8 | Pipeline async | setelah E1: evaluasi `COMPLETED` (fake), memory terekstrak, learner terupdate, baris `processed_events` per consumer, dalam ≤ 30 s |
 | E9 | Hapus akun | `DELETE /api/v1/me` → test menjalankan `worker run-job account_purge` (subcommand sekali-jalan yang memanggil job Bab 9 §9.9.1 dengan advisory lock yang sama, [builder call]; interval 15 menit terlalu lama untuk e2e) → purge → memories/evaluations/turns/objek audio user hilang, user teranonimkan, ledger tetap |
 | E10 (long) | `DURATION_ELAPSED` | sesi 300 s → `session.ending` reason `DURATION_ELAPSED` → `COMPLETED`, `charged_seconds ≤ 300` |
 | E11 (long) | Ticket kedaluwarsa / dipakai ulang | ticket > 30 s atau kedua kali → koneksi ditolak |
-| E12 | Fallback `opening_line` (S-2) | test (user dipromosikan `ADMIN` via SQL) me-retire version OPENING `PUBLISHED` lewat `POST /api/v1/admin/content/prompts/OPENING/versions/{id}/retire` (Bab 6 §6.13.1; menginvalidasi cache proses api tunggal e2e), lalu sesi `AI_FIRST` → `sessions.opening_prompt_version_id IS NULL`, sesi tidak gagal, turn 0 `assistant_text` = `scenario_versions.opening_line` dan audio diterima, `kaiwa_content_opening_fallback_total` naik (scrape `/metrics` realtime); cleanup: publish ulang version itu (`RETIRED` → `PUBLISHED`); test tidak paralel dengan E2 [builder call] |
-| E13 | Content filter (S-9) | set `kaiwa:fake:faults` = `{"LLM.FAKE_PRIMARY":{"mode":"error","kind":"CONTENT_FILTERED","rate":1.0}}` untuk 4 turn berturut-turut → setiap turn `FAILED` + APOLOGY diputar, sesi **tetap** `ACTIVE` (tidak dihitung ke `MAX_CONSECUTIVE_FAILED_TURNS`), `kaiwa_llm_content_filtered_total` = 4; hapus fault → turn berikutnya `COMPLETED`; `charged_seconds` sama dengan sesi tanpa fault berdurasi sama [builder call] |
+| E12 | Fallback `opening_line` (S-2) | test (user dipromosikan `ADMIN` via SQL) me-retire version OPENING `PUBLISHED` lewat `POST /api/v1/admin/content/prompts/OPENING/versions/{id}/retire` (Bab 6 §6.13.1; menginvalidasi cache proses api tunggal e2e), lalu sesi `AI_FIRST` → `sessions.opening_prompt_version_id IS NULL`, sesi tidak gagal, turn 0 `assistant_text` = `scenario_versions.opening_line` dan audio diterima, `kotoki_content_opening_fallback_total` naik (scrape `/metrics` realtime); cleanup: publish ulang version itu (`RETIRED` → `PUBLISHED`); test tidak paralel dengan E2 [builder call] |
+| E13 | Content filter (S-9) | set `kotoki:fake:faults` = `{"LLM.FAKE_PRIMARY":{"mode":"error","kind":"CONTENT_FILTERED","rate":1.0}}` untuk 4 turn berturut-turut → setiap turn `FAILED` + APOLOGY diputar, sesi **tetap** `ACTIVE` (tidak dihitung ke `MAX_CONSECUTIVE_FAILED_TURNS`), `kotoki_llm_content_filtered_total` = 4; hapus fault → turn berikutnya `COMPLETED`; `charged_seconds` sama dengan sesi tanpa fault berdurasi sama [builder call] |
 | E14 | Handoff drain tanpa kembali (S-10) | sesi dibuat pada proses realtime tambahan khusus test (seperti E5); `SIGTERM` proses itu → drain → close 4100, `sessions.handoff_at` terisi; client **tidak** reconnect; tunggu 31 s → `worker run-job session_sweeper` → sesi `COMPLETED` `end_reason = RECONNECT_TIMEOUT`, `charged_seconds` dihitung dengan `billable_end = handoff_at` (tidak memuat waktu setelah handoff); kasus kontrol (dengan proses realtime kedua hidup): reconnect < 30 s → `handoff_at` dikosongkan oleh `ClaimRuntime`, sesi lanjut [builder call] |
 
 **Fixture audio** di `testdata/audio/`:
@@ -14777,7 +14794,7 @@ Skenario wajib:
    - Paket fitur (`auth`, `balance`, `session`, `content`, `conversation`, `prompt`, `provider` (port, router, breaker, `fake`, `pricing`), `evaluation`, `memory`, `learner`, `summary`, `admin`, `events`) tidak boleh mengimpor paket adapter/handler (`internal/postgres`, `internal/redisstore`, `internal/amqp`, `internal/objectstore`, `internal/mailer`, `internal/httpapi`, `internal/wsgateway`, `internal/jobs`, `internal/provider/{elevenlabs,deepgram,openai,gemini,azure}`) maupun library infrastruktur (`chi`, `pgx`, `pgvector-go`, `go-redis`, `amqp091`, `coder/websocket`, `aws-sdk-go-v2`). Tipe pgvector/pgx hanya hidup di `internal/postgres` (memory memakai `[]float32`).
    - Handler (`httpapi`, `wsgateway`) hanya decode → panggil `Service` → encode: tidak mengimpor `pgx`, `go-redis`, `amqp091`, `aws-sdk`, maupun paket adapter penyimpanan; dependensi lewat port.
    - Adapter tidak mengimpor handler atau `jobs`.
-   - Hanya `internal/conversation/audio` yang mengimpor library cgo (`gopkg.in/hraban/opus.v2`, `github.com/maxhawkins/go-webrtcvad`); `internal/conversation/audio` hanya boleh diimpor dari graf realtime (`cmd/realtime`, `cmd/kaiwa-cli`, `internal/conversation/...`, `internal/wsgateway`, `internal/kaiwaclient/...`). Adapter vendor `internal/provider/<vendor>` MUST NOT mengimpornya (adapter ikut di-link ke `cmd/worker`); resample PCM memakai util Go murni `internal/provider/pcm.go` (Bab 8) dan dari test. `cmd/api` & `cmd/worker` MUST dapat di-build `CGO_ENABLED=0` (§2.2 aturan 5).
+   - Hanya `internal/conversation/audio` yang mengimpor library cgo (`gopkg.in/hraban/opus.v2`, `github.com/maxhawkins/go-webrtcvad`); `internal/conversation/audio` hanya boleh diimpor dari graf realtime (`cmd/realtime`, `cmd/kotoki-cli`, `internal/conversation/...`, `internal/wsgateway`, `internal/kotokiclient/...`). Adapter vendor `internal/provider/<vendor>` MUST NOT mengimpornya (adapter ikut di-link ke `cmd/worker`); resample PCM memakai util Go murni `internal/provider/pcm.go` (Bab 8) dan dari test. `cmd/api` & `cmd/worker` MUST dapat di-build `CGO_ENABLED=0` (§2.2 aturan 5).
    - Kode non-test tidak mengimpor `internal/testutil/...`, `testify`, atau `testcontainers-go`.
 5. Tidak boleh mengubah keputusan register diam-diam; penyimpangan arsitektural (state authority baru, broker/DB baru, framework, ORM, mengganti vendor) → hentikan task dan minta keputusan.
 6. Tidak boleh mengubah migration yang sudah merge (setelah `v0.1.0`) — buat migration baru; tidak boleh mengubah golden tanpa perubahan kontrak yang disengaja.
@@ -14880,7 +14897,7 @@ linters:
             - {pkg: "github.com/pgvector/pgvector-go", desc: "D-005: tipe vector hanya di internal/postgres"}
             - {pkg: "github.com/redis/go-redis/v9", desc: "D-005: Redis hanya di internal/redisstore"}
             - {pkg: "github.com/rabbitmq/amqp091-go", desc: "D-005: RabbitMQ hanya di internal/amqp"}
-            - {pkg: "github.com/coder/websocket", desc: "D-005: WebSocket hanya di wsgateway, provider/<vendor>, kaiwaclient"}
+            - {pkg: "github.com/coder/websocket", desc: "D-005: WebSocket hanya di wsgateway, provider/<vendor>, kotokiclient"}
             - {pkg: "github.com/aws/aws-sdk-go-v2", desc: "D-005: S3 hanya di internal/objectstore"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/postgres", desc: "D-005: pakai port Repository/Store milik fitur"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/redisstore", desc: "D-005: pakai port milik fitur"}
@@ -14942,10 +14959,10 @@ linters:
             - "$all"
             - "!$test"
             - "!**/cmd/realtime/**"
-            - "!**/cmd/kaiwa-cli/**"
+            - "!**/cmd/kotoki-cli/**"
             - "!**/internal/conversation/**"
             - "!**/internal/wsgateway/**"
-            - "!**/internal/kaiwaclient/**"
+            - "!**/internal/kotokiclient/**"
             - "!**/test/**"
           deny:
             - {pkg: "github.com/nabePi/kotoki-backend/internal/conversation/audio", desc: "§2.2 aturan 5: paket cgo; cmd/api & cmd/worker harus CGO_ENABLED=0"}
@@ -15007,15 +15024,15 @@ Go 1.25, Docker Engine + Compose v2, GNU make, gcc, pkg-config, libopus + libopu
 #### 14.10.2 `docker-compose.yml` (D-006)
 
 ```yaml
-name: kaiwa
+name: kotoki
 
 services:
   postgres:
     image: pgvector/pgvector:pg17
     environment:
-      POSTGRES_USER: kaiwa
-      POSTGRES_PASSWORD: kaiwa
-      POSTGRES_DB: kaiwa
+      POSTGRES_USER: kotoki
+      POSTGRES_PASSWORD: kotoki
+      POSTGRES_DB: kotoki
     command: ["postgres",
               "-c", "max_connections=200",
               "-c", "shared_preload_libraries=pg_stat_statements",
@@ -15024,7 +15041,7 @@ services:
     ports: ["5432:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kaiwa -d kaiwa"]
+      test: ["CMD-SHELL", "pg_isready -U kotoki -d kotoki"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -15042,14 +15059,14 @@ services:
 
   rabbitmq:
     image: rabbitmq:4-management
-    hostname: kaiwa-rabbitmq            # nama node stabil agar volume tetap valid
+    hostname: kotoki-rabbitmq            # nama node stabil agar volume tetap valid
     environment:
-      RABBITMQ_DEFAULT_USER: kaiwa
-      RABBITMQ_DEFAULT_PASS: kaiwa
-      RABBITMQ_DEFAULT_VHOST: /         # lokal = vhost default (Bab 9 §9.6; prod `/kaiwa`)
+      RABBITMQ_DEFAULT_USER: kotoki
+      RABBITMQ_DEFAULT_PASS: kotoki
+      RABBITMQ_DEFAULT_VHOST: /         # lokal = vhost default (Bab 9 §9.6; prod `/kotoki`)
     ports:
       - "5672:5672"     # AMQP
-      - "15672:15672"   # management UI (http://localhost:15672, kaiwa/kaiwa)
+      - "15672:15672"   # management UI (http://localhost:15672, kotoki/kotoki)
       - "15692:15692"   # Prometheus metrics
     volumes: ["rabbitmqdata:/var/lib/rabbitmq"]
     healthcheck:
@@ -15062,8 +15079,8 @@ services:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: kaiwa
-      MINIO_ROOT_PASSWORD: kaiwa-minio-secret
+      MINIO_ROOT_USER: kotoki
+      MINIO_ROOT_PASSWORD: kotoki-minio-secret
     ports:
       - "9000:9000"     # S3 API
       - "9001:9001"     # console
@@ -15081,10 +15098,10 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >
-        mc alias set local http://minio:9000 kaiwa kaiwa-minio-secret &&
-        mc mb --ignore-existing local/kaiwa-audio-local &&
-        (mc ilm rule ls local/kaiwa-audio-local | grep -q audio/tmp ||
-         mc ilm rule add --expire-days 1 --prefix audio/tmp/ local/kaiwa-audio-local)
+        mc alias set local http://minio:9000 kotoki kotoki-minio-secret &&
+        mc mb --ignore-existing local/kotoki-audio-local &&
+        (mc ilm rule ls local/kotoki-audio-local | grep -q audio/tmp ||
+         mc ilm rule add --expire-days 1 --prefix audio/tmp/ local/kotoki-audio-local)
     restart: "no"
 
   otel-collector:
@@ -15125,7 +15142,7 @@ receivers:
   prometheus:                      # metrik aplikasi tetap Prometheus client (D-NEW-13-9); di-scrape dari host
     config:
       scrape_configs:
-        - job_name: kaiwa-local
+        - job_name: kotoki-local
           scrape_interval: 15s
           static_configs:
             - targets: ["host.docker.internal:9090", "host.docker.internal:9091", "host.docker.internal:9092"]
@@ -15162,20 +15179,20 @@ LOG_FORMAT=text
 LOG_TRANSCRIPTS=false
 PPROF_ENABLED=true
 
-# ---- Origin (frontend dev / kaiwa-cli) ----
+# ---- Origin (frontend dev / kotoki-cli) ----
 CORS_ALLOWED_ORIGINS=http://localhost:3000
 WS_ALLOWED_ORIGINS=http://localhost:3000
 
 # ---- Data stores (docker-compose) ----
-DB_URL=postgres://kaiwa:kaiwa@localhost:5432/kaiwa?sslmode=disable
+DB_URL=postgres://kotoki:kotoki@localhost:5432/kotoki?sslmode=disable
 REDIS_URL=redis://localhost:6379/0
-RABBITMQ_URL=amqp://kaiwa:kaiwa@localhost:5672/
+RABBITMQ_URL=amqp://kotoki:kotoki@localhost:5672/
 
 S3_ENDPOINT=http://localhost:9000
 S3_REGION=us-east-1
-S3_BUCKET_AUDIO=kaiwa-audio-local
-S3_ACCESS_KEY_ID=kaiwa
-S3_SECRET_ACCESS_KEY=kaiwa-minio-secret
+S3_BUCKET_AUDIO=kotoki-audio-local
+S3_ACCESS_KEY_ID=kotoki
+S3_SECRET_ACCESS_KEY=kotoki-minio-secret
 S3_USE_PATH_STYLE=true
 S3_SSE=
 
@@ -15224,10 +15241,10 @@ FAKE_PRIMARY_TTS_LATENCY_MS=300
 # ---- Observability (aktifkan bersama `make up-obs`) ----
 # OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 
-# ---- kaiwa-cli ----
-KAIWA_CLI_API_URL=http://localhost:8080
-KAIWA_CLI_WS_URL=ws://localhost:8081/api/v1/realtime
-KAIWA_CLI_ORIGIN=http://localhost:3000
+# ---- kotoki-cli ----
+KOTOKI_CLI_API_URL=http://localhost:8080
+KOTOKI_CLI_WS_URL=ws://localhost:8081/api/v1/realtime
+KOTOKI_CLI_ORIGIN=http://localhost:3000
 ```
 
 `.env` ada di `.gitignore`; `.env.example` di-commit. Setiap env var baru wajib ditambahkan di sini (§14.9.2).
@@ -15241,8 +15258,8 @@ export
 
 GO              ?= go
 MIGRATE_IMAGE   := migrate/migrate:v4.18.3
-COMPOSE_NETWORK := kaiwa_default
-MIGRATE_DB_URL  := postgres://kaiwa:kaiwa@postgres:5432/kaiwa?sslmode=disable
+COMPOSE_NETWORK := kotoki_default
+MIGRATE_DB_URL  := postgres://kotoki:kotoki@postgres:5432/kotoki?sslmode=disable
 GOLANGCI_LINT_VERSION := v2.1.6
 VERSION         ?= $(shell git describe --tags --always --dirty)
 GIT_COMMIT      ?= $(shell git rev-parse --short HEAD)
@@ -15282,10 +15299,10 @@ migrate-create: ## make migrate-create NAME=add_x
 
 seed:           ## jalankan seed/*.sql (idempoten) berurutan
 	@for f in seed/*.sql; do echo "seed $$f"; \
-	  docker compose exec -T postgres psql -U kaiwa -d kaiwa -v ON_ERROR_STOP=1 < $$f || exit 1; done
+	  docker compose exec -T postgres psql -U kotoki -d kotoki -v ON_ERROR_STOP=1 < $$f || exit 1; done
 
 promote-admin:  ## make promote-admin EMAIL=dev@example.test
-	docker compose exec -T postgres psql -U kaiwa -d kaiwa -v ON_ERROR_STOP=1 \
+	docker compose exec -T postgres psql -U kotoki -d kotoki -v ON_ERROR_STOP=1 \
 	  -c "UPDATE users SET role='ADMIN' WHERE email='$(EMAIL)'"
 
 sqlc:
@@ -15341,21 +15358,21 @@ run-worker:      ## WORKER_HTTP_ADDR default Bab 9 (:8081) bentrok dengan realti
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -o bin/ ./cmd/api ./cmd/worker
-	CGO_ENABLED=1 $(GO) build -trimpath -o bin/ ./cmd/realtime ./cmd/kaiwa-cli
+	CGO_ENABLED=1 $(GO) build -trimpath -o bin/ ./cmd/realtime ./cmd/kotoki-cli
 
 cli:
-	CGO_ENABLED=1 $(GO) build -o bin/kaiwa-cli ./cmd/kaiwa-cli
+	CGO_ENABLED=1 $(GO) build -o bin/kotoki-cli ./cmd/kotoki-cli
 
 docker-build:
 	for b in api realtime worker migrate; do \
 	  docker build -f deploy/docker/$$b.Dockerfile --build-arg VERSION=$(VERSION) \
-	    --build-arg GIT_COMMIT=$(GIT_COMMIT) -t kaiwa/$$b:$(VERSION) . || exit 1; done
+	    --build-arg GIT_COMMIT=$(GIT_COMMIT) -t kotoki/$$b:$(VERSION) . || exit 1; done
 
 load:           ## make load ARGS="--vus 20 --hold 5m"
-	CGO_ENABLED=1 $(GO) run ./test/load/cmd/kaiwa-load $(ARGS)
+	CGO_ENABLED=1 $(GO) run ./test/load/cmd/kotoki-load $(ARGS)
 ```
 
-Semua target test memakai `-race` (§14.1). Paket cgo (`hraban/opus`, `go-webrtcvad`) hanya diimpor `internal/conversation/audio` dan dikompilasi tanpa build tag khusus saat membangun `cmd/realtime`, `cmd/kaiwa-cli`, `test/load`, atau test paket yang mengimpornya; cukup `libopus-dev` + `libopusfile-dev` + gcc terpasang. `cmd/api` dan `cmd/worker` selalu dibangun `CGO_ENABLED=0` (`make build`, `make arch-check`, Dockerfile §13.10.9).
+Semua target test memakai `-race` (§14.1). Paket cgo (`hraban/opus`, `go-webrtcvad`) hanya diimpor `internal/conversation/audio` dan dikompilasi tanpa build tag khusus saat membangun `cmd/realtime`, `cmd/kotoki-cli`, `test/load`, atau test paket yang mengimpornya; cukup `libopus-dev` + `libopusfile-dev` + gcc terpasang. `cmd/api` dan `cmd/worker` selalu dibangun `CGO_ENABLED=0` (`make build`, `make arch-check`, Dockerfile §13.10.9).
 
 #### 14.10.5 Dari clone sampai percakapan pertama (fake provider)
 
@@ -15382,29 +15399,29 @@ make run-worker       # ops :9092
 
 # 6. akun & percakapan
 make cli
-./bin/kaiwa-cli register --email dev@example.test --password 'dev-password-123' --audio-consent
-./bin/kaiwa-cli login    --email dev@example.test --password 'dev-password-123'
-./bin/kaiwa-cli converse --duration 300 --start-mode USER_FIRST \
+./bin/kotoki-cli register --email dev@example.test --password 'dev-password-123' --audio-consent
+./bin/kotoki-cli login    --email dev@example.test --password 'dev-password-123'
+./bin/kotoki-cli converse --duration 300 --start-mode USER_FIRST \
     --wav testdata/audio/ja_self_intro.wav,testdata/audio/ja_question.wav \
     --out-dir out/first-run
 
 # 7. hasil
 ls out/first-run                      # turn-001-gen-1.wav, turn-002-gen-2.wav, events.jsonl, summary.json
-./bin/kaiwa-cli evaluation get --session <session_id dari output> --wait 60s
+./bin/kotoki-cli evaluation get --session <session_id dari output> --wait 60s
 ```
 
 Kriteria "berhasil": langkah 6 mencetak event server berurutan, ringkasan latensi per turn, file WAV balasan berisi audio fake TTS, sesi berakhir `COMPLETED`, dan langkah 7 menampilkan evaluasi `COMPLETED`. Total waktu dari clone ≤ 15 menit pada mesin dengan image Docker belum ter-cache.
 
 Pemeriksaan cepat bila gagal: `curl localhost:9090/readyz` (api), `:9091/readyz` (realtime), `:9092/readyz` (worker); UI RabbitMQ `http://localhost:15672`; MinIO console `http://localhost:9001`; trace (Tempo), metrik (Prometheus) dan dashboard (bila `make up-obs` + `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317`) di Grafana `http://localhost:3000` → Explore.
 
-### 14.11 `cmd/kaiwa-cli`
+### 14.11 `cmd/kotoki-cli`
 
-Test client resmi untuk pengujian manual, e2e, dan load test. Logika berada di library **`internal/kaiwaclient`** (D-NEW-14-2); `cmd/kaiwa-cli` hanya parsing flag dan output. Parser flag: `flag` standar dengan subcommand (tanpa library CLI tambahan).
+Test client resmi untuk pengujian manual, e2e, dan load test. Logika berada di library **`internal/kotokiclient`** (D-NEW-14-2); `cmd/kotoki-cli` hanya parsing flag dan output. Parser flag: `flag` standar dengan subcommand (tanpa library CLI tambahan).
 
 #### 14.11.1 Library
 
 ```go
-package kaiwaclient
+package kotokiclient
 
 // REST
 type Client struct { /* BaseURL, http.Client dengan cookiejar (refresh cookie), token store */ }
@@ -15429,7 +15446,7 @@ func (rc *RealtimeConn) Events() <-chan Received[protocol.ServerEvent]          
 func (rc *RealtimeConn) Audio() <-chan AudioFrame                                 // {Generation, Seq, Payload, At}
 func (rc *RealtimeConn) Close(code websocket.StatusCode, reason string) error
 
-// Audio (subpackage kaiwaclient/audio; membungkus internal/conversation/audio → cgo)
+// Audio (subpackage kotokiclient/audio; membungkus internal/conversation/audio → cgo)
 func ReadWAV(path string) (PCM, error)           // PCM16; stereo di-downmix, sample rate ≠ 48 kHz di-resample linear ke 48 kHz
 func WriteWAV(path string, pcm PCM) error
 func PreEncode(pcm PCM) ([][]byte, error)        // Opus 48 kHz mono, 20 ms (960 sampel), VOIP, 32 kbps, complexity 5
@@ -15467,7 +15484,7 @@ Pengukuran sisi client (`Report`):
 
 #### 14.11.2 Subcommand & flag
 
-Flag global (juga dari env): `--api-url` (`KAIWA_CLI_API_URL`, default `http://localhost:8080`), `--ws-url` (`KAIWA_CLI_WS_URL`, default `ws://localhost:8081/api/v1/realtime`), `--origin` (`KAIWA_CLI_ORIGIN`, default `http://localhost:3000`), `--json` (output JSON lines), `--timeout` (default `30s` per request REST). Kredensial disimpan di `$XDG_CONFIG_HOME/kaiwa-cli/credentials.json` (mode 0600), dikunci per `api-url`.
+Flag global (juga dari env): `--api-url` (`KOTOKI_CLI_API_URL`, default `http://localhost:8080`), `--ws-url` (`KOTOKI_CLI_WS_URL`, default `ws://localhost:8081/api/v1/realtime`), `--origin` (`KOTOKI_CLI_ORIGIN`, default `http://localhost:3000`), `--json` (output JSON lines), `--timeout` (default `30s` per request REST). Kredensial disimpan di `$XDG_CONFIG_HOME/kotoki-cli/credentials.json` (mode 0600), dikunci per `api-url`.
 
 | Subcommand | Flag | Fungsi |
 |---|---|---|
@@ -15519,7 +15536,7 @@ session COMPLETED  charged_seconds=31
 
 #### 14.11.3 Pemakaian oleh load test
 
-`test/load/cmd/kaiwa-load` memakai `kaiwaclient` yang sama: `PreEncode` fixture sekali, `Sink` agregator (histogram HDR sederhana in-memory per metrik), `--no-audio-save` semantics (frame tidak di-decode). Model perilaku & gate: Bab 13 §13.12.
+`test/load/cmd/kotoki-load` memakai `kotokiclient` yang sama: `PreEncode` fixture sekali, `Sink` agregator (histogram HDR sederhana in-memory per metrik), `--no-audio-save` semantics (frame tidak di-decode). Model perilaku & gate: Bab 13 §13.12.
 
 ### 14.12 CI (GitHub Actions)
 
@@ -15639,22 +15656,22 @@ Branch protection `main`: wajib lulus `lint`, `unit`, `integration`, `e2e`, `bui
 |---|---|---|
 | `nightly.yml` | cron `0 18 * * *` (01:00 WIB) + manual | `make test-integration` dengan `-count=3` (deteksi flaky); `E2E_LONG=1 make test-e2e` (E10, E11); laporan gagal → issue otomatis |
 | `live-providers.yml` | cron mingguan Senin `0 1 * * 1` + `workflow_dispatch` | `make test-live` dengan secret dari GitHub Environment `live-providers` (reviewer wajib untuk dispatch manual) |
-| `deploy-staging.yml` | push `main` setelah `ci` sukses | Job migrate → seed → `kustomize edit set image` ke SHA → apply overlay `staging`; smoke test: `kaiwa-cli converse` 1 fixture terhadap staging (PROVIDER_MODE=real) |
+| `deploy-staging.yml` | push `main` setelah `ci` sukses | Job migrate → seed → `kustomize edit set image` ke SHA → apply overlay `staging`; smoke test: `kotoki-cli converse` 1 fixture terhadap staging (PROVIDER_MODE=real) |
 | `deploy-prod.yml` | tag `v*` + approval GitHub Environment `production` | sama dengan staging memakai digest image; rollback = re-deploy tag sebelumnya |
 
 ### Keputusan bab ini
 
-- D-NEW-14-1: Allowlist library = D-003 yang diperbarui R-30 (`prometheus/client_golang`, `otelhttp`, `golang.org/x/sync`, `pgvector-go`, modul testcontainers postgres/redis/rabbitmq/minio) + golang-migrate sebagai library di migration test; layout §2.2 (`internal/kaiwaclient/`, `internal/testutil/fakes/`, `internal/testutil/repotest/`, `testdata/audio/`, `testdata/api/`, `test/e2e/`, `test/chaos/`, `test/tools/`). Tanpa SDK vendor, tanpa mock generator, tanpa library CLI, tanpa library rekam HTTP.
-- D-NEW-14-2: Library klien uji `internal/kaiwaclient` (REST + WS + audio + pacer + skrip percakapan), dipakai `cmd/kaiwa-cli`, `test/e2e`, dan `test/load`; client memakai tipe dari `internal/conversation/protocol`.
-- D-NEW-14-3: `kaiwa-cli` tidak punya mode input teks (protokol hanya audio); uji tanpa mikrofon memakai fixture WAV 48 kHz mono di `testdata/audio` dengan pasangan `.txt` dan opsional `.partials.json`.
+- D-NEW-14-1: Allowlist library = D-003 yang diperbarui R-30 (`prometheus/client_golang`, `otelhttp`, `golang.org/x/sync`, `pgvector-go`, modul testcontainers postgres/redis/rabbitmq/minio) + golang-migrate sebagai library di migration test; layout §2.2 (`internal/kotokiclient/`, `internal/testutil/fakes/`, `internal/testutil/repotest/`, `testdata/audio/`, `testdata/api/`, `test/e2e/`, `test/chaos/`, `test/tools/`). Tanpa SDK vendor, tanpa mock generator, tanpa library CLI, tanpa library rekam HTTP.
+- D-NEW-14-2: Library klien uji `internal/kotokiclient` (REST + WS + audio + pacer + skrip percakapan), dipakai `cmd/kotoki-cli`, `test/e2e`, dan `test/load`; client memakai tipe dari `internal/conversation/protocol`.
+- D-NEW-14-3: `kotoki-cli` tidak punya mode input teks (protokol hanya audio); uji tanpa mikrofon memakai fixture WAV 48 kHz mono di `testdata/audio` dengan pasangan `.txt` dan opsional `.partials.json`.
 - D-NEW-14-4: Build tag test: `integration`, `e2e`, `live`; `-race` wajib di semua run; ambang coverage §14.8.
 - D-NEW-14-5: E2E menjalankan binary asli sebagai subprocess (bukan wiring in-process), sehingga D-004 (wiring di `cmd/*/main.go`) tetap.
-- D-NEW-14-6: Dependensi native: build butuh `libopus-dev` + `libopusfile-dev` + gcc (lokal, CI, Dockerfile); runtime image realtime memasang `libopus0` + `libopusfile0`; `api` dan `worker` dibangun `CGO_ENABLED=0` dan tidak boleh mengimpor package cgo (satu-satunya: `internal/conversation/audio`); hanya `realtime.Dockerfile` (dan build lokal/CI `kaiwa-cli`) memakai toolchain cgo.
+- D-NEW-14-6: Dependensi native: build butuh `libopus-dev` + `libopusfile-dev` + gcc (lokal, CI, Dockerfile); runtime image realtime memasang `libopus0` + `libopusfile0`; `api` dan `worker` dibangun `CGO_ENABLED=0` dan tidak boleh mengimpor package cgo (satu-satunya: `internal/conversation/audio`); hanya `realtime.Dockerfile` (dan build lokal/CI `kotoki-cli`) memakai toolchain cgo.
 - D-NEW-14-7: Fake port tulisan tangan di `internal/testutil/fakes` (fake bersama; test pemakainya di paket `<fitur>_test`) atau fake lokal di `_test.go` (port satu paket / white-box), dijaga dengan contract suite bersama `internal/testutil/repotest` yang juga dijalankan terhadap `internal/postgres`.
 - D-NEW-14-8: Alat bantu repo: `test/tools/covercheck`, `test/tools/migcheck`, `test/tools/modelcheck` (Go, tanpa dependensi baru); log kerja agent di `docs/implementation-log.md`, penyimpangan di `docs/implementation-deviations.md`.
 - D-NEW-14-9: Migration `000001`–`000021` boleh diedit sampai tag `v0.1.0`; setelahnya immutable (dicek CI).
 - D-NEW-14-10: CI GitHub Actions: `lint`, `unit`, `integration`, `e2e`, `build-images` di setiap PR & push `main`; nightly, live-providers mingguan, deploy staging otomatis dari `main`, deploy prod dari tag dengan approval.
-- D-NEW-14-11: Env khusus CLI memakai prefix `KAIWA_CLI_`; env khusus test memakai prefix `TEST_` (hanya dibaca `internal/testutil`).
+- D-NEW-14-11: Env khusus CLI memakai prefix `KOTOKI_CLI_`; env khusus test memakai prefix `TEST_` (hanya dibaca `internal/testutil`).
 - D-NEW-14-12: Target Makefile D-006 (`test`, `test-integration`, …) tetap bernama sama tetapi selalu menjalankan `go test -race`.
 - D-NEW-14-13: Subcommand `worker run-job <job>` menjalankan satu job tabel Bab 9 §9.9.1 sekali (advisory lock yang sama) untuk e2e/operasi manual [builder call].
 - D-NEW-14-14: Layout per fitur (D-005, §2.2) ditegakkan `depguard` dengan enam aturan (§14.9.5: `feature-no-infra`, `handler-thin`, `adapter-no-handler`, `cgo-libs-only-in-audio`, `audio-only-realtime-graph`, `no-test-deps-in-prod`) + target `make arch-check` (`CGO_ENABLED=0` build dan `go list -deps` untuk `cmd/api`/`cmd/worker`) di job CI `lint`; `time.Now` dilarang di paket fitur kecuali adapter vendor [builder call].
@@ -15752,7 +15769,7 @@ Butir-butir ini dipilih saat merapikan dokumen dan sudah dipakai di seluruh spec
 | 11 | Memory | `internal/memory` |
 | 12 | Learner Profile, Proficiency & Adaptive Difficulty | `internal/learner` |
 | 13 | Infrastructure, Security, Privacy & Operations (**katalog env var**, k8s, load test) | `internal/platform`, `internal/objectstore`, `deploy/`, `test/load`, `test/chaos` |
-| 14 | Testing Strategy, Local Dev & Tooling (aturan agent AI coding, **depguard layout**, CI) | `internal/testutil` (+ `fakes`, `repotest`), `internal/kaiwaclient`, `cmd/kaiwa-cli`, `testdata/`, `test/e2e`, `test/tools` |
+| 14 | Testing Strategy, Local Dev & Tooling (aturan agent AI coding, **depguard layout**, CI) | `internal/testutil` (+ `fakes`, `repotest`), `internal/kotokiclient`, `cmd/kotoki-cli`, `testdata/`, `test/e2e`, `test/tools` |
 | 15 | Urutan migration, status keputusan, indeks | `migrations/`, `internal/postgres` (+ `sqlcgen`), `db/queries/` |
 
 
