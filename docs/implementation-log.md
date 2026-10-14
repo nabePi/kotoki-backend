@@ -451,3 +451,11 @@ Tanggal: 2026-10-14
 - `internal/platform/ratelimit`: `Policy` (+ `RatePerMs`), `Decision`, port `Limiter`, `Catalog` 15 policy (13 dari M2 + `ws_connect_ip`, `ws_attach_user` untuk M5, semuanya dari §13.4.3), `Get` (panic bila nama tak dikenal), `SubjectEmail`/`SubjectIP`, `Local` (token bucket in-memory + LRU, jam dari `clock.Clock`)
 ### Test
 - go test ./internal/platform/ratelimit -race — PASS
+
+## M2-T20 — redisstore.RateLimiter (Lua + fallback)
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `redisstore.RateLimiter`: script Lua §13.4.3 verbatim (`redis.NewScript` → EVALSHA, fallback EVAL otomatis), key `kotoki:ratelimit:{policy}:{subject}` dengan `PEXPIRE`, waktu dari `redis.call('TIME')`; Redis error → limiter lokal (fail-open), `kotoki_ratelimit_backend_errors_total`, log warn maksimal 1×/10 s (jam dari `clock.Clock`); `metrics.RateLimit` (`kotoki_ratelimit_rejected_total{policy}`, `kotoki_ratelimit_backend_errors_total`)
+### Test
+- go test ./internal/platform/metrics -run RateLimit; go test -tags integration ./internal/redisstore -run RedisLimiter (Podman) — PASS (burst, refill, TTL, isolasi subject, fallback saat Redis mati)
