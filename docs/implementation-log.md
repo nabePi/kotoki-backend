@@ -869,3 +869,8 @@ Tanggal: 2026-10-14
 ## M3-T14 — Paket `events` + outbox writer
 - `internal/events/types.go` (`SessionCompletedPayload` v1 dengan timestamp milidetik UTC, `NewSessionCompleted`, `ActiveSeconds`), `postgres.Tx.Outbox()` (INSERT `event_outbox`, traceparent/tracestate dari propagator ctx), `db/queries/outbox.sql`, `fakes.Outbox`.
 - Tes: golden payload, floor active_seconds, 16 key; integrasi `TestOutboxWriterInsertsPendingRow`, `TestOutboxWriterRollsBackWithTx`.
+
+## M3-T15 — Repository session/turn/event di Postgres
+- `db/queries/{sessions,session_turns,session_events}.sql`; `postgres.NewSessionRepo/NewTurnRepo/NewEventRepo` dan `(*Tx).Sessions()/Turns()/Events()`; `Store.SessionStore()`. Tulis runtime ber-fence dengan pola `INSERT … SELECT … WHERE EXISTS` / `UPDATE … AND EXISTS` (0 baris → `ErrFenceLost`); `FailInProgress` memeriksa fence terpisah bila tidak ada turn yang diubah; 23505 diterjemahkan ke `ErrAlreadyOpen`/`ErrDuplicateIdempotency` lewat nama index.
+- `repotest.RunSessionRepoSuite` (kontrak yang nanti juga dijalankan terhadap fake session store) + tes integrasi: CHECK, partisi, tanpa FK ke tabel partisi, pruning, snapshot immutable (`TestConfigSnapshotImmutable` mem-parse sqlc), kandidat abandon.
+- Ruling: port sweeper memakai cutoff yang dihitung pemanggil (`ListExpired(expiredBefore)`, `ListActiveForHeartbeat(startedBefore, limit)`), bukan `now`; `MaxSeqAndGeneration` mengembalikan `(-1, 0)` bila belum ada turn (AI_FIRST mulai dari 0, USER_FIRST dari 1); `Stats.hasAudio` = ada turn dengan `stt_audio_ms` atau `tts_first_audio_ms` (D-099: tak ada referensi audio tersimpan); `ListForUser` mengecualikan turn `DISCARDED`; `ListRecent` mengembalikan semua status, urut naik — penyaringan milik konsumen (M5).

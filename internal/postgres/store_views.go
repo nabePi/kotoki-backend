@@ -9,6 +9,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/admin"
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/balance"
+	"github.com/nabePi/kotoki-backend/internal/session"
 )
 
 // balanceStoreView adapts Store to balance.Store: *Tx already satisfies balance.Tx.
@@ -51,3 +52,13 @@ func (v adminStoreView) WithinTx(ctx context.Context, fn func(ctx context.Contex
 }
 
 var _ admin.Tx = (*Tx)(nil)
+
+type sessionStoreView struct{ s *Store }
+
+// SessionStore returns the session.Store view of s: *Tx satisfies session.Tx (balance, sessions,
+// turns, events and the outbox in one transaction).
+func (s *Store) SessionStore() session.Store { return sessionStoreView{s: s} }
+
+func (v sessionStoreView) WithinTx(ctx context.Context, fn func(ctx context.Context, tx session.Tx) error) error {
+	return v.s.WithinTx(ctx, func(ctx context.Context, tx *Tx) error { return fn(ctx, tx) })
+}

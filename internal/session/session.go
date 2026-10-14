@@ -105,7 +105,10 @@ var (
 	ErrStartDeadlinePassed = errors.New("session start deadline passed")
 	ErrStartTimeout        = errors.New("session start timeout")
 	ErrAlreadyOpen         = errors.New("user already has an open session")
-	ErrFenceLost           = errors.New("runtime fence lost") // runtime_fence ≠ the caller's fence (spec 7.9.3)
+	// ErrDuplicateIdempotency is returned by Insert when the (user, Idempotency-Key) pair already
+	// exists: the backstop of the replay check in Service.Create (spec 4.6.1).
+	ErrDuplicateIdempotency = errors.New("duplicate create idempotency key")
+	ErrFenceLost            = errors.New("runtime fence lost") // runtime_fence ≠ the caller's fence (spec 7.9.3)
 )
 
 // Session mirrors a sessions row (spec 5.3.1). The character, voice and formality of the session
@@ -348,15 +351,16 @@ type Repository interface {
 	SetSummary(ctx context.Context, id uuid.UUID, text string, at time.Time) error
 
 	// Candidates of the sweeper (spec 5.6.4); none of them locks.
-	ListExpired(ctx context.Context, now time.Time, limit int) ([]uuid.UUID, error)
-	ListStuckEnding(ctx context.Context, olderThan time.Time, limit int) ([]uuid.UUID, error)
-	ListStuckStarting(ctx context.Context, olderThan time.Time, limit int) ([]uuid.UUID, error)
-	ListHandoffStale(ctx context.Context, olderThan time.Time, limit int) ([]uuid.UUID, error)
-	ListActiveForHeartbeat(ctx context.Context, limit int) ([]ActiveRef, error)
+	// The time arguments are cutoffs the caller computed from its clock (now − 15 s, now − 60 s, …).
+	ListExpired(ctx context.Context, expiredBefore time.Time, limit int) ([]uuid.UUID, error)
+	ListStuckEnding(ctx context.Context, endingBefore time.Time, limit int) ([]uuid.UUID, error)
+	ListStuckStarting(ctx context.Context, startingBefore time.Time, limit int) ([]uuid.UUID, error)
+	ListHandoffStale(ctx context.Context, handoffBefore time.Time, limit int) ([]uuid.UUID, error)
+	ListActiveForHeartbeat(ctx context.Context, startedBefore time.Time, limit int) ([]ActiveRef, error)
 	CountActiveNonHandoff(ctx context.Context) (int, error)
 	// ListAbandonCandidates is the candidate query of spec 4.6.2 without FOR UPDATE, ordered by
 	// start_deadline_at; reservation_cleanup (M6) feeds the ids to Service.Abandon.
-	ListAbandonCandidates(ctx context.Context, now time.Time, limit int) ([]uuid.UUID, error)
+	ListAbandonCandidates(ctx context.Context, deadlineBefore time.Time, limit int) ([]uuid.UUID, error)
 }
 
 // ActiveRef is an ACTIVE session the sweeper checks for a heartbeat.
@@ -375,12 +379,15 @@ type TurnRepository interface {
 	Finalize(ctx context.Context, fence int64, turnID uuid.UUID, f TurnFinal) error
 	FailInProgress(ctx context.Context, fence int64, sessionID uuid.UUID, partial *TurnFinal) (int, error)
 	ListRecent(ctx context.Context, sessionID uuid.UUID, limit int) ([]TurnRecord, error)
+	// MaxSeqAndGeneration is (-1, 0) when the session has no turn yet (AI_FIRST starts at sequence 0,
+	// USER_FIRST at 1).
 	MaxSeqAndGeneration(ctx context.Context, sessionID uuid.UUID) (maxSeq int, maxGen int, err error)
 
 	// FailDangling marks every turn still in progress FAILED when the session is settled (spec 4.6.3
 	// step 7) and returns how many it changed.
 	FailDangling(ctx context.Context, sessionID uuid.UUID, startingAt time.Time, at time.Time) (int, error)
-	// Stats counts the turns of a session for the session.completed payload.
+	// Stats counts the non-DISCARDED turns of a session for the session.completed payload; hasAudio is
+	// true when any turn recorded STT audio or a first TTS audio latency.
 	Stats(ctx context.Context, sessionID uuid.UUID, startingAt time.Time) (turnCount, userTurnCount int, hasAudio bool, err error)
 	// ListForUser pages the transcript; startingAt/endedAt bound created_at for partition pruning.
 	ListForUser(ctx context.Context, sessionID uuid.UUID, startingAt time.Time, endedAt *time.Time, afterSeq *int, limit int) ([]TurnRecord, error)
