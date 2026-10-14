@@ -72,3 +72,14 @@ func TestTotalExceptList(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, fails)
 }
+
+func TestPrefixExceptExcludesSubpackage(t *testing.T) {
+	prof := profile("internal/provider", 100, 90) + strings.TrimPrefix(profile("internal/provider/providertest", 100, 0), "mode: atomic\n")
+	fails, err := check(strings.NewReader(prof), strings.NewReader("internal/provider 85\n"), nil)
+	require.NoError(t, err)
+	require.Len(t, fails, 1, "the untested helper package drags the aggregate below 85")
+
+	fails, err = check(strings.NewReader(prof), strings.NewReader("internal/provider 85 except=internal/provider/providertest\n"), nil)
+	require.NoError(t, err)
+	require.Empty(t, fails)
+}

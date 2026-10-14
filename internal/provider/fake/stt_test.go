@@ -227,21 +227,25 @@ func TestFakeSTTFinalizeWithoutSegmentIsEmpty(t *testing.T) {
 
 func TestFakeSTTPartialsFollowAudioTime(t *testing.T) {
 	s := openFake(t, Config{})
-	feed(t, s, tone(1000, 8000))
-	require.NoError(t, s.Finalize())
-	ps := partials(t, s)
-	require.Len(t, ps, 5, "one PARTIAL per 200 ms of segment audio: 200, 400, 600, 800, 1000")
+	// Feed 200 ms at a time and read each PARTIAL before sending more: a new PARTIAL replaces
+	// queued ones, so a slow reader would legitimately miss some.
 	prev := 0
-	for i, p := range ps {
-		require.Equal(t, provider.STTPartial, p.Type)
+	for i := 1; i <= 5; i++ {
+		feed(t, s, tone(200, 8000))
+		p := next(t, s)
+		require.Equal(t, provider.STTPartial, p.Type, "one PARTIAL per 200 ms of segment audio")
+		require.EqualValues(t, 0, p.StartMs)
+		require.EqualValues(t, i*200, p.EndMs)
 		n := len([]rune(p.Text))
 		require.GreaterOrEqual(t, n, prev, "partial %d must not shrink", i)
 		prev = n
-		require.EqualValues(t, 0, p.StartMs)
-		require.EqualValues(t, (i+1)*200, p.EndMs)
+		if i == 1 {
+			// "はい、そうです。" = 8 runes, expected 960 ms: 200 ms → ceil(8×200/960) = 2 runes
+			require.Equal(t, "はい", p.Text)
+		}
 	}
-	// "はい、そうです。" = 8 runes, expected 960 ms: 200 ms → ceil(8×200/960) = 2 runes
-	require.Equal(t, "はい", ps[0].Text)
+	require.NoError(t, s.Finalize())
+	require.Equal(t, provider.STTFinal, nextFinal(t, s).Type)
 }
 
 func TestFakeSTTTimestampsFromSamplePosition(t *testing.T) {

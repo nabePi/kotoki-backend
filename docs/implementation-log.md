@@ -746,3 +746,14 @@ Tanggal: 2026-10-14
 - `internal/prompt/sentence_parser.go`: `NewSentenceParser(maxSentences)`, `Feed`/`Close`, sanitasi (buang `* # ` _`, emoji `So`, ringkas spasi lintas delta; `<`/`>` apa adanya), pemotongan kalimat (terminator + closer, tunggu bila terminator rune terakhir, soft boundary ≥ 20, potong keras 60), kalimat tanpa ucapan ditempel ke sebelumnya, kalimat 1 rune digabung ke berikutnya (kecuali di akhir stream), `Limited` setelah kalimat ke-`MaxSentences` (sisa delta dibuang dari `clean`), hasil identik untuk feed per rune dan sekaligus
 ### Test
 - `sentence_parser_test.go` — PASS (race), cakupan paket 97 %
+
+## Gerbang milestone M4
+Status: LULUS
+Tanggal: 2026-10-14
+- `go build ./... && go vet ./internal/provider/... ./internal/prompt/...` — bersih
+- `go test ./internal/provider/... ./internal/prompt/... -race -count=5` — semua `ok`; suite `providertest` (LLM, TTS, STT, Evaluation, Embedding) dijalankan terhadap `fake`
+- Cakupan (`covercheck`): `internal/provider` (+ sub-paket, kecuali `providertest`) ≥ 85 %, `internal/prompt` 97 % — `covercheck` kini mendukung `except=` pada baris prefix
+- `make arch-check` memuat `TestImportRules` provider/prompt; `make lint` 0 issue; `make test`, `make test-cover`, `migrations-check`, `sqlc-check`, `tidy-check`, `vuln` hijau
+- `go test -tags integration ./internal/redisstore -run FakeFaults` — PASS
+- Review Focus 1–5 lulus (`ContentFiltered`, `NoResetEventExists`, `NoEpochSwitchAfterAudioSent`, `Truncated`, `DeadlineBeforeAudio`, `BreakerStateMachine`, `TestRotation*`, `VendorErrorForwarded`, `PollerClears`)
+- grep D-014/D-015/D-016/D-017: hanya komentar sah dan sakelar `PROVIDER_TTS_FALLBACK_ENABLED`

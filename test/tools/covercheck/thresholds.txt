@@ -12,7 +12,7 @@ internal/summary 85
 internal/admin 85
 internal/events 85
 internal/conversation 80
-internal/provider 70
+internal/provider 85 except=internal/provider/providertest
 internal/httpapi 70
 internal/wsgateway 70
 TOTAL internal 75 except=internal/postgres,internal/redisstore,internal/amqp
