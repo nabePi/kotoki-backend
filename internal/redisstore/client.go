@@ -19,6 +19,7 @@ func NewClient(cfg config.Redis, m *metrics.Redis) (redis.UniversalClient, error
 		c = redis.NewFailoverClient(&redis.FailoverOptions{
 			MasterName: cfg.SentinelMaster, SentinelAddrs: cfg.SentinelAddrs, Password: cfg.Password.Reveal(),
 			PoolSize: cfg.PoolSize, DialTimeout: cfg.DialTimeout, ReadTimeout: cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout,
+			DisableIdentity: true, // CLIENT SETINFO is unknown to Redis 7.0/7.1 and logs noise
 		})
 	} else {
 		opt, perr := redis.ParseURL(cfg.URL.Reveal())
@@ -41,6 +42,7 @@ func NewClient(cfg config.Redis, m *metrics.Redis) (redis.UniversalClient, error
 		if cfg.WriteTimeout > 0 {
 			opt.WriteTimeout = cfg.WriteTimeout
 		}
+		opt.DisableIdentity = true
 		c = redis.NewClient(opt)
 	}
 	c.AddHook(NewTraceHook(m))

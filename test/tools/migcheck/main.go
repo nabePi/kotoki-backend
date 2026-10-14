@@ -80,6 +80,19 @@ func modifiedGuard(tagExists bool, modified []string) error {
 	return fmt.Errorf("migrations modified after tag v0.1.0 are immutable: %s", strings.Join(modified, ", "))
 }
 
+// changedMigrations lists migrations on base that were edited or removed. Renames are
+// reported as delete+add (--no-renames) so renaming an applied migration away is caught.
+func changedMigrations(repo, base, dir string) ([]string, error) {
+	out, err := git("-C", repo, "diff", "--name-only", "--no-renames", "--diff-filter=MD", base, "--", dir)
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 func git(args ...string) (string, error) {
 	out, err := exec.CommandContext(context.Background(), "git", args...).Output() //nolint:gosec // dev CLI: fixed "git" binary, arguments from our own flags
 	return strings.TrimSpace(string(out)), err
@@ -108,10 +121,10 @@ func main() {
 		return
 	}
 	tag, _ := git("tag", "--list", "v0.1.0")
-	diff, _ := git("diff", "--name-only", "--diff-filter=M", *base, "--", *dir)
-	var modified []string
-	if diff != "" {
-		modified = strings.Split(diff, "\n")
+	modified, err := changedMigrations(".", *base, *dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "migcheck: diff against", *base, "failed:", err)
+		os.Exit(2)
 	}
 	if err := modifiedGuard(tag != "", modified); err != nil {
 		fmt.Fprintln(os.Stderr, "migcheck:", err)

@@ -78,7 +78,7 @@ func TestCommandErrorCounted(t *testing.T) {
 	c, reg := newClient(t)
 	err := c.Do(context.Background(), "EVAL", "this is not lua", 0).Err()
 	require.Error(t, err)
-	require.Equal(t, errs.CodeServiceUnavailable, errs.CodeOf(err))
+	require.Equal(t, errs.CodeInternalError, errs.CodeOf(err), "a script error is our bug, not an outage")
 	require.Equal(t, 1.0, counter(t, reg, "kotoki_redis_command_errors_total", "op", "EVAL"))
 }
 

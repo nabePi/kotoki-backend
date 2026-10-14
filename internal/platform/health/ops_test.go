@@ -62,12 +62,37 @@ func TestReadyzStartingThenReady(t *testing.T) {
 	}
 }
 
+func TestStartupChecksRetryUntilHealthy(t *testing.T) {
+	var calls atomic.Int32
+	o := newOps(health.OpsOptions{StartupBackoff: time.Millisecond, Checks: []health.Check{
+		{Name: "postgres", Fn: func(context.Context) error {
+			if calls.Add(1) < 3 {
+				return errors.New("not yet")
+			}
+			return nil
+		}},
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := o.RunStartupChecks(ctx); err != nil {
+		t.Fatalf("a dependency that comes up within the budget must not fail startup: %v", err)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("got %d calls", calls.Load())
+	}
+	if code, _ := get(t, o.Handler(), "/readyz"); code != 200 {
+		t.Fatalf("got %d", code)
+	}
+}
+
 func TestReadyzFailedCheck(t *testing.T) {
-	o := newOps(health.OpsOptions{Checks: []health.Check{
+	o := newOps(health.OpsOptions{StartupBackoff: 10 * time.Millisecond, Checks: []health.Check{
 		{Name: "postgres", Fn: func(context.Context) error { return errors.New("secret-dsn boom") }},
 		{Name: "redis", Fn: func(context.Context) error { return nil }},
 	}})
-	if err := o.RunStartupChecks(context.Background()); err == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := o.RunStartupChecks(ctx); err == nil {
 		t.Fatal("expected error")
 	}
 	code, body := get(t, o.Handler(), "/readyz")

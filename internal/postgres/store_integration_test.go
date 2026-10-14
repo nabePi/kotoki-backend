@@ -135,7 +135,7 @@ func TestRetryOn40P01Exhausted(t *testing.T) {
 		return &pgconn.PgError{Code: "40P01"}
 	})
 	require.Equal(t, 4, calls)
-	require.Equal(t, errs.CodeInternalError, errs.CodeOf(err))
+	require.Equal(t, errs.CodeServiceUnavailable, errs.CodeOf(err), "contention outlasting the retries is transient, not a bug")
 	var pe *pgconn.PgError
 	require.ErrorAs(t, err, &pe)
 	require.Equal(t, "40P01", pe.Code)
@@ -198,4 +198,13 @@ func TestContextCancel(t *testing.T) {
 	require.Error(t, err)
 	require.Less(t, time.Since(start), time.Second)
 	require.Zero(t, s.Pool().Stat().AcquiredConns())
+}
+
+func TestStatementTimeoutIsUnavailable(t *testing.T) {
+	s := postgres.NewStore(testutil.NewPostgres(t), postgres.WithTimeouts(3*time.Second, 100*time.Millisecond))
+	err := s.WithinTx(context.Background(), func(ctx context.Context, tx *postgres.Tx) error {
+		_, err := tx.DBTX().Exec(ctx, "SELECT pg_sleep(2)")
+		return err
+	})
+	require.Equal(t, errs.CodeServiceUnavailable, errs.CodeOf(err))
 }

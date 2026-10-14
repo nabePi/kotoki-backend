@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -54,8 +55,10 @@ func (c Common) strict() bool { return c.AppEnv == "staging" || c.AppEnv == "pro
 func (d DB) validate(v *validator, c Common) {
 	if d.URL == "" {
 		v.fail("DB_URL", "required")
-	} else if c.strict() && strings.Contains(d.URL.Reveal(), "sslmode=disable") {
-		v.fail("DB_URL", "sslmode=disable is rejected when APP_ENV is staging or prod")
+	} else if c.strict() {
+		if mode := sslMode(d.URL.Reveal()); mode != "verify-full" && mode != "verify-ca" {
+			v.fail("DB_URL", "sslmode must be verify-full or verify-ca when APP_ENV is staging or prod (got %q)", mode)
+		}
 	}
 	if d.MaxConns <= 0 {
 		v.fail("DB_MAX_CONNS", "must be > 0, got %d", d.MaxConns)
@@ -177,4 +180,15 @@ func (c Worker) Validate() error {
 	v.positive("WORKER_SHUTDOWN_GRACE", c.ShutdownGrace)
 	validateHandlers(v, c.Handlers)
 	return v.err()
+}
+
+var sslModeRE = regexp.MustCompile(`sslmode=([A-Za-z-]+)`)
+
+// sslMode extracts sslmode from a URL or key=value DSN; "" when absent. Only the mode
+// is returned so the URL never reaches an error message.
+func sslMode(dsn string) string {
+	if m := sslModeRE.FindStringSubmatch(dsn); m != nil {
+		return strings.ToLower(m[1])
+	}
+	return ""
 }
