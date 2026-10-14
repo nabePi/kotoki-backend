@@ -573,3 +573,11 @@ Tanggal: 2026-10-14
 - `config_test.go`, `config_env_test.go`: satu kasus per aturan §8.5.1, default env, override env, tidak ada seleksi vendor/profil TTS — PASS
 ### Penyimpangan
 - Galat parse bool menyebut nama field Go (bukan nama env); pemetaan nama env dilakukan saat `platform/config` menanam `RouterConfig`
+
+## M4-T4 — Circuit breaker
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/breaker.go`: `Breaker`/`Ticket`/`BreakerConfig`, 9 transisi §8.5.4, window bergeser, probe half-open (tiket usang diabaikan lewat epoch), `onTransition` dipanggil di luar lock
+### Test
+- `breaker_test.go`: `TestBreakerStateMachine` (8 subtest), `TestBreakerConcurrent` (50 goroutine) — PASS `-race -count=20`
