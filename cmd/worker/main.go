@@ -63,7 +63,7 @@ func run(ctx context.Context, args []string) error {
 	})
 	slog.SetDefault(logger)
 	logger.InfoContext(ctx, "starting", "build", buildinfo.String())
-	logger.InfoContext(ctx, "worker handlers enabled", "handlers", handlers)
+	logger.InfoContext(ctx, "worker handlers enabled", "handlers", strings.Join(handlers, ","))
 
 	otelShutdown, err := otel.Setup(ctx, otel.Config{
 		Endpoint: cfg.Endpoint, ServiceName: cfg.ServiceName, ResourceAttributes: cfg.ResourceAttributes,
