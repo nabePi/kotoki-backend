@@ -329,3 +329,12 @@ Tanggal: 2026-10-14
 ### Penyimpangan
 - Suite menerima `BalanceHarness{Store, SeedUser}` (bukan hanya `newStore`) karena store PostgreSQL butuh baris `users` nyata (Task 17)
 - `GetBalance` untuk user tanpa account → `USER_NOT_FOUND`
+
+## M2-T7 — Grant & Adjust (idempotent)
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `balance.Service`: `GrantTx`/`AdjustTx` (lock account → cek key `grant:`/`adjust:` → replay bila user, tipe, delta sama, selain itu `IDEMPOTENCY_KEY_REUSED` → `ApplyMovement`), `Grant`/`Adjust` mandiri (retry sekali bila `ErrDuplicateMovement`), `ValidateAdminIdempotencyKey`, `MovementResult`
+- Validasi: `seconds` 1–360000, `|seconds_delta|` 1–360000, `reason` 3–500 rune; adjustment negatif → `BALANCE_ADJUSTMENT_NEGATIVE` dengan `details {available_seconds, seconds_delta}`; audit sengaja bukan di sini (Task 14)
+### Test
+- go test ./internal/balance -race — PASS
