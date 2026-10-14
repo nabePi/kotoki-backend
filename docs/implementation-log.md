@@ -289,3 +289,12 @@ Tanggal: 2026-10-14
 - `internal/auth/argon2.go`: `Argon2Hasher` (PHC `$argon2id$v=19$m,t,p$salt$hash`, salt 16 B, key 32 B), semaphore `MaxConcurrent` dengan tunggu `MaxWait` lalu `SERVICE_UNAVAILABLE`, `NeedsRehash`; hash dengan parameter berbeda tetap diverifikasi memakai parameter yang tersimpan
 ### Test
 - go test ./internal/auth -race -run Argon2 — PASS (4 test)
+
+## M2-T3 — JWT TokenIssuer
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth/jwt.go`: `JWTIssuer` HS256 dengan header `kid` (8 hex pertama sha256 secret), claims iss/aud/sub/role/fam/jti/iat/nbf/exp, leeway 30 s, `PreviousSecret` hanya untuk verifikasi, secret < 32 byte ditolak; `exp`/`ExpiresAt` dikembalikan dalam UTC
+- Dependensi baru: `github.com/golang-jwt/jwt/v5 v5.3.0` (go 1.25 tetap)
+### Test
+- go test ./internal/auth -race -cover — PASS (21 test)
