@@ -30,6 +30,7 @@ func (s balanceState) clone() balanceState {
 // restores the previous state when fn fails, mimicking a rollback.
 type BalanceStore struct {
 	FailInjector
+	Rec *CallRecorder
 	mu  sync.Mutex
 	ids idgen.Generator
 	st  balanceState
@@ -93,6 +94,7 @@ func (r *balanceRepo) account(userID uuid.UUID) (balance.Account, error) {
 }
 
 func (r *balanceRepo) LockAccountByUserID(_ context.Context, userID uuid.UUID) (balance.Account, error) {
+	r.s.Rec.Record("Balance.LockAccountByUserID")
 	if err := r.s.Take("LockAccountByUserID"); err != nil {
 		return balance.Account{}, err
 	}

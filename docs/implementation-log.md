@@ -395,3 +395,12 @@ Tanggal: 2026-10-14
 - `redisstore.TicketStore`: key `kotoki:ws_ticket:{hex sha256(ticket)}`, `SET NX EX`, ulang sekali bila tabrakan, `GETDEL` untuk Consume; `fakes.TicketSessionReader`/`fakes.TicketStore`
 ### Test
 - go test ./internal/auth -run Ticket; `-tags integration ./internal/redisstore -run Ticket` (Podman) — PASS (single-use konkuren, expiry, Redis down)
+
+## M2-T14 — admin: port, Grant/Adjust dengan audit, daftar audit
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/admin`: `AuditLog`/`AuditFilter`/`AuditRepository`, `RequestMeta`, `SessionGate`, `Tx` (= `auth.Tx` + `balance.Tx` + `Audit()` + `SessionGate()`), `Store`; `Service.Grant`/`Adjust` (satu tx: user ada → `GrantTx`/`AdjustTx` → audit `BALANCE_GRANT`/`BALANCE_ADJUSTMENT` hanya bila bukan replay; retry sekali bila `ErrDuplicateMovement`; span `admin.Grant`/`admin.Adjust`), `ListTransactions`, `ListAudit`, `IsActiveAdmin`
+- Fake: `fakes.AdminStore` (tx bersarang di AuthStore → BalanceStore; rollback juga untuk audit & gate), `fakes.SessionGate`, `fakes.CallRecorder` (urutan lock lintas repo); `repotest.AuditRepoSuite`
+### Test
+- go test ./internal/admin ./internal/testutil/... -race — PASS (audit gagal → saldo & ledger kembali)

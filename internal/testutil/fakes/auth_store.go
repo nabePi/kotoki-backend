@@ -31,6 +31,7 @@ func (s authState) clone() authState {
 // BalanceStore transaction, so a failed callback rolls back both.
 type AuthStore struct {
 	FailInjector
+	Rec *CallRecorder
 	mu  sync.Mutex
 	bal *BalanceStore
 	ids idgen.Generator
@@ -48,6 +49,10 @@ func NewAuthStore(bal *BalanceStore, ids idgen.Generator) *AuthStore {
 
 // WithinTx runs fn and restores all state when it fails.
 func (s *AuthStore) WithinTx(ctx context.Context, fn func(ctx context.Context, tx auth.Tx) error) error {
+	return s.within(ctx, func(ctx context.Context, tx *authTx) error { return fn(ctx, tx) })
+}
+
+func (s *AuthStore) within(ctx context.Context, fn func(ctx context.Context, tx *authTx) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	snapshot := s.st.clone()
@@ -150,6 +155,7 @@ func (r *userRepo) GetByEmail(_ context.Context, email string) (auth.User, error
 }
 
 func (r *userRepo) LockByID(ctx context.Context, id uuid.UUID) (auth.User, error) {
+	r.s.Rec.Record("Users.LockByID")
 	return r.GetByID(ctx, id)
 }
 
