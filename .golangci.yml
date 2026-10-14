@@ -1,0 +1,172 @@
+version: "2"
+run:
+  timeout: 5m
+  build-tags: [integration, e2e, live]
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - gosec
+    - bodyclose
+    - noctx
+    - rowserrcheck
+    - sqlclosecheck
+    - errorlint
+    - contextcheck
+    - depguard
+    - forbidigo
+    - misspell
+    - unconvert
+    - revive
+    - gocritic
+    - nolintlint
+  settings:
+    govet:
+      enable-all: true
+      disable: [fieldalignment, shadow]
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    depguard:
+      # D-005 / §2.2. Pencocokan `pkg` = prefix import path; pola `files` diawali "!" = pengecualian.
+      rules:
+        # 1. Paket fitur: tanpa adapter, handler, maupun library infrastruktur.
+        feature-no-infra:
+          list-mode: lax
+          files:
+            - "**/internal/auth/**"
+            - "**/internal/balance/**"
+            - "**/internal/session/**"
+            - "**/internal/content/**"
+            - "**/internal/conversation/**"
+            - "**/internal/prompt/**"
+            - "**/internal/provider/**"
+            - "!**/internal/provider/openai/**"
+            - "!**/internal/provider/gemini/**"
+            - "!**/internal/provider/azure/**"
+            - "**/internal/evaluation/**"
+            - "**/internal/memory/**"
+            - "**/internal/learner/**"
+            - "**/internal/summary/**"
+            - "**/internal/admin/**"
+            - "**/internal/events/**"
+          deny:
+            - {pkg: "github.com/go-chi/chi/v5", desc: "D-005: chi hanya di internal/httpapi"}
+            - {pkg: "github.com/jackc/pgx/v5", desc: "D-005: pgx hanya di internal/postgres"}
+            - {pkg: "github.com/pgvector/pgvector-go", desc: "D-005: tipe vector hanya di internal/postgres"}
+            - {pkg: "github.com/redis/go-redis/v9", desc: "D-005: Redis hanya di internal/redisstore"}
+            - {pkg: "github.com/rabbitmq/amqp091-go", desc: "D-005: RabbitMQ hanya di internal/amqp"}
+            - {pkg: "github.com/coder/websocket", desc: "D-005: WebSocket hanya di wsgateway, provider/<vendor>, kotokiclient"}
+            - {pkg: "github.com/aws/aws-sdk-go-v2", desc: "D-005: S3 hanya di internal/objectstore"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/postgres", desc: "D-005: pakai port Repository/Store milik fitur"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/redisstore", desc: "D-005: pakai port milik fitur"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/amqp", desc: "D-005: pakai events.OutboxWriter"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/objectstore", desc: "D-005: pakai port milik fitur"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/mailer", desc: "D-005: pakai auth.Mailer"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/httpapi", desc: "D-005: handler bergantung ke fitur, bukan sebaliknya"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/wsgateway", desc: "D-005: handler bergantung ke fitur, bukan sebaliknya"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/jobs", desc: "D-005: job memanggil Service fitur, bukan sebaliknya"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/elevenlabs", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/deepgram", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/openai", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/gemini", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/azure", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
+        # 2. Handler: decode → Service → encode; tanpa akses langsung ke penyimpanan/broker.
+        handler-thin:
+          list-mode: lax
+          files: ["**/internal/httpapi/**", "**/internal/wsgateway/**"]
+          deny:
+            - {pkg: "github.com/jackc/pgx/v5", desc: "§2.2 aturan 1: handler tanpa SQL"}
+            - {pkg: "github.com/pgvector/pgvector-go", desc: "§2.2 aturan 1"}
+            - {pkg: "github.com/redis/go-redis/v9", desc: "§2.2 aturan 1: lewat port (mis. Limiter)"}
+            - {pkg: "github.com/rabbitmq/amqp091-go", desc: "§2.2 aturan 1"}
+            - {pkg: "github.com/aws/aws-sdk-go-v2", desc: "§2.2 aturan 1"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/postgres", desc: "§2.2 aturan 1: handler tanpa SQL"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/redisstore", desc: "§2.2 aturan 1: lewat port"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/amqp", desc: "§2.2 aturan 1"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/objectstore", desc: "§2.2 aturan 1"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/jobs", desc: "§2.2 aturan 1"}
+        # 3. Adapter tidak bergantung pada handler/entrypoint.
+        adapter-no-handler:
+          list-mode: lax
+          files:
+            - "**/internal/postgres/**"
+            - "**/internal/redisstore/**"
+            - "**/internal/amqp/**"
+            - "**/internal/objectstore/**"
+            - "**/internal/mailer/**"
+            - "**/internal/provider/elevenlabs/**"
+            - "**/internal/provider/deepgram/**"
+            - "**/internal/provider/openai/**"
+            - "**/internal/provider/gemini/**"
+            - "**/internal/provider/azure/**"
+          deny:
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/httpapi", desc: "D-005"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/wsgateway", desc: "D-005"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/jobs", desc: "D-005"}
+        # 4. cgo terisolasi: library cgo hanya di conversation/audio.
+        cgo-libs-only-in-audio:
+          list-mode: lax
+          files: ["$all", "!**/internal/conversation/audio/**"]
+          deny:
+            - {pkg: "gopkg.in/hraban/opus.v2", desc: "§2.2 aturan 5: cgo hanya di internal/conversation/audio"}
+            - {pkg: "github.com/maxhawkins/go-webrtcvad", desc: "§2.2 aturan 5: cgo hanya di internal/conversation/audio"}
+        # 5. conversation/audio hanya di graf realtime (api & worker MUST CGO_ENABLED=0).
+        audio-only-realtime-graph:
+          list-mode: lax
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/cmd/realtime/**"
+            - "!**/cmd/kotoki-cli/**"
+            - "!**/internal/conversation/**"
+            - "!**/internal/wsgateway/**"
+            - "!**/internal/kotokiclient/**"
+            - "!**/test/**"
+          deny:
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/conversation/audio", desc: "§2.2 aturan 5: paket cgo; cmd/api & cmd/worker harus CGO_ENABLED=0"}
+        # 6. Helper test tidak masuk kode produksi.
+        no-test-deps-in-prod:
+          list-mode: lax
+          files: ["$all", "!$test", "!**/internal/testutil/**", "!**/test/**"]
+          deny:
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/testutil", desc: "hanya untuk *_test.go"}
+            - {pkg: "github.com/stretchr/testify", desc: "hanya untuk *_test.go"}
+            - {pkg: "github.com/testcontainers/testcontainers-go", desc: "hanya untuk *_test.go"}
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - {pattern: '^os\.Getenv$', msg: "baca env hanya di internal/platform/config"}
+        - {pattern: '^time\.Now$', msg: "pakai clock.Clock di paket fitur"}
+        - {pattern: '^uuid\.(New|NewV7|NewRandom|NewString|Must)$', msg: "pakai idgen.Generator di paket fitur (§2.2 butir 7)"}
+        - {pattern: '^(fmt\.Print.*|print|println)$', msg: "pakai slog"}
+        - {pattern: '^log\.(Print|Fatal|Panic).*$', msg: "pakai slog"}
+  exclusions:
+    generated: lax
+    rules:
+      - path: '_test\.go'
+        linters: [gosec, forbidigo, noctx, contextcheck]
+      - path: 'internal/(platform/config|testutil)/'
+        linters: [forbidigo]
+        text: 'os\.Getenv'
+      - path: '^(cmd|test)/'
+        linters: [forbidigo]
+        text: 'fmt\.Print|log\.'
+      - path-except: 'internal/(auth|balance|session|content|conversation|prompt|provider|evaluation|memory|learner|summary|admin|events)/'
+        linters: [forbidigo]
+        text: 'time\.Now'
+      - path: 'internal/provider/(elevenlabs|deepgram|openai|gemini|azure)/'
+        linters: [forbidigo]
+        text: 'time\.Now'
+      - path-except: 'internal/(auth|balance|session|content|conversation|prompt|provider|evaluation|memory|learner|summary|admin|events)/'
+        linters: [forbidigo]
+        text: 'uuid\.'
+formatters:
+  enable: [gofmt, goimports]
+  settings:
+    goimports:
+      local-prefixes: [github.com/nabePi/kotoki-backend]
