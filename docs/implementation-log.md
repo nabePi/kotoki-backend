@@ -338,3 +338,12 @@ Tanggal: 2026-10-14
 - Validasi: `seconds` 1–360000, `|seconds_delta|` 1–360000, `reason` 3–500 rune; adjustment negatif → `BALANCE_ADJUSTMENT_NEGATIVE` dengan `details {available_seconds, seconds_delta}`; audit sengaja bukan di sini (Task 14)
 ### Test
 - go test ./internal/balance -race — PASS
+
+## M2-T8 — Fake & contract suite repository auth
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `fakes.AuthStore` (`auth.Store`): transaksi menyarang `BalanceStore.WithinTx` sehingga rollback membatalkan user + account sekaligus; `FailNext`, accessor `User`/`RefreshTokens`; `Accounts()` memanggil `balance.OpenAccount`
+- `repotest.{UserRepoSuite,RefreshTokenRepoSuite,PasswordResetRepoSuite}` (+ `NewUser`); hanya mengimpor `auth` dan testify, siap dipakai ulang oleh repo PostgreSQL (Task 16)
+### Test
+- go test ./internal/testutil/... -race — PASS (3 suite + rollback/commit/FailNext)
