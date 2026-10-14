@@ -600,3 +600,11 @@ Tanggal: 2026-10-14
 - `metrics_test.go` — PASS (race)
 ### Penyimpangan
 - Bucket `kotoki_session_cost_per_minute_usd` tidak dinyatakan spec: dipilih 0,001…0,5; `final_timeout` ditambahkan ke daftar vendor_code yang dikenal
+
+## M4-T7 — `PriceTable` port dan `pricing.Table`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/pricer.go`: port `PriceTable`, `ModelRef`; `internal/provider/pricing/{pricing.go,prices.yaml}`: loader YAML ketat (`KnownFields`, UPPERCASE, duplikat/negatif ditolak), `LLM`/`TTS`/`Audio` (wildcard `*`, harga cache-hit), `Missing` (tanpa entri atau harga 0); semua harga 0 sampai benchmark
+### Test
+- `pricing/pricing_test.go` — PASS (race)
