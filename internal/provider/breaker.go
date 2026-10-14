@@ -168,3 +168,32 @@ func (b *Breaker) WouldAllow() bool {
 		return true
 	}
 }
+
+// Record notes the outcome of work that was admitted earlier and has no ticket any more
+// (a long-lived STT session failing after Open). Only counted failures in CLOSED matter.
+func (b *Breaker) Record(err error) {
+	if err == nil || !CountsForBreaker(err) {
+		return
+	}
+	var tr []transition
+	defer func() { b.notify(tr...) }()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.state != BreakerClosed {
+		return
+	}
+	now := b.clk.Now()
+	cutoff := now.Add(-b.cfg.Window)
+	kept := b.failures[:0]
+	for _, f := range b.failures {
+		if !f.Before(cutoff) {
+			kept = append(kept, f)
+		}
+	}
+	kept = append(kept, now)
+	b.failures = kept
+	if len(b.failures) >= b.cfg.Threshold {
+		b.openedAt = now
+		tr = append(tr, b.move(BreakerOpen))
+	}
+}

@@ -690,3 +690,11 @@ Tanggal: 2026-10-14
 - `internal/provider/generation_tts.go`: `Synthesize` (validasi `SpeakingRate` 0 → 1,0 dan 0,80–1,05; slot primary/fallback dipin per generasi, awal di fallback bila breaker primary terbuka; mode fake memakai `FAKE_PRIMARY`/`FAKE_FALLBACK` dengan `VoiceID="FAKE"`, `Model="fake-tts"`; mode real memakai `VoiceRef` karakter apa adanya + `voice_binding_missing` yang tidak dihitung breaker; breaker + semaphore per vendor; timer first-audio dan total per kalimat), fallback hanya sebelum `MarkAudioSent`, sekali per generasi, `tts_provider_switched` + epoch naik + stream epoch lama dibatalkan, `Epoch` pada setiap chunk, ringkasan TTS (provider/model/voice/karakter/first audio), metrik/health/log
 ### Test
 - `generation_tts_test.go` (17 tes) — PASS (race, count=5)
+
+## M4-T17 — `rotatingSTT`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/stt_session.go`: `Router.OpenSTT` (breaker → semaphore tanpa tunggu → `Open` dengan timeout connect), `rotatingSTT` (offset logis, rotation buffer 15 s = 480.000 byte, rotasi ke vendor yang sama untuk `session_time_limit_exceeded`/`insufficient_audio_activity` tanpa dihitung breaker, replay potongan 3.200 byte, `Finalize` ditunda selama replay, FINAL{FromFinalize} koneksi lama dibuang, ERROR lain/penutupan tak terduga diteruskan sebagai `STTError` tanpa pindah vendor, `ReportFinalTimeout` ×3 → `final_timeout`), antrean event (PARTIAL digantikan), metrik rotasi/replay; `Breaker.Record` untuk kegagalan sesi tanpa tiket; `pcmRing.readFromBytes`
+### Test
+- `stt_session_test.go` (17 tes) — PASS (race, count=5)

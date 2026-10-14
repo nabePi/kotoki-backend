@@ -24,3 +24,6 @@ func (r *Router) TTSCandidatesForTest(v VoiceSelection) ([]ttsCandidate, error) 
 func (r *Router) LLMModelForTest() string                 { return r.llmModel() }
 func (r *Router) TTSVendorsForTest() []Name               { return r.ttsVendors() }
 func (r *Router) TextModelForTest(req TextRequest) string { return r.textModel(req) }
+
+// RotationBufferBytesForTest exposes the rotation buffer size.
+const RotationBufferBytesForTest = rotationBufferBytes

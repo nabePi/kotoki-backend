@@ -47,6 +47,7 @@ type testBuild struct {
 	llmName  provider.Name
 	llmCap   fake.CapConfig
 	llm      provider.LLMProvider // replaces the fake LLM when set
+	stt      provider.STTProvider // replaces the fake STT when set
 	ttsCap   map[provider.Name]fake.CapConfig
 	ttsStub  map[provider.Name]provider.TTSProvider
 }
@@ -91,6 +92,9 @@ func withTTS(name provider.Name, p provider.TTSProvider) testOpt {
 	}
 }
 
+// withSTT replaces the STT adapter (recording stubs).
+func withSTT(p provider.STTProvider) testOpt { return func(_ *testEnv, b *testBuild) { b.stt = p } }
+
 func withLLMName(n provider.Name) testOpt { return func(_ *testEnv, b *testBuild) { b.llmName = n } }
 
 // fakeConfig is a valid all-fake RouterConfig.
@@ -115,8 +119,9 @@ func newTestRouter(t *testing.T, opts ...testOpt) (*provider.Router, *testEnv) {
 	fd := fake.Deps{Clock: env.Clock, Faults: env.Faults, Log: log, Seed: 42}
 	fcfg := fake.Config{TTSChunkIntervalMS: 0, TTSMsPerChar: 120}
 
-	stt, err := fake.NewSTT(provider.FakePrimary, fake.CapConfig{}, fcfg, fd)
+	fakeSTT, err := fake.NewSTT(provider.FakePrimary, fake.CapConfig{}, fcfg, fd)
 	require.NoError(t, err)
+	var stt provider.STTProvider = fakeSTT
 	tts := map[provider.Name]provider.TTSProvider{}
 	for _, n := range build.ttsNames {
 		if stub, ok := build.ttsStub[n]; ok {
@@ -124,6 +129,9 @@ func newTestRouter(t *testing.T, opts ...testOpt) (*provider.Router, *testEnv) {
 			continue
 		}
 		tts[n] = fake.NewTTS(n, build.ttsCap[n], fcfg, fd)
+	}
+	if build.stt != nil {
+		stt = build.stt
 	}
 	var llm provider.LLMProvider = namedLLM{fake.NewLLM(provider.FakePrimary, build.llmCap, fcfg, fd), build.llmName}
 	if build.llm != nil {

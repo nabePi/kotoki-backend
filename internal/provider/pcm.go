@@ -157,7 +157,14 @@ func (r *pcmRing) EndMs() int64 { return r.msOfByte(r.total) }
 // ReadFrom returns the retained audio from logical position ms to the end, clamped to the
 // oldest retained sample.
 func (r *pcmRing) ReadFrom(ms int64) []byte {
-	startByte := ms * int64(r.rate) / 1000 * 2
+	return r.readFromBytes(ms * int64(r.rate) / 1000 * 2)
+}
+
+// oldestBytes is the logical byte position of the oldest retained sample.
+func (r *pcmRing) oldestBytes() int64 { return r.total - int64(r.size) }
+
+// readFromBytes is ReadFrom addressed by absolute logical byte position.
+func (r *pcmRing) readFromBytes(startByte int64) []byte {
 	oldest := r.total - int64(r.size)
 	if startByte < oldest {
 		startByte = oldest
