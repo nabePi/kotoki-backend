@@ -31,7 +31,7 @@ func TestRunServesOpsAndStopsCleanly(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- run(ctx) }()
-	testutil.AssertOpsEndpoints(t, addr)
+	testutil.AssertOpsEndpoints(t, addr, done)
 	cancel()
 	select {
 	case err := <-done:

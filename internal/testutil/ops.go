@@ -33,11 +33,17 @@ func httpGet(addr, path string) (int, string, error) {
 	return resp.StatusCode, string(b), err
 }
 
-// AssertOpsEndpoints waits (≤10 s) for /readyz=200 and then checks /healthz and /metrics.
-func AssertOpsEndpoints(t testing.TB, addr string) {
+// AssertOpsEndpoints waits (≤10 s) for /readyz=200 and then checks /healthz and
+// /metrics. A value on exited (the binary's run result) before readiness fails the test.
+func AssertOpsEndpoints(t testing.TB, addr string, exited <-chan error) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
+		select {
+		case err := <-exited:
+			t.Fatalf("testutil: binary exited before ready: %v", err)
+		default:
+		}
 		if code, _, err := httpGet(addr, "/readyz"); err == nil && code == http.StatusOK {
 			break
 		}
