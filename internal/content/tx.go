@@ -43,3 +43,44 @@ type TxRepository interface {
 	ListScenarioVersions(ctx context.Context, scenarioID uuid.UUID) ([]ScenarioVersion, error)
 	ListPromptVersions(ctx context.Context, key PromptKey) ([]PromptVersion, error)
 }
+
+// AuditEntry is one admin_audit_logs row written by the content admin use cases.
+type AuditEntry struct {
+	AdminUserID uuid.UUID
+	Action      string // CONTENT_VERSION_CREATED | …_PUBLISHED | …_RETIRED | …_DELETED | CONTENT_STATUS_CHANGED | CHARACTER_UPDATED
+	TargetType  string // SCENARIO | PROMPT | TOPIC | CHARACTER
+	TargetID    string
+	Details     map[string]any
+	RequestID   string
+}
+
+// AuditWriter appends to the audit log inside the transaction.
+type AuditWriter interface {
+	Record(ctx context.Context, e AuditEntry) error
+}
+
+// Tx is one content transaction: content reads and writes plus the audit log.
+type Tx interface {
+	Content() TxRepository
+	Audit() AuditWriter
+}
+
+// Store runs content transactions; an error from fn rolls everything back.
+type Store interface {
+	WithinTx(ctx context.Context, fn func(ctx context.Context, tx Tx) error) error
+}
+
+// Audit actions and target types written by the content admin use cases (spec 3.3.3).
+const (
+	ActionVersionCreated   = "CONTENT_VERSION_CREATED"
+	ActionVersionPublished = "CONTENT_VERSION_PUBLISHED"
+	ActionVersionRetired   = "CONTENT_VERSION_RETIRED"
+	ActionVersionDeleted   = "CONTENT_VERSION_DELETED"
+	ActionStatusChanged    = "CONTENT_STATUS_CHANGED"
+	ActionCharacterUpdated = "CHARACTER_UPDATED"
+
+	TargetTopic     = "TOPIC"
+	TargetScenario  = "SCENARIO"
+	TargetPrompt    = "PROMPT"
+	TargetCharacter = "CHARACTER"
+)

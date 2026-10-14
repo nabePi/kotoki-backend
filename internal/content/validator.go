@@ -26,11 +26,11 @@ const (
 // Issue is one finding of the validator (spec 6.10): ERROR blocks create/publish/PATCH,
 // WARNING is only reported.
 type Issue struct {
-	Severity string
-	Entity   string // e.g. "characters/HARUKA", "scenario_versions/0192…"
-	Field    string
-	Rule     string // e.g. "max_length", "voice_placeholder"
-	Message  string
+	Severity string `json:"severity"`
+	Entity   string `json:"entity,omitempty"` // e.g. "characters/HARUKA", "scenario_versions/0192…"
+	Field    string `json:"field"`
+	Rule     string `json:"rule"` // e.g. "max_length", "voice_placeholder"
+	Message  string `json:"message"`
 }
 
 // ErrNotFound is returned by repositories when a row does not exist.

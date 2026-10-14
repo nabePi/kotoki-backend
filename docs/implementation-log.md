@@ -839,3 +839,12 @@ Tanggal: 2026-10-14
 - `db/queries/content.sql` + sqlc; `postgres.NewContentRepo` (`content.Repository`) dan `(*Tx).Content()` (`content.TxRepository`, `internal/content/tx.go`): lock parent → versi, `NextVersionNumber`, insert draft, publish/retire/delete, status topik/skenario, lock+update karakter.
 - Tes integrasi: published-only, load by id, unik satu PUBLISHED, versi immutable (trigger), nomor versi di bawah lock parent (2 tx paralel → 2 dan 3), round-trip karakter + `voice.fallback`, patch karakter paralel serial, `GetUserVoiceExposure` (hanya COMPLETED, stabil setelah voice karakter diubah).
 - Ruling: `ListPublic*` (§6.12) dilewati — katalog publik disusun dari `content.Repository` di Task berikutnya; `GetUserVoiceExposure` dipakai lewat sqlc langsung sampai ada konsumennya.
+
+## M3-T10 — CatalogService & AdminService konten
+- `content.Store/Tx/AuditWriter/AuditEntry` (`tx.go`), `CatalogService` (usable-filter = langkah 1–3 resolver; karakter tersembunyi bila vendor mati, atau placeholder/kosong di mode real), `AdminService` (CreateDraft/copy_from, Publish idempoten + rollback RETIRED→PUBLISHED, Retire, DeleteDraft, SetStatus, ListVersions/GetVersion, ValidationReport, GetCharacter, UpdateCharacter) dan `postgres.Store.ContentStore()` (audit ke `admin_audit_logs`). Fake: `fakes.ContentStore` (snapshot/rollback + log audit), `ContentRepo` mengimplementasi `TxRepository`.
+- Tes unit (admin_test, catalog_test) + integrasi `test/integration` (`TestPublishConcurrent -count=20`, publish prompt, `TestCharacterEditDoesNotChangeExistingSnapshot`).
+- Ruling: retire versi prompt `PUBLISHED` selalu 409 `CONTENT_VERSION_REQUIRED` (spec §6.13.1 baris 4269: hanya publish pengganti yang meretire). Ini berbenturan dengan skenario e2e E12 (retire OPENING lewat endpoint retire) — E12 perlu menyesuaikan (publish pengganti / SQL) saat M-e2e dikerjakan.
+- Ruling: `content.Issue` diberi tag JSON (`entity` omitempty) agar `details` 422 memakai bentuk spec; `Entity` tetap tampil di validation-report.
+- Ruling: `SetStatus` tidak membatasi transisi antar `ACTIVE/DISABLED/ARCHIVED` (spec tidak mendefinisikannya); status yang sama = no-op tanpa audit/invalidasi.
+- Ruling: `AuditEntry.RequestID` diisi lewat `AdminDeps.RequestID` (content tidak boleh mengimpor httpapi); kosong → "unknown".
+- Catatan deviations: teks §6.13.1 menulis `metadata`/`CONTENT_CHARACTER_UPDATED`; implementasi memakai kolom `details` dan action `CHARACTER_UPDATED` sesuai CHECK `admin_audit_logs`.
