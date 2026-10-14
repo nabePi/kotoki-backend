@@ -101,7 +101,7 @@ type Repository interface {
 var AllowedDurations = []int64{300, 600, 900, 1800, 2700, 3600}
 
 // BalanceView is the GET /balance payload: the account plus the durations it can afford.
-type BalanceView struct {
+type BalanceView struct { //nolint:revive // name fixed by the plan/spec (§4.7); M3 and httpapi refer to balance.BalanceView
 	Account
 	AllowedDurations []int64
 }
