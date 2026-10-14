@@ -1,6 +1,8 @@
 package redisstore
 
 import (
+	"github.com/nabePi/kotoki-backend/internal/platform/config"
+	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"strings"
 	"testing"
 )
@@ -17,5 +19,18 @@ func TestKeyPrefix(t *testing.T) {
 		if got := KeyPrefix(in); got != want {
 			t.Errorf("KeyPrefix(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestNewClientBadURLDoesNotLeakPassword(t *testing.T) {
+	_, err := NewClient(config.Redis{URL: config.Secret("rediss://default:s3cr%zzet@host:6380/0")}, nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Contains(err.Error(), "s3cr") || strings.Contains(err.Error(), "host:6380") {
+		t.Fatalf("error leaks the URL: %v", err)
+	}
+	if errs.CodeOf(err) != errs.CodeServiceUnavailable {
+		t.Fatalf("code = %q", errs.CodeOf(err))
 	}
 }

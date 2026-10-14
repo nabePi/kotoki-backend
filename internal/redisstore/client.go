@@ -21,9 +21,10 @@ func NewClient(cfg config.Redis, m *metrics.Redis) (redis.UniversalClient, error
 			PoolSize: cfg.PoolSize, DialTimeout: cfg.DialTimeout, ReadTimeout: cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout,
 		})
 	} else {
-		opt, err := redis.ParseURL(cfg.URL.Reveal())
-		if err != nil {
-			return nil, errs.Wrap(err, errs.CodeServiceUnavailable, "redis configuration is invalid")
+		opt, perr := redis.ParseURL(cfg.URL.Reveal())
+		if perr != nil {
+			// The parse error quotes the raw URL (credentials included): never wrap it.
+			return nil, errs.New(errs.CodeServiceUnavailable, "REDIS_URL is invalid")
 		}
 		if cfg.Password != "" {
 			opt.Password = cfg.Password.Reveal()
