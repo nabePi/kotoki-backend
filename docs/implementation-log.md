@@ -791,3 +791,11 @@ Tanggal: 2026-10-14
 - `internal/balance/reservation_test.go` (10 tes) — PASS
 ### Penyimpangan
 - Repo Postgres untuk reservasi baru di Task 5; sementara method menolak (lihat ledger)
+
+## M3-T4 — `balance.Service.Reconcile`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/balance/reconcile.go`: `ReconcileRepository.RunCheck`, `Violation`, `Reconcile` (R1–R6 berurutan, berhenti pada error yang menyebut check); SQL di Postgres (Task 5)
+### Test
+- `reconcile_test.go` — PASS
