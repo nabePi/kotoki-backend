@@ -47,6 +47,7 @@ type testBuild struct {
 	llmName  provider.Name
 	llmCap   fake.CapConfig
 	llm      provider.LLMProvider // replaces the fake LLM when set
+	fakeCfg  func(*fake.Config)
 	stt      provider.STTProvider // replaces the fake STT when set
 	ttsCap   map[provider.Name]fake.CapConfig
 	ttsStub  map[provider.Name]provider.TTSProvider
@@ -95,6 +96,11 @@ func withTTS(name provider.Name, p provider.TTSProvider) testOpt {
 // withSTT replaces the STT adapter (recording stubs).
 func withSTT(p provider.STTProvider) testOpt { return func(_ *testEnv, b *testBuild) { b.stt = p } }
 
+// withFakeCfg tweaks the shared fake.Config (e.g. token interval).
+func withFakeCfg(f func(*fake.Config)) testOpt {
+	return func(_ *testEnv, b *testBuild) { b.fakeCfg = f }
+}
+
 func withLLMName(n provider.Name) testOpt { return func(_ *testEnv, b *testBuild) { b.llmName = n } }
 
 // fakeConfig is a valid all-fake RouterConfig.
@@ -118,6 +124,9 @@ func newTestRouter(t *testing.T, opts ...testOpt) (*provider.Router, *testEnv) {
 	log := slog.New(slog.NewJSONHandler(env.Logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	fd := fake.Deps{Clock: env.Clock, Faults: env.Faults, Log: log, Seed: 42}
 	fcfg := fake.Config{TTSChunkIntervalMS: 0, TTSMsPerChar: 120}
+	if build.fakeCfg != nil {
+		build.fakeCfg(&fcfg)
+	}
 
 	fakeSTT, err := fake.NewSTT(provider.FakePrimary, fake.CapConfig{}, fcfg, fd)
 	require.NoError(t, err)

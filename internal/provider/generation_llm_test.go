@@ -278,7 +278,8 @@ func TestGenerationCircuitOpenFailsFast(t *testing.T) {
 }
 
 func TestGenerationCancelYieldsCancelledDone(t *testing.T) {
-	r, _ := newTestRouter(t, withCfg(func(c *provider.RouterConfig) { c.CBFailureThreshold = 1 }))
+	r, _ := newTestRouter(t, withCfg(func(c *provider.RouterConfig) { c.CBFailureThreshold = 1 }),
+		withFakeCfg(func(c *fake.Config) { c.LLMTokenIntervalMS = 20 }))
 	ctx, cancel := context.WithCancel(context.Background())
 	g := r.NewGeneration(uuid.New(), 1, voice)
 	s, err := g.StreamLLM(ctx, userReq("#long"))
