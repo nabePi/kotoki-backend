@@ -326,12 +326,7 @@ func (r *sessionRepoFake) GetRuntimeRecord(_ context.Context, id uuid.UUID) (ses
 	if err != nil {
 		return session.RuntimeRecord{}, err
 	}
-	return session.RuntimeRecord{
-		ID: v.ID, UserID: v.UserID, Status: v.Status, ConversationStartMode: v.ConversationStartMode, DurationSeconds: v.DurationSeconds,
-		StartedAt: v.StartedAt, ExpiresAt: v.ExpiresAt, TopicID: v.TopicID, ScenarioID: v.ScenarioID, ScenarioVersionID: v.ScenarioVersionID,
-		PromptVersionID: v.PromptVersionID, OpeningPromptVersionID: v.OpeningPromptVersionID, ConfigSnapshot: v.ConfigSnapshot,
-		AdaptiveDifficulty: v.AdaptiveDifficulty, RuntimeFence: v.RuntimeFence,
-	}, nil
+	return session.RuntimeRecordOf(v), nil
 }
 
 func (r *sessionRepoFake) SetSummary(_ context.Context, id uuid.UUID, text string, at time.Time) error {

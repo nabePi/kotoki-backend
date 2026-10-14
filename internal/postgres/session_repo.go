@@ -61,15 +61,6 @@ func toSession(r sqlcgen.Session) session.Session {
 	return s
 }
 
-func toRuntimeRecord(s session.Session) session.RuntimeRecord {
-	return session.RuntimeRecord{
-		ID: s.ID, UserID: s.UserID, Status: s.Status, ConversationStartMode: s.ConversationStartMode, DurationSeconds: s.DurationSeconds,
-		StartedAt: s.StartedAt, ExpiresAt: s.ExpiresAt, TopicID: s.TopicID, ScenarioID: s.ScenarioID, ScenarioVersionID: s.ScenarioVersionID,
-		PromptVersionID: s.PromptVersionID, OpeningPromptVersionID: s.OpeningPromptVersionID, ConfigSnapshot: s.ConfigSnapshot,
-		AdaptiveDifficulty: s.AdaptiveDifficulty, RuntimeFence: s.RuntimeFence,
-	}
-}
-
 func sessionList(rows []sqlcgen.Session) []session.Session {
 	out := make([]session.Session, len(rows))
 	for i, r := range rows {
@@ -229,7 +220,7 @@ func (r *sessionRepo) GetRuntimeRecord(ctx context.Context, id uuid.UUID) (sessi
 	if err != nil {
 		return session.RuntimeRecord{}, err
 	}
-	return toRuntimeRecord(s), nil
+	return session.RuntimeRecordOf(s), nil
 }
 
 func (r *sessionRepo) SetSummary(ctx context.Context, id uuid.UUID, text string, at time.Time) error {

@@ -161,11 +161,22 @@ type RuntimeRecord struct {
 	TopicID                uuid.UUID
 	ScenarioID             uuid.UUID
 	ScenarioVersionID      uuid.UUID
+	CharacterID            uuid.UUID
 	PromptVersionID        uuid.UUID
 	OpeningPromptVersionID *uuid.UUID
 	ConfigSnapshot         json.RawMessage
 	AdaptiveDifficulty     json.RawMessage
 	RuntimeFence           int64
+}
+
+// RuntimeRecordOf is the runtime's view of a session row.
+func RuntimeRecordOf(s Session) RuntimeRecord {
+	return RuntimeRecord{
+		ID: s.ID, UserID: s.UserID, Status: s.Status, ConversationStartMode: s.ConversationStartMode, DurationSeconds: s.DurationSeconds,
+		StartedAt: s.StartedAt, ExpiresAt: s.ExpiresAt, TopicID: s.TopicID, ScenarioID: s.ScenarioID, ScenarioVersionID: s.ScenarioVersionID,
+		CharacterID: s.CharacterID, PromptVersionID: s.PromptVersionID, OpeningPromptVersionID: s.OpeningPromptVersionID,
+		ConfigSnapshot: s.ConfigSnapshot, AdaptiveDifficulty: s.AdaptiveDifficulty, RuntimeFence: s.RuntimeFence,
+	}
 }
 
 // Settlement is what the runtime learns when a session ends (spec 7.13.1).
