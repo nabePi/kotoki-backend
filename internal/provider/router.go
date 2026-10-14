@@ -123,6 +123,9 @@ type RouterDeps struct {
 	// Sleep and Jitter default to a real timer and ±20 % random jitter; tests inject fakes.
 	Sleep  func(ctx context.Context, d time.Duration) error
 	Jitter func(d time.Duration) time.Duration
+	// AsyncWait is how long an async call (worker LLM/evaluation/embedding) waits for a
+	// concurrency slot; default 30 s.
+	AsyncWait time.Duration
 }
 
 type key struct {
@@ -203,14 +206,18 @@ func NewRouter(cfg RouterConfig, d RouterDeps) (*Router, error) {
 	}
 	r.health = NewHealthTracker(r.clock)
 
+	asyncWait := d.AsyncWait
+	if asyncWait <= 0 {
+		asyncWait = asyncSlotWait
+	}
 	llmWait, ttsWait := realtimeSlotWait, realtimeSlotWait
 	if r.role == RoleWorker {
-		llmWait, ttsWait = asyncSlotWait, asyncSlotWait
+		llmWait, ttsWait = asyncWait, asyncWait
 	}
 	r.register(d.STT.Name(), CapSTT, 0)
 	r.register(d.LLM.Name(), CapLLM, llmWait)
-	r.register(d.Evaluation.Name(), CapEvaluation, asyncSlotWait)
-	r.register(d.Embedding.Name(), CapEmbedding, asyncSlotWait)
+	r.register(d.Evaluation.Name(), CapEvaluation, asyncWait)
+	r.register(d.Embedding.Name(), CapEmbedding, asyncWait)
 	for name := range d.TTS {
 		r.register(name, CapTTS, ttsWait)
 	}
@@ -364,6 +371,17 @@ func (r *Router) llmModel() string {
 		return r.cfg.OpenAILLMModel
 	}
 	return r.cfg.LLMModel() // fake or unknown: follow the flags
+}
+
+// evaluationModel is the evaluation model of the active vendor.
+func (r *Router) evaluationModel() string {
+	switch r.eval.Name() {
+	case DeepSeek:
+		return r.cfg.DeepSeekEvaluationModel
+	case OpenAI:
+		return r.cfg.OpenAIEvaluationModel
+	}
+	return r.cfg.EvaluationModel()
 }
 
 // textModel picks the model of a CompleteText call: an explicit override, then the rolling

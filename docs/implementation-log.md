@@ -698,3 +698,11 @@ Tanggal: 2026-10-14
 - `internal/provider/stt_session.go`: `Router.OpenSTT` (breaker → semaphore tanpa tunggu → `Open` dengan timeout connect), `rotatingSTT` (offset logis, rotation buffer 15 s = 480.000 byte, rotasi ke vendor yang sama untuk `session_time_limit_exceeded`/`insufficient_audio_activity` tanpa dihitung breaker, replay potongan 3.200 byte, `Finalize` ditunda selama replay, FINAL{FromFinalize} koneksi lama dibuang, ERROR lain/penutupan tak terduga diteruskan sebagai `STTError` tanpa pindah vendor, `ReportFinalTimeout` ×3 → `final_timeout`), antrean event (PARTIAL digantikan), metrik rotasi/replay; `Breaker.Record` untuk kegagalan sesi tanpa tiket; `pcmRing.readFromBytes`
 ### Test
 - `stt_session_test.go` (17 tes) — PASS (race, count=5)
+
+## M4-T18 — Router async
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/async.go`: `doAsync` (breaker + semaphore per attempt, retry ke vendor yang sama, `Retry-After` ≤ 30 s, non-retryable/cancelled langsung gagal), `GenerateJSON` (3 attempt, backoff 1 s/4 s, temperatur negatif → 0,2, body non-JSON → `INVALID_RESPONSE`), `Evaluation()` (satu attempt), `CompleteText` (worker 3 / realtime 1 attempt, `CONTENT_FILTERED` non-retryable), `Embed` (3 attempt, 500 ms/2 s), metrik/biaya/health per attempt; asersi `RealtimeRouter`/`AsyncRouter`; `RouterDeps.AsyncWait`
+### Test
+- `async_test.go` (16 tes) — PASS (race, count=3)

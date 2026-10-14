@@ -48,6 +48,7 @@ type testBuild struct {
 	llmCap   fake.CapConfig
 	llm      provider.LLMProvider // replaces the fake LLM when set
 	fakeCfg  func(*fake.Config)
+	depsMod  []func(*provider.RouterDeps)
 	stt      provider.STTProvider // replaces the fake STT when set
 	ttsCap   map[provider.Name]fake.CapConfig
 	ttsStub  map[provider.Name]provider.TTSProvider
@@ -101,6 +102,15 @@ func withFakeCfg(f func(*fake.Config)) testOpt {
 	return func(_ *testEnv, b *testBuild) { b.fakeCfg = f }
 }
 
+// withDeps tweaks the assembled RouterDeps (role, stub adapters, prices, ...).
+func withDeps(f func(*provider.RouterDeps)) testOpt {
+	return func(_ *testEnv, b *testBuild) { b.depsMod = append(b.depsMod, f) }
+}
+
+func withRole(role provider.ProcessRole) testOpt {
+	return withDeps(func(d *provider.RouterDeps) { d.Role = role })
+}
+
 func withLLMName(n provider.Name) testOpt { return func(_ *testEnv, b *testBuild) { b.llmName = n } }
 
 // fakeConfig is a valid all-fake RouterConfig.
@@ -152,6 +162,9 @@ func newTestRouter(t *testing.T, opts ...testOpt) (*provider.Router, *testEnv) {
 		TTS:        tts, Embedding: fake.NewEmbedding(provider.FakePrimary, fake.CapConfig{}, fcfg, fd),
 		Clock: env.Clock, Log: log, Role: provider.RoleRealtime, Metrics: provider.NewMetrics(env.Reg),
 		Sleep: env.Sleeps.sleep, Jitter: func(d time.Duration) time.Duration { return d },
+	}
+	for _, f := range build.depsMod {
+		f(&env.Deps)
 	}
 	r, err := provider.NewRouter(env.Cfg, env.Deps)
 	require.NoError(t, err)
