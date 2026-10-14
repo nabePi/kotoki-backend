@@ -629,3 +629,11 @@ Tanggal: 2026-10-14
 - `fake/llm_test.go` — PASS (race)
 ### Penyimpangan
 - Lihat ledger: pembagian template (4 reguler + opening) dan `SyncErrorIsProviderError` memakai ctx yang sudah dibatalkan
+
+## M4-T10 — Fake TTS + `providertest.TTSSuite`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/fake/tts.go`: PCM16 24 kHz, durasi `max(300 ms, rune×120)/SpeakingRate` (0 → 1), chunk 20 ms, nada 220 Hz −20 dBFS atau senyap, fault start/before_first/mid/hang + runtime `fail_after_first_audio`, mengabaikan voice/model karakter; `providertest/tts.go`: `TTSSuite` (5 subtest)
+### Test
+- `fake/tts_test.go` — PASS (race)
