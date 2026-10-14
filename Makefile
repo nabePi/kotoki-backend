@@ -52,8 +52,8 @@ migrate-create: ## make migrate-create NAME=add_x
 	$(CONTAINER_ENGINE) run --rm -v $(CURDIR)/migrations:/migrations -u $$(id -u):$$(id -g) \
 	  $(MIGRATE_IMAGE) create -ext sql -dir /migrations -seq -digits 6 $(NAME)
 
-seed:           ## jalankan seed/*.sql (idempoten) berurutan
-	@for f in seed/*.sql; do echo "seed $$f"; \
+seed:           ## jalankan seed/*.sql lalu seed/env/$KOTOKI_ENV/*.sql (default local, opsional); idempoten
+	@for f in seed/*.sql seed/env/$${KOTOKI_ENV:-local}/*.sql; do [ -f "$$f" ] || continue; echo "seed $$f"; \
 	  $(COMPOSE) exec -T postgres psql -U kotoki -d kotoki -v ON_ERROR_STOP=1 < $$f || exit 1; done
 
 promote-admin:  ## make promote-admin EMAIL=dev@example.test

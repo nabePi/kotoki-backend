@@ -848,3 +848,8 @@ Tanggal: 2026-10-14
 - Ruling: `SetStatus` tidak membatasi transisi antar `ACTIVE/DISABLED/ARCHIVED` (spec tidak mendefinisikannya); status yang sama = no-op tanpa audit/invalidasi.
 - Ruling: `AuditEntry.RequestID` diisi lewat `AdminDeps.RequestID` (content tidak boleh mengimpor httpapi); kosong → "unknown".
 - Catatan deviations: teks §6.13.1 menulis `metadata`/`CONTENT_CHARACTER_UPDATED`; implementasi memakai kolom `details` dan action `CHARACTER_UPDATED` sesuai CHECK `admin_audit_logs`.
+
+## M3-T11 — Seed SQL & `make seed`
+- `seed/0010_topics.sql` (5), `0050_characters.sql` (4, inline voice, placeholder TTS ids), `0060_scenarios.sql` (13 scenario + v1 PUBLISHED), `0070_prompts.sql` (5 `prompt_configs` + CONVERSATION/OPENING v1 dari `prompt.ConversationV1/OpeningV1` byte-per-byte), `seed/env/example/0900_voice_ids.sql`; `make seed` menjalankan juga `seed/env/$KOTOKI_ENV/*.sql` bila ada.
+- Tes `test/integration/m3_seed_test.go` (valid, idempoten, jumlah, formality, karakter, placeholder real/fake, override suara, resolve HARUKA×BACKEND, render, konstanta M4, nama lengkap tak pernah dirender). Konstanta `expectedPromptVersionCount = 2` satu-satunya tempat angka itu.
+- Ruling: 12 scenario selain `BACKEND_ENGINEER_INTERVIEW` ditulis penulis (spec hanya memberi satu contoh, tabel §6.13.4 memberi kode/level/formality); isi dapat dituning produk lewat versi baru. Dipakai `ValidatorConfig.TTSModeReal` (bukan `ProviderModeReal` seperti tertulis di brief).
