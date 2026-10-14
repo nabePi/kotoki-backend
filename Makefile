@@ -3,6 +3,14 @@ SHELL := /bin/bash
 export
 
 GO              ?= go
+# Container engine: docker when present, otherwise rootless podman. testcontainers
+# talks to the podman API socket (start it with: systemctl --user start podman.socket).
+ifeq ($(shell command -v docker 2>/dev/null),)
+CONTAINER_ENGINE ?= podman
+export DOCKER_HOST ?= unix://$(XDG_RUNTIME_DIR)/podman/podman.sock
+else
+CONTAINER_ENGINE ?= docker
+endif
 MIGRATE_IMAGE   := migrate/migrate:v4.18.3
 COMPOSE_NETWORK := kotoki_default
 MIGRATE_DB_URL  := postgres://kotoki:kotoki@postgres:5432/kotoki?sslmode=disable
@@ -81,7 +89,7 @@ test-cover:
 	$(GO) run ./test/tools/covercheck -profile coverage.out -thresholds test/tools/covercheck/thresholds.txt
 
 test-integration:
-	$(GO) test -race -count=1 -tags=integration -timeout 20m ./...
+	$(GO) test -race -count=1 -p 1 -tags=integration -timeout 20m ./...
 
 test-e2e:
 	$(GO) test -race -count=1 -tags=e2e -timeout 30m ./test/e2e/...
