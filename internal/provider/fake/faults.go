@@ -255,7 +255,15 @@ func (d *decider) next(f *Fault) (fail bool, plan failPlan) {
 	if !fail {
 		return false, failPlan{}
 	}
-	return true, failPlan{Kind: d.cfg.FailureKind, Phase: d.cfg.FailurePhase, After: d.cfg.FailAfter}
+	phase := d.cfg.FailurePhase
+	if phase == "" {
+		phase = PhaseStart
+	}
+	kind := d.cfg.FailureKind
+	if kind == "" {
+		kind = provider.KindUnavailable
+	}
+	return true, failPlan{Kind: kind, Phase: phase, After: d.cfg.FailAfter}
 }
 
 // Poller refreshes the fault snapshot from a fetch function (the Redis GET lives in

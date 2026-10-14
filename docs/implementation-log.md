@@ -637,3 +637,13 @@ Tanggal: 2026-10-14
 - `internal/provider/fake/tts.go`: PCM16 24 kHz, durasi `max(300 ms, rune×120)/SpeakingRate` (0 → 1), chunk 20 ms, nada 220 Hz −20 dBFS atau senyap, fault start/before_first/mid/hang + runtime `fail_after_first_audio`, mengabaikan voice/model karakter; `providertest/tts.go`: `TTSSuite` (5 subtest)
 ### Test
 - `fake/tts_test.go` — PASS (race)
+
+## M4-T11 — Fake STT (korelasi envelope) + `providertest.STTSuite`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/fake/stt.go`, `stt_match.go`: segmentasi energi (mulai ≥ 200 ms bicara, tutup 600 ms senyap atau `Finalize`), PARTIAL tiap 200 ms waktu audio, FINAL setelah `LatencyMS`, korelasi envelope fixture (±10 frame, skor diskalakan overlap/panjang, tie → nama file terkecil) atau frasa energi, antrean event (PARTIAL baru menggantikan yang antre; FINAL/ERROR/CLOSED tidak pernah dibuang), buffer audio 2 s, fault timeout/disconnect/phase env; `providertest/stt.go`: `STTSuite` (6 subtest)
+### Test
+- `fake/stt_test.go` — PASS (race, count=3)
+### Penyimpangan
+- Skor kecocokan dikalikan overlap/panjang terpanjang supaya input pendek tidak cocok dengan fixture panjang; `CapConfig` dengan phase/kind kosong diperlakukan sebagai `start`/`UNAVAILABLE`
