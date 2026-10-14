@@ -81,13 +81,19 @@ func TestClassifyHTTPRedactsSecretsAndCuts(t *testing.T) {
 	require.NotContains(t, e.Message, "abc.def")
 	require.Contains(t, e.Message, "[redacted]")
 
-	long := httpx.ClassifyHTTP(provider.OpenAI, provider.CapLLM, resp(500, nil), []byte(strings.Repeat("あ", 400)))
+	long := httpx.ClassifyHTTP(provider.OpenAI, provider.CapLLM, resp(500, nil), []byte(`{"message":"`+strings.Repeat("あ", 400)+`"}`))
 	require.LessOrEqual(t, len(long.Message), 512)
 	require.True(t, strings.ToValidUTF8(long.Message, "") == long.Message)
 }
 
+func TestClassifyHTTPNeverEchoesARawBody(t *testing.T) {
+	e := httpx.ClassifyHTTP(provider.OpenAI, provider.CapLLM, resp(400, nil), []byte("the user said: SECRET-PRIVATE-TEXT"))
+	require.NotContains(t, e.Message, "SECRET-PRIVATE-TEXT")
+	require.NotContains(t, e.Error(), "SECRET-PRIVATE-TEXT")
+}
+
 func TestRedact(t *testing.T) {
-	for _, in := range []string{"key sk-live_ABCDEFGH12345", "Bearer tok_12345.abc", "api_key=SECRETVALUE123", `"xi-api-key": "abcdef123456"`} {
+	for _, in := range []string{"key sk_live_ABCDEFGH12345", "key sk-live_ABCDEFGH12345", "Bearer tok_12345.abc", "api_key=SECRETVALUE123", `"xi-api-key": "abcdef123456"`} {
 		out := httpx.Redact(in)
 		require.Contains(t, out, "[redacted]", in)
 		require.NotContains(t, out, "ABCDEFGH12345")

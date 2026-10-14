@@ -43,6 +43,7 @@ type asyncCall struct {
 // backoff, non-retryable and cancelled errors end it at once. call returns the usage to meter.
 func (r *Router) doAsync(ctx context.Context, ac asyncCall, call func(ctx context.Context) (TokenUsage, error)) error {
 	var last error
+	invalid := 0 // INVALID_RESPONSE is retried once only (spec 8.3)
 	for a := 1; a <= ac.attempts; a++ {
 		tk, release, aerr := r.admitVendor(ctx, ac.vendor, ac.cap)
 		if aerr != nil {
@@ -64,6 +65,12 @@ func (r *Router) doAsync(ctx context.Context, ac asyncCall, call func(ctx contex
 		last = err
 		if KindOf(err) == KindCancelled || !IsRetryable(err) || a == ac.attempts {
 			return err
+		}
+		if KindOf(err) == KindInvalidResponse {
+			invalid++
+			if invalid > 1 {
+				return err
+			}
 		}
 		if serr := r.sleep(ctx, r.retryDelay(err, ac.backoff, a)); serr != nil {
 			return ctxError(ac.vendor, ac.cap, serr)

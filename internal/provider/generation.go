@@ -45,7 +45,13 @@ func (r *Router) NewGeneration(sessionID uuid.UUID, gen int64, voice VoiceSelect
 }
 
 // MarkAudioSent is called by the pacer right before the first downstream audio frame (S-12).
-func (g *generation) MarkAudioSent() { g.audioSent.Store(true) }
+// It takes g.mu so that a TTS switch decided concurrently either sees the flag or completed
+// before it (generation_tts.go, switchTTS).
+func (g *generation) MarkAudioSent() {
+	g.mu.Lock()
+	g.audioSent.Store(true)
+	g.mu.Unlock()
+}
 
 // TTSEpochChanged delivers the new epoch when TTS moved to the character's fallback voice.
 func (g *generation) TTSEpochChanged() <-chan int { return g.epochCh }

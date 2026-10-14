@@ -18,7 +18,7 @@ import (
 const maxMessage = 512
 
 var (
-	skKeyRE   = regexp.MustCompile(`sk-[A-Za-z0-9_\-]{6,}`)
+	skKeyRE   = regexp.MustCompile(`sk[-_][A-Za-z0-9_\-]{6,}`)
 	bearerRE  = regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=\-]+`)
 	apiKeyRE  = regexp.MustCompile(`(?i)(api[_-]?key|xi-api-key|authorization)["']?\s*[:=]\s*["']?[A-Za-z0-9._~+/=\-]+`)
 	redaction = "[redacted]"
@@ -133,7 +133,7 @@ func ClassifyHTTP(p provider.Name, c provider.Capability, resp *http.Response, b
 	kind := provider.ClassifyHTTPStatus(resp.StatusCode)
 	code, msg := vendorFields(body)
 	if msg == "" {
-		msg = string(body)
+		msg = http.StatusText(resp.StatusCode) // never echo a raw body: it may carry request text
 	}
 	e := &provider.Error{
 		Provider: p, Capability: c, Kind: kind, Retryable: retryableByKind(kind), HTTPStatus: resp.StatusCode,

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,31 +68,58 @@ func (g *generation) fallbackUsable() bool {
 	return g.voice.Fallback != nil && g.r.cfg.TTSFallbackEnabled
 }
 
-// pin returns the slot for a new sentence. The first call fixes the initial slot: the
-// character's fallback when the primary vendor's breaker is open and a fallback exists.
-func (g *generation) pin() slot {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+func (g *generation) registered(vendor Name) bool {
+	_, ok := g.r.tts[vendor]
+	return ok
+}
+
+// pinLocked returns the slot for a new sentence (g.mu held). The first call fixes the initial
+// slot: the character's fallback when the primary vendor is unusable (breaker open or vendor
+// not enabled) and the fallback vendor is registered.
+func (g *generation) pinLocked() slot {
 	if !g.ttsInit {
 		g.ttsInit = true
 		primary := g.slotFor(false, 0)
-		if g.fallbackUsable() && !g.r.breakers[key{primary.vendor, CapTTS}].WouldAllow() {
-			g.ttsOnFallback = true
-			g.summary.UsedFallback = true
-			g.r.health.Fallback(primary.vendor, CapTTS)
-			g.r.metrics.ObserveFallback(primary.vendor, g.slotFor(true, 0).vendor, "CIRCUIT_OPEN")
+		fallback := g.slotFor(true, 0)
+		if g.fallbackUsable() && g.registered(fallback.vendor) {
+			reason := ""
+			switch {
+			case !g.registered(primary.vendor):
+				reason = vendorCodeVoice
+			case !g.r.breakers[key{primary.vendor, CapTTS}].WouldAllow():
+				reason = "CIRCUIT_OPEN"
+			}
+			if reason != "" {
+				g.ttsOnFallback = true
+				g.summary.UsedFallback = true
+				g.r.health.Fallback(primary.vendor, CapTTS)
+				g.r.metrics.ObserveFallback(primary.vendor, fallback.vendor, reason)
+			}
 		}
 	}
 	return g.slotFor(g.ttsOnFallback, g.ttsEpoch)
 }
 
+type switchResult int
+
+const (
+	switchDone    switchResult = iota // this call moved the generation to the fallback voice
+	switchAlready                     // another sentence already did
+	switchRefused                     // audio was sent: the voice is frozen
+)
+
 // switchTTS moves the generation to the character's fallback voice once, bumping the epoch
-// and cancelling the streams of the old epoch. It reports whether this call switched.
-func (g *generation) switchTTS(from slot, reason ErrorKind) bool {
+// and cancelling the streams of the old epoch. It refuses once audio was sent (MarkAudioSent
+// takes the same lock, so the check cannot race the pacer).
+func (g *generation) switchTTS(from slot, reason ErrorKind) switchResult {
 	g.mu.Lock()
+	if g.audioSent.Load() {
+		g.mu.Unlock()
+		return switchRefused
+	}
 	if g.ttsOnFallback {
 		g.mu.Unlock()
-		return false
+		return switchAlready
 	}
 	g.ttsOnFallback = true
 	g.ttsEpoch++
@@ -118,7 +146,7 @@ func (g *generation) switchTTS(from slot, reason ErrorKind) bool {
 	g.r.metrics.ObserveFallback(from.vendor, to.vendor, string(reason))
 	g.r.metrics.TTSEpochRestart(from.vendor, to.vendor)
 	g.r.log.Warn("provider tts fallback", "from", string(from.vendor), "to", string(to.vendor), "reason", string(reason))
-	return true
+	return switchDone
 }
 
 // Synthesize speaks one sentence with the generation's pinned voice.
@@ -129,10 +157,12 @@ func (g *generation) Synthesize(ctx context.Context, req TTSRequest) (TTSStream,
 	case req.SpeakingRate < minSpeakingRate || req.SpeakingRate > maxSpeakingRate:
 		return nil, NewError(g.voice.Primary.Provider, CapTTS, KindInvalidRequest, "SpeakingRate must be within 0.80–1.05")
 	}
-	sl := g.pin()
 	sctx, cancel := context.WithCancel(ctx)
-	out := &ttsOut{ch: make(chan TTSChunk, 32), cancel: cancel, epoch: sl.epoch}
+	// Choosing the voice and registering the stream are one critical section: a stream bound to
+	// the old epoch is always visible to the switch that cancels it.
 	g.mu.Lock()
+	sl := g.pinLocked()
+	out := &ttsOut{ch: make(chan TTSChunk, 32), cancel: cancel, epoch: sl.epoch}
 	g.ttsStreams[out] = struct{}{}
 	g.mu.Unlock()
 	go g.runTTS(ctx, sctx, out, sl, req)
@@ -141,6 +171,7 @@ func (g *generation) Synthesize(ctx context.Context, req TTSRequest) (TTSStream,
 
 // ttsRun carries the bookkeeping of one sentence attempt.
 type ttsRun struct {
+	parent   context.Context
 	g        *generation
 	out      *ttsOut
 	sl       slot
@@ -163,19 +194,19 @@ func (g *generation) runTTS(parent, sctx context.Context, out *ttsOut, sl slot, 
 		close(out.ch)
 		out.cancel()
 	}()
-	run := &ttsRun{g: g, out: out, sl: sl, req: req, start: r.clock.Now()}
+	run := &ttsRun{g: g, out: out, sl: sl, req: req, start: r.clock.Now(), parent: parent}
 
-	// voice binding (spec 8.4.12)
-	if g.fakeTTS() {
-		run.model, run.voiceID = fakeTTSModel, fakeTTSVoiceID
-	} else {
+	// voice binding (spec 8.4.12): fake mode ignores the character's voice but its slot's
+	// adapter must still be registered
+	run.model, run.voiceID = fakeTTSModel, fakeTTSVoiceID
+	if !g.fakeTTS() {
 		run.model, run.voiceID = sl.ref.ModelName, sl.ref.VoiceID
-		if _, ok := r.tts[sl.vendor]; !ok || sl.ref.VoiceID == "" {
-			e := NewError(sl.vendor, CapTTS, KindInvalidRequest, "voice binding is missing or its vendor is not enabled")
-			e.VendorCode = vendorCodeVoice
-			run.failBeforeAdapter(e) // a configuration problem: never counted by the breaker
-			return
-		}
+	}
+	if !g.registered(sl.vendor) || (!g.fakeTTS() && sl.ref.VoiceID == "") {
+		e := NewError(sl.vendor, CapTTS, KindInvalidRequest, "voice binding is missing or its vendor is not enabled")
+		e.VendorCode = vendorCodeVoice
+		run.failBeforeAdapter(e) // a configuration problem: never counted by the breaker
+		return
 	}
 	tk, rel, aerr := r.admitVendor(sctx, sl.vendor, CapTTS)
 	if aerr != nil {
@@ -344,12 +375,15 @@ func (run *ttsRun) failBeforeAdapter(err *Error) {
 // for eligible errors, only once, only when the character has a fallback voice.
 func (run *ttsRun) emitFailure(err *Error) {
 	g := run.g
+	if run.out.silent.Load() || errors.Is(run.parent.Err(), context.Canceled) {
+		return // closed, superseded or cancelled by the caller: nobody is waiting for this
+	}
 	if err.Provider == "" {
 		err.Provider = run.sl.vendor
 	}
-	canSwitch := !g.audioSent.Load() && FallbackEligible(err) && !run.sl.onFallback && g.fallbackUsable()
-	if canSwitch {
-		g.switchTTS(run.sl, err.Kind) // false when another sentence already switched
+	callerGaveUp := run.parent.Err() != nil // its own deadline: not the vendor's fault, no voice change
+	canSwitch := !callerGaveUp && FallbackEligible(err) && !run.sl.onFallback && g.fallbackUsable()
+	if canSwitch && g.switchTTS(run.sl, err.Kind) != switchRefused {
 		sw := &Error{Provider: run.sl.vendor, Capability: CapTTS, Kind: KindUnavailable, VendorCode: vendorCodeSwitch, Retryable: true,
 			Message: "tts moved to the character's fallback voice", Cause: err}
 		run.deliver(TTSChunk{Err: sw, Epoch: run.out.epoch})

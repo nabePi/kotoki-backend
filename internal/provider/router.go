@@ -287,7 +287,13 @@ func (r *Router) admit(ctx context.Context, c Capability) (Ticket, func(), *Erro
 
 func (r *Router) admitVendor(ctx context.Context, p Name, c Capability) (Ticket, func(), *Error) {
 	k := key{p, c}
-	tk, ok := r.breakers[k].Allow()
+	br := r.breakers[k]
+	if br == nil { // a vendor that was never registered (e.g. a character's disabled TTS vendor)
+		e := NewError(p, c, KindInvalidRequest, "vendor is not enabled")
+		e.VendorCode = vendorCodeVoice
+		return Ticket{}, nil, e
+	}
+	tk, ok := br.Allow()
 	if !ok {
 		r.metrics.ObserveCall(p, c, "", "", "error", KindUnavailable, "circuit_open")
 		return Ticket{}, nil, circuitOpen(p, c)
@@ -296,7 +302,7 @@ func (r *Router) admitVendor(ctx context.Context, p Name, c Capability) (Ticket,
 	rel, err := r.sems[k].Acquire(ctx, p, c)
 	r.metrics.ConcurrencyWait(p, c, r.clock.Now().Sub(start))
 	if err != nil {
-		tk.Done(err) // local_concurrency and cancellation are not counted by the breaker
+		tk.Done(context.Canceled) // waiting for a slot is no vendor verdict: neither a deadline nor local_concurrency counts
 		if err.VendorCode == vendorCodeLocal {
 			r.metrics.ConcurrencyRejected(p, c)
 		}
@@ -309,49 +315,6 @@ func (r *Router) admitVendor(ctx context.Context, p Name, c Capability) (Ticket,
 		r.metrics.ActiveDec(p, c)
 		rel()
 	}, nil
-}
-
-// ttsCandidate is one voice a TTS sentence may be synthesised with.
-type ttsCandidate struct {
-	Ref VoiceRef
-	// ViaCircuitOpen marks a fallback chosen because the primary vendor's breaker is open.
-	ViaCircuitOpen bool
-}
-
-// ttsCandidates lists the usable voices in order: the primary, then the character's fallback
-// when it exists and PROVIDER_TTS_FALLBACK_ENABLED. Breakers are per (vendor, capability),
-// not per character (D-043). A vendor that is not registered is skipped; with nothing left
-// the call fails (voice_binding_missing) or, when only open breakers remain, circuit_open.
-func (r *Router) ttsCandidates(v VoiceSelection) ([]ttsCandidate, error) {
-	refs := []VoiceRef{v.Primary}
-	if v.Fallback != nil && r.cfg.TTSFallbackEnabled {
-		refs = append(refs, *v.Fallback)
-	}
-	var out []ttsCandidate
-	registered, primarySkippedOpen := 0, false
-	for i, ref := range refs {
-		if _, ok := r.tts[ref.Provider]; !ok {
-			continue
-		}
-		registered++
-		if !r.breakers[key{ref.Provider, CapTTS}].WouldAllow() {
-			if i == 0 {
-				primarySkippedOpen = true
-			}
-			continue
-		}
-		out = append(out, ttsCandidate{Ref: ref, ViaCircuitOpen: i > 0 && primarySkippedOpen})
-	}
-	switch {
-	case len(out) > 0:
-		return out, nil
-	case registered == 0:
-		e := NewError(v.Primary.Provider, CapTTS, KindInvalidRequest, "voice binding refers to a TTS vendor that is not enabled")
-		e.VendorCode = "voice_binding_missing"
-		return nil, e
-	default:
-		return nil, circuitOpen(v.Primary.Provider, CapTTS)
-	}
 }
 
 // HealthSnapshot returns one row per registered (vendor, capability) for the debug endpoint.

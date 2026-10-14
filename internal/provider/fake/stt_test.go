@@ -143,18 +143,6 @@ func nextFinal(t *testing.T, s provider.STTSession) provider.STTEvent {
 	}
 }
 
-func partials(t *testing.T, s provider.STTSession) []provider.STTEvent {
-	t.Helper()
-	var out []provider.STTEvent
-	for {
-		ev := next(t, s)
-		if ev.Type == provider.STTFinal {
-			return out
-		}
-		out = append(out, ev)
-	}
-}
-
 func TestFakeSTTConformance(t *testing.T) {
 	providertest.STTSuite(t, func(t *testing.T) provider.STTProvider {
 		return newSTT(t, CapConfig{ConnectMS: 5}, Config{}, Deps{})

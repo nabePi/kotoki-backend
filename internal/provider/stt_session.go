@@ -100,6 +100,12 @@ func (s *sttQueue) push(ev STTEvent) {
 	}
 }
 
+func (s *sttQueue) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 // run forwards until CLOSED was delivered, then closes out and done.
 func (s *sttQueue) run(out chan<- STTEvent, done chan struct{}) {
 	defer close(done)
@@ -116,9 +122,14 @@ func (s *sttQueue) run(out chan<- STTEvent, done chan struct{}) {
 		s.mu.Unlock()
 		select {
 		case out <- ev:
-		case <-time.After(2 * time.Second): // nobody is reading a closing session
-			if ev.Type == STTClosed {
-				return
+		case <-time.After(2 * time.Second):
+			// A live session blocks for a slow reader; once CLOSED was queued the reader is
+			// presumed gone and what cannot be delivered is dropped so the goroutine ends.
+			if s.isClosed() {
+				if ev.Type == STTClosed {
+					return
+				}
+				continue
 			}
 			out <- ev
 		}
@@ -151,7 +162,10 @@ type rotatingSTT struct {
 	sentBytes      int64 // logical bytes already written to the active connection
 	finalTimeouts  int
 	rotating       bool
-	pendingFin     bool
+	pendingRotate  bool // another rotation trigger arrived while one was replaying
+	pendingFinN    int  // Finalize calls to (re)send once the replay backlog is out
+	finOutstanding int  // Finalize calls sent to the active connection and not answered yet
+	ending         bool // fail or Close started: a vendor stream end is expected, not a failure
 	terminated     bool
 	closedAudioMs  int64 // AudioMsSent of connections that were rotated away
 	stats          STTStats
@@ -237,15 +251,23 @@ func (rt *rotatingSTT) Finalize() error {
 		return ErrSessionClosed
 	}
 	if rt.rotating {
-		rt.pendingFin = true
+		rt.pendingFinN++
 		return nil
 	}
-	return rt.active.Finalize()
+	if err := rt.active.Finalize(); err != nil {
+		return err
+	}
+	rt.finOutstanding++
+	return nil
 }
 
 // ReportFinalTimeout counts a missing FINAL{FromFinalize}; the third in a row fails the vendor.
 func (rt *rotatingSTT) ReportFinalTimeout() {
 	rt.mu.Lock()
+	if rt.terminated || rt.ending {
+		rt.mu.Unlock()
+		return
+	}
 	rt.finalTimeouts++
 	trip := rt.finalTimeouts == finalTimeoutLimit
 	rt.mu.Unlock()
@@ -275,6 +297,7 @@ func (rt *rotatingSTT) Stats() STTStats {
 func (rt *rotatingSTT) Close() error {
 	rt.closeOnce.Do(func() {
 		rt.mu.Lock()
+		rt.ending = true // before any connection is closed: its stream end is expected
 		active, cancelConn := rt.active, rt.cancelConn
 		rt.mu.Unlock()
 		if active != nil {
@@ -316,6 +339,13 @@ func (rt *rotatingSTT) emit(ev STTEvent) {
 // fail forwards a fatal STTError and ends the session (the runtime ends the session with
 // PROVIDER_FAILURE; there is no other vendor).
 func (rt *rotatingSTT) fail(err *Error) {
+	rt.mu.Lock()
+	if rt.ending || rt.terminated { // one fatal error per session
+		rt.mu.Unlock()
+		return
+	}
+	rt.ending = true
+	rt.mu.Unlock()
 	rt.emit(STTEvent{Type: STTError, Err: err, ReceivedAt: rt.r.clock.Now()})
 	go func() { _ = rt.Close() }() // CLOSED follows the error; the vendor connection is released
 }
@@ -341,9 +371,9 @@ func (rt *rotatingSTT) pump(gen int, offset int64, conn STTSession) {
 		rt.handle(gen, offset, ev)
 	}
 	rt.mu.Lock()
-	current := gen == rt.connGen && !rt.terminated
+	unexpected := gen == rt.connGen && !rt.terminated && !rt.ending
 	rt.mu.Unlock()
-	if current { // the vendor closed the stream without an error and we did not ask for it
+	if unexpected { // the vendor closed the stream without an error and we did not ask for it
 		err := &Error{Provider: rt.vendor, Capability: CapSTT, Kind: KindUnavailable, VendorCode: "connection_closed", Retryable: true,
 			Message: "STT connection closed unexpectedly"}
 		rt.r.breakers[key{rt.vendor, CapSTT}].Record(err)
@@ -353,21 +383,22 @@ func (rt *rotatingSTT) pump(gen int, offset int64, conn STTSession) {
 
 func (rt *rotatingSTT) handle(gen int, offset int64, ev STTEvent) {
 	rt.mu.Lock()
-	current := gen == rt.connGen
+	current := gen == rt.connGen && !rt.ending
 	rt.mu.Unlock()
+	if !current {
+		return // events of a rotated-away connection are stale: the replay re-transcribes its audio
+	}
 	switch ev.Type {
 	case STTPartial:
-		if current {
-			rt.emit(shift(ev, offset))
-		}
+		rt.emit(shift(ev, offset))
 	case STTFinal:
-		if !current && ev.FromFinalize {
-			return // the answer to a Finalize of the old connection: the runtime repeats it
-		}
 		ev = shift(ev, offset)
 		rt.mu.Lock()
 		if ev.FromFinalize {
 			rt.finalTimeouts = 0
+			if rt.finOutstanding > 0 {
+				rt.finOutstanding--
+			}
 		}
 		if ev.EndMs > rt.lastFinalEndMs {
 			rt.lastFinalEndMs = ev.EndMs
@@ -375,11 +406,11 @@ func (rt *rotatingSTT) handle(gen int, offset int64, ev STTEvent) {
 		rt.mu.Unlock()
 		rt.emit(ev)
 	case STTError:
-		if !current || ev.Err == nil {
+		if ev.Err == nil {
 			return
 		}
 		if rotationTriggers[ev.Err.VendorCode] {
-			go rt.rotate(gen)
+			rt.startRotation(gen)
 			return
 		}
 		rt.r.breakers[key{rt.vendor, CapSTT}].Record(ev.Err)
@@ -390,87 +421,144 @@ func (rt *rotatingSTT) handle(gen int, offset int64, ev STTEvent) {
 	}
 }
 
-// rotate reconnects to the same vendor and replays from the last FINAL (or the oldest byte
-// still in the rotation buffer), without counting against the breaker.
-func (rt *rotatingSTT) rotate(fromGen int) {
-	rt.mu.Lock()
-	if rt.terminated || rt.rotating || fromGen != rt.connGen {
-		rt.mu.Unlock()
-		return
-	}
+// beginRotationLocked switches the session to "rotating" under rt.mu: from this moment audio
+// only goes to the buffer and the old connection's events are stale. It returns what the
+// reconnect needs.
+func (rt *rotatingSTT) beginRotationLocked() (gen int, replayFromMs int64, old STTSession, oldCancel context.CancelFunc) {
 	rt.rotating = true
 	rt.connGen++
-	gen := rt.connGen
-	old, oldCancel := rt.active, rt.cancelConn
-	rt.closedAudioMs += old.Stats().AudioMsSent
-	replayFromMs := max(rt.lastFinalEndMs, rt.ring.oldestBytes()/sttBytesPerMs)
-	rt.mu.Unlock()
-	go func() {
-		_ = old.Close()
-		oldCancel()
-	}()
-
-	conn, cancelConn, err := rt.openConn(rt.ctx)
-	if err != nil {
-		rt.fail(err)
-		return
+	gen = rt.connGen
+	old, oldCancel = rt.active, rt.cancelConn
+	rt.active = nil
+	if old != nil {
+		rt.closedAudioMs += old.Stats().AudioMsSent
 	}
-	rt.mu.Lock()
-	if rt.terminated { // closed while reconnecting
-		rt.mu.Unlock()
-		_ = conn.Close()
-		cancelConn()
-		return
-	}
-	rt.active, rt.cancelConn = conn, cancelConn
-	rt.vendorOffsetMs = replayFromMs
-	rt.sentBytes = replayFromMs * sttBytesPerMs
-	rt.stats.Reconnects++
-	offset := rt.vendorOffsetMs
-	rt.mu.Unlock()
-	rt.r.metrics.STTRotation(rt.vendor)
-	go rt.pump(gen, offset, conn)
-
-	replayed := rt.replay(conn)
-	rt.r.metrics.STTReplay(rt.vendor, float64(replayed)/float64(STTSampleRate*2))
+	rt.pendingFinN += rt.finOutstanding // unanswered Finalize calls are repeated on the new connection
+	rt.finOutstanding = 0
+	// replay from the last FINAL, or the oldest audio still buffered; never beyond what was written
+	replayFromMs = max(rt.lastFinalEndMs, rt.ring.oldestBytes()/sttBytesPerMs)
+	replayFromMs = min(replayFromMs, rt.ring.total/sttBytesPerMs)
+	return gen, replayFromMs, old, oldCancel
 }
 
-// replay sends the backlog in 100 ms chunks, then the audio that arrived meanwhile, then any
-// deferred Finalize; it returns the number of bytes replayed.
-func (rt *rotatingSTT) replay(conn STTSession) int64 {
-	var total int64
+// startRotation handles a rotation trigger of connection fromGen.
+func (rt *rotatingSTT) startRotation(fromGen int) {
+	rt.mu.Lock()
+	if rt.terminated || rt.ending || fromGen != rt.connGen {
+		rt.mu.Unlock()
+		return
+	}
+	if rt.rotating { // cut again while still replaying: rotate once more after this replay
+		rt.pendingRotate = true
+		rt.mu.Unlock()
+		return
+	}
+	gen, from, old, oldCancel := rt.beginRotationLocked()
+	rt.mu.Unlock()
+	go rt.runRotation(gen, from, old, oldCancel)
+}
+
+func closeConn(old STTSession, cancel context.CancelFunc) {
+	if old != nil {
+		_ = old.Close()
+	}
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// runRotation reconnects to the same vendor and replays; it repeats when another trigger
+// arrived during the replay. Rotation is not a failure: the breaker is not involved.
+func (rt *rotatingSTT) runRotation(gen int, replayFromMs int64, old STTSession, oldCancel context.CancelFunc) {
+	for {
+		go closeConn(old, oldCancel)
+		conn, cancelConn, err := rt.openConn(rt.ctx)
+		if err != nil {
+			rt.fail(err)
+			return
+		}
+		rt.mu.Lock()
+		if rt.terminated || rt.ending { // closed while reconnecting
+			rt.mu.Unlock()
+			closeConn(conn, cancelConn)
+			return
+		}
+		rt.active, rt.cancelConn = conn, cancelConn
+		rt.vendorOffsetMs = replayFromMs
+		rt.sentBytes = replayFromMs * sttBytesPerMs
+		rt.stats.Reconnects++
+		rt.mu.Unlock()
+		rt.r.metrics.STTRotation(rt.vendor)
+		go rt.pump(gen, replayFromMs, conn)
+
+		replayed, again := rt.replay(conn)
+		rt.r.metrics.STTReplay(rt.vendor, float64(replayed)/float64(STTSampleRate*2))
+		if !again {
+			return
+		}
+		rt.mu.Lock()
+		if rt.terminated || rt.ending {
+			rt.mu.Unlock()
+			return
+		}
+		gen, replayFromMs, old, oldCancel = rt.beginRotationLocked()
+		rt.mu.Unlock()
+	}
+}
+
+// replay sends the backlog in 100 ms chunks, then the audio that arrived meanwhile, then the
+// deferred Finalize calls. It returns the bytes replayed and whether another rotation was
+// requested during the replay.
+func (rt *rotatingSTT) replay(conn STTSession) (total int64, again bool) {
 	for {
 		rt.mu.Lock()
-		if rt.terminated {
+		if rt.terminated || rt.ending {
 			rt.mu.Unlock()
-			return total
+			return total, false
 		}
 		if rt.sentBytes < rt.ring.oldestBytes() {
 			rt.sentBytes = rt.ring.oldestBytes() // the buffer wrapped past us: skip what is gone
 		}
 		data := rt.ring.readFromBytes(rt.sentBytes)
 		if len(data) == 0 {
-			rt.rotating = false
-			if rt.pendingFin {
-				rt.pendingFin = false
-				_ = conn.Finalize()
+			if rt.pendingRotate { // keep rotating: the caller reconnects again
+				rt.pendingRotate = false
+				rt.mu.Unlock()
+				return total, true
 			}
+			rt.rotating = false
+			for n := rt.pendingFinN; n > 0; n-- {
+				if conn.Finalize() == nil {
+					rt.finOutstanding++
+				}
+			}
+			rt.pendingFinN = 0
 			rt.mu.Unlock()
-			return total
+			return total, false
 		}
 		rt.mu.Unlock()
+		waits := 0
 		for off := 0; off < len(data); {
 			end := min(off+replayChunkBytes, len(data))
 			if err := conn.SendAudio(data[off:end]); err != nil {
 				if errors.Is(err, ErrSessionClosed) {
-					return total
+					rt.mu.Lock()
+					again = rt.pendingRotate
+					rt.pendingRotate = false
+					rt.mu.Unlock()
+					return total, again
 				}
-				// the adapter's 2 s buffer is full: let it drain
+				if KindOf(err) != KindUnavailable || waits > 2500 { // a full 2 s buffer drains; anything else is fatal
+					rt.fail(asError(rt.vendor, CapSTT, err))
+					return total, false
+				}
+				waits++
 				if rt.r.sleep(rt.ctx, 2*time.Millisecond) != nil {
-					return total
+					return total, false
 				}
 				continue
 			}
+			waits = 0
 			rt.mu.Lock()
 			rt.sentBytes += int64(end - off)
 			rt.mu.Unlock()
@@ -478,7 +566,7 @@ func (rt *rotatingSTT) replay(conn STTSession) int64 {
 			off = end
 			if speed := rt.r.cfg.RotationReplaySpeed; speed > 0 {
 				if rt.r.sleep(rt.ctx, 100*time.Millisecond/time.Duration(speed)) != nil {
-					return total
+					return total, false
 				}
 			}
 		}

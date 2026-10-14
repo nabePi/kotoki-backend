@@ -1,7 +1,6 @@
 package provider_test
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,112 +27,6 @@ func TestAdmitClosedBreakerAndLocalConcurrency(t *testing.T) {
 	r, _ := newTestRouter(t, withCfg(func(c *provider.RouterConfig) { c.Concurrency.OpenAISTT = 1 }))
 	_, err := r.AdmitForTest(provider.CapSTT)
 	require.NoError(t, err)
-}
-
-func TestTTSCandidatesFromVoiceSelection(t *testing.T) {
-	r, _ := newTestRouter(t, withTTSVendors(provider.Cartesia, provider.ElevenLabs))
-	v := provider.VoiceSelection{
-		Primary:  provider.VoiceRef{Provider: provider.Cartesia, ModelName: "sonic", VoiceID: "v1"},
-		Fallback: &provider.VoiceRef{Provider: provider.ElevenLabs, ModelName: "eleven", VoiceID: "v2"},
-	}
-	got, err := r.TTSCandidatesForTest(v)
-	require.NoError(t, err)
-	require.Len(t, got, 2)
-	require.Equal(t, provider.Cartesia, got[0].Ref.Provider)
-	require.Equal(t, provider.ElevenLabs, got[1].Ref.Provider)
-	require.False(t, got[1].ViaCircuitOpen)
-
-	v.Fallback = nil
-	got, err = r.TTSCandidatesForTest(v)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-
-	r2, _ := newTestRouter(t, withTTSVendors(provider.Cartesia, provider.ElevenLabs), withCfg(func(c *provider.RouterConfig) { c.TTSFallbackEnabled = false }))
-	v.Fallback = &provider.VoiceRef{Provider: provider.ElevenLabs, VoiceID: "v2"}
-	got, err = r2.TTSCandidatesForTest(v)
-	require.NoError(t, err)
-	require.Len(t, got, 1, "PROVIDER_TTS_FALLBACK_ENABLED=false ignores voice.fallback")
-}
-
-func TestTTSBreakerSharedAcrossCharacters(t *testing.T) {
-	r, env := newTestRouter(t, withTTSVendors(provider.Cartesia, provider.ElevenLabs))
-	env.openBreaker(t, r, provider.Cartesia, provider.CapTTS)
-	a := provider.VoiceSelection{Primary: provider.VoiceRef{Provider: provider.Cartesia, VoiceID: "character-a"}}
-	b := provider.VoiceSelection{Primary: provider.VoiceRef{Provider: provider.Cartesia, VoiceID: "character-b"}}
-	for _, v := range []provider.VoiceSelection{a, b} {
-		_, err := r.TTSCandidatesForTest(v)
-		require.Equal(t, "circuit_open", ventorCode(err), "one breaker per (vendor, capability), shared by every character")
-	}
-}
-
-func ventorCode(err error) string {
-	var pe *provider.Error
-	if errors.As(err, &pe) {
-		return pe.VendorCode
-	}
-	return ""
-}
-
-func TestTTSCandidatesSkipOpenPrimaryToCharacterFallback(t *testing.T) {
-	r, env := newTestRouter(t, withTTSVendors(provider.Cartesia, provider.ElevenLabs))
-	env.openBreaker(t, r, provider.Cartesia, provider.CapTTS)
-	v := provider.VoiceSelection{
-		Primary:  provider.VoiceRef{Provider: provider.Cartesia, VoiceID: "v1"},
-		Fallback: &provider.VoiceRef{Provider: provider.ElevenLabs, VoiceID: "v2"},
-	}
-	got, err := r.TTSCandidatesForTest(v)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	require.Equal(t, provider.ElevenLabs, got[0].Ref.Provider)
-	require.True(t, got[0].ViaCircuitOpen)
-}
-
-func TestTTSAllCircuitsOpenIsCircuitOpen(t *testing.T) {
-	r, env := newTestRouter(t, withTTSVendors(provider.Cartesia, provider.ElevenLabs))
-	env.openBreaker(t, r, provider.Cartesia, provider.CapTTS)
-	env.openBreaker(t, r, provider.ElevenLabs, provider.CapTTS)
-	v := provider.VoiceSelection{
-		Primary:  provider.VoiceRef{Provider: provider.Cartesia},
-		Fallback: &provider.VoiceRef{Provider: provider.ElevenLabs},
-	}
-	_, err := r.TTSCandidatesForTest(v)
-	var pe *provider.Error
-	require.ErrorAs(t, err, &pe)
-	require.Equal(t, provider.KindUnavailable, pe.Kind)
-	require.Equal(t, "circuit_open", pe.VendorCode)
-}
-
-func TestTTSOpenPrimaryWithoutFallbackIsCircuitOpen(t *testing.T) {
-	r, env := newTestRouter(t, withTTSVendors(provider.Cartesia, provider.ElevenLabs))
-	env.openBreaker(t, r, provider.Cartesia, provider.CapTTS)
-	_, err := r.TTSCandidatesForTest(provider.VoiceSelection{Primary: provider.VoiceRef{Provider: provider.Cartesia}})
-	require.Equal(t, "circuit_open", ventorCode(err))
-}
-
-func TestTTSHalfOpenPrimaryIsUsableAgain(t *testing.T) {
-	r, env := newTestRouter(t, withTTSVendors(provider.Cartesia, provider.ElevenLabs))
-	env.openBreaker(t, r, provider.Cartesia, provider.CapTTS)
-	env.Clock.Advance(env.Cfg.CBOpenDuration)
-	got, err := r.TTSCandidatesForTest(provider.VoiceSelection{Primary: provider.VoiceRef{Provider: provider.Cartesia}})
-	require.NoError(t, err, "after the open duration the primary may be probed again")
-	require.Len(t, got, 1)
-	require.Equal(t, provider.BreakerOpen, r.BreakerForTest(provider.Cartesia, provider.CapTTS).State(), "peeking must not consume the probe")
-}
-
-func TestTTSUnregisteredVendorIsVoiceBindingMissing(t *testing.T) {
-	r, _ := newTestRouter(t, withTTSVendors(provider.ElevenLabs))
-	_, err := r.TTSCandidatesForTest(provider.VoiceSelection{Primary: provider.VoiceRef{Provider: provider.Cartesia}})
-	var pe *provider.Error
-	require.ErrorAs(t, err, &pe)
-	require.Equal(t, "voice_binding_missing", pe.VendorCode)
-	require.Equal(t, provider.KindInvalidRequest, pe.Kind)
-
-	got, err := r.TTSCandidatesForTest(provider.VoiceSelection{
-		Primary:  provider.VoiceRef{Provider: provider.Cartesia},
-		Fallback: &provider.VoiceRef{Provider: provider.ElevenLabs},
-	})
-	require.NoError(t, err, "an unregistered primary is skipped when the fallback is registered")
-	require.Len(t, got, 1)
 }
 
 func TestNewRouterRejectsMissingAdapter(t *testing.T) {

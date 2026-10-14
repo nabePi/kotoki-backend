@@ -27,6 +27,8 @@ type recConn struct {
 	events   chan provider.STTEvent
 	gate     chan struct{} // when set, SendAudio waits for a token
 	evOnce   sync.Once
+	// closeEvents makes Close behave like a real vendor: send CLOSED and end the channel.
+	closeEvents bool
 }
 
 func (c *recConn) SendAudio(pcm []byte) error {
@@ -56,6 +58,12 @@ func (c *recConn) Close() error {
 	c.mu.Lock()
 	c.closed = true
 	c.mu.Unlock()
+	if c.closeEvents {
+		c.evOnce.Do(func() {
+			c.events <- provider.STTEvent{Type: provider.STTClosed}
+			close(c.events)
+		})
+	}
 	return nil
 }
 
@@ -80,6 +88,8 @@ func (c *recConn) finalizes() int {
 func (c *recConn) push(ev provider.STTEvent) { c.events <- ev }
 
 func (c *recConn) endEvents() { c.evOnce.Do(func() { close(c.events) }) }
+
+func closingVendor(c *recConn) { c.closeEvents = true }
 
 // recSTT hands out recConns.
 type recSTT struct {
@@ -453,4 +463,122 @@ func TestSTTCloseEmitsClosedOnce(t *testing.T) {
 	require.Equal(t, provider.STTClosed, nextEv(t, s).Type)
 	_, ok := <-s.Events()
 	require.False(t, ok, "the channel closes after CLOSED")
+}
+
+func drainTypes(t *testing.T, s provider.STTSession) []provider.STTEventType {
+	t.Helper()
+	var out []provider.STTEventType
+	timeout := time.After(3 * time.Second)
+	for {
+		select {
+		case ev, ok := <-s.Events():
+			if !ok {
+				return out
+			}
+			out = append(out, ev.Type)
+		case <-timeout:
+			t.Fatal("events channel did not close")
+		}
+	}
+}
+
+func TestVendorErrorCountedAndForwardedOnce(t *testing.T) { // review C1
+	rec := &recSTT{configure: closingVendor}
+	r, _, s := openRec(t, rec, withCfg(func(c *provider.RouterConfig) { c.CBFailureThreshold = 2 }))
+	rec.conn(0).push(vendorErr("boom"))
+	rec.conn(0).endEvents() // the vendor ends the channel right after the ERROR
+	require.Equal(t, []provider.STTEventType{provider.STTError, provider.STTClosed}, drainTypes(t, s),
+		"one ERROR then CLOSED: the stream end that follows is expected, not a second failure")
+	require.Equal(t, provider.BreakerClosed, r.BreakerForTest(provider.FakePrimary, provider.CapSTT).State(), "one failure, counted once")
+}
+
+func TestNormalCloseNeverCountsAFailure(t *testing.T) { // review C1
+	for i := 0; i < 100; i++ {
+		rec := &recSTT{configure: closingVendor}
+		r, _ := newTestRouter(t, withSTT(rec), withCfg(func(c *provider.RouterConfig) { c.CBFailureThreshold = 1 }))
+		s, err := r.OpenSTT(context.Background(), sttCfg())
+		require.NoError(t, err)
+		require.NoError(t, s.Close())
+		require.Equal(t, []provider.STTEventType{provider.STTClosed}, drainTypes(t, s), "iteration %d", i)
+		require.Equal(t, provider.BreakerClosed, r.BreakerForTest(provider.FakePrimary, provider.CapSTT).State(), "iteration %d", i)
+	}
+}
+
+func TestRotationTriggerNeverRefusesAudio(t *testing.T) { // review I1
+	rec := &recSTT{}
+	_, _, s := openRec(t, rec)
+	sendMs(t, s, 200)
+	rec.conn(0).push(vendorErr("session_time_limit_exceeded"))
+	for i := 0; i < 200; i++ {
+		require.NoError(t, s.SendAudio(make([]byte, 640)), "the session is alive: audio goes to the buffer, never ErrSessionClosed")
+	}
+	require.Eventually(t, func() bool { return s.Stats().Reconnects == 1 }, 2*time.Second, time.Millisecond)
+}
+
+func TestRotationRepeatsUnansweredFinalize(t *testing.T) { // review I2
+	rec := &recSTT{}
+	_, _, s := openRec(t, rec)
+	sendMs(t, s, 500)
+	require.NoError(t, s.Finalize())
+	require.Equal(t, 1, rec.conn(0).finalizes())
+	rec.conn(0).push(vendorErr("insufficient_audio_activity")) // rotation before the FINAL came
+	require.Eventually(t, func() bool { return rec.connCount() == 2 && rec.conn(1).finalizes() == 1 }, 2*time.Second, time.Millisecond,
+		"the runtime cannot see a rotation, so the router repeats the Finalize on the new connection")
+
+	rec.conn(1).push(final(0, 500, "あ", true))
+	require.Equal(t, provider.STTFinal, nextEv(t, s).Type)
+	rec.conn(1).push(vendorErr("session_time_limit_exceeded")) // answered Finalize: nothing to repeat
+	require.Eventually(t, func() bool { return rec.connCount() == 3 }, 2*time.Second, time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
+	require.Zero(t, rec.conn(2).finalizes())
+}
+
+func TestRotationDropsLateFinalsOfOldConnection(t *testing.T) { // review I3
+	rec := &recSTT{}
+	_, _, s := openRec(t, rec)
+	rotateAfterAudio(t, rec, s, "session_time_limit_exceeded")
+	rec.conn(0).push(final(1500, 3000, "二重", false)) // would be transcribed again by the replay
+	noEvent(t, s, 100*time.Millisecond)
+}
+
+func TestRotationTriggerDuringReplayRotatesAgain(t *testing.T) { // review I4
+	rec := &recSTT{configure: func(c *recConn) {
+		if c.id == 2 {
+			c.gate = make(chan struct{}, 256)
+		}
+	}}
+	_, _, s := openRec(t, rec)
+	sendMs(t, s, 1000)
+	rec.conn(0).push(vendorErr("session_time_limit_exceeded"))
+	require.Eventually(t, func() bool { return rec.connCount() == 2 }, 2*time.Second, time.Millisecond)
+	rec.conn(1).push(vendorErr("session_time_limit_exceeded")) // the new connection is cut during its replay
+	time.Sleep(20 * time.Millisecond)
+	for i := 0; i < 64; i++ {
+		rec.conn(1).gate <- struct{}{}
+	}
+	require.Eventually(t, func() bool { return rec.connCount() == 3 && s.Stats().Reconnects == 2 }, 3*time.Second, time.Millisecond)
+	noEvent(t, s, 50*time.Millisecond) // no STTError reached the runtime
+	require.Eventually(t, func() bool { return rec.conn(2).audioLen() == 1000*bytesPerMs }, 3*time.Second, time.Millisecond)
+}
+
+func TestRotationReplayStartClampedToWrittenAudio(t *testing.T) {
+	rec := &recSTT{}
+	_, _, s := openRec(t, rec)
+	sendMs(t, s, 1000)
+	rec.conn(0).push(final(0, 5000, "あ", false)) // a FINAL that claims more audio than was ever sent
+	require.Equal(t, provider.STTFinal, nextEv(t, s).Type)
+	rec.conn(0).push(vendorErr("session_time_limit_exceeded"))
+	require.Eventually(t, func() bool { return s.Stats().Reconnects == 1 }, 2*time.Second, time.Millisecond)
+	require.NoError(t, s.SendAudio(make([]byte, 640)))
+	require.Eventually(t, func() bool { return rec.conn(1).audioLen() == 640 }, 2*time.Second, time.Millisecond, "live audio is not skipped")
+}
+
+func TestFinalTimeoutAfterCloseIsIgnored(t *testing.T) {
+	rec := &recSTT{}
+	r, _, s := openRec(t, rec, withCfg(func(c *provider.RouterConfig) { c.CBFailureThreshold = 1 }))
+	require.NoError(t, s.Close())
+	for i := 0; i < 3; i++ {
+		s.ReportFinalTimeout()
+	}
+	require.Equal(t, provider.BreakerClosed, r.BreakerForTest(provider.FakePrimary, provider.CapSTT).State())
 }

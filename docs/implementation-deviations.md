@@ -27,3 +27,15 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - Baris `Memory rules` di template seed v1 mengakhiri kalimat dengan "(Bab 11 §11.7)" pada spec; itu rujukan silang dokumen, bukan teks prompt, sehingga dibuang dari `prompt.ConversationV1`/`OpeningV1`. **Seed M3 MUST memakai teks konstanta ini**, bukan menyalin ulang dari spec.
 - `FixtureMaximal` mengisi `persona` (3000 rune), `situation` (2000), `greeting_hint` (200) pada batas penuh dan jumlah item pada batas (6 task, 8 constraint, 8 grammar target, 20 vocab hint, 20 memory item, 3 episode), tetapi panjang tiap item berulang dibuat realistis (40–60 rune). Semua field pada batas literal sekaligus sudah melebihi 12.000 karakter tanpa teks template (3000 + 2000 + 6×200 + 8×200 + 8×100 > 8.600), jadi syarat "fixture maksimum ≤ 12.000" hanya bisa dipenuhi dengan cara ini (render maksimum saat ini ≈ 10,9 rb karakter CONVERSATION dan 11,2 rb OPENING).
 - `prompt.ResetFixturesForTest` mengembalikan fixture bawaan paket (CONVERSATION/OPENING) alih-alih mengosongkan registry sepenuhnya.
+
+## M4 — keputusan atas ambiguitas spec
+- `RealtimeRouter.CompleteText` dan `AsyncRouter.CompleteText` bertanda tangan sama tetapi kebijakan beda (1 attempt + tunggu slot 100 ms vs 3 attempt + 30 s) → ditentukan `RouterDeps.Role`; `RouterDeps.AsyncWait` (default 30 s) menjadikan tunggu slot async bisa diuji.
+- `prices.yaml` dibaca dengan `gopkg.in/yaml.v3` (allowlist D-003).
+- `NormalizeSpeakable` diekspor dari `prompt` (spec §7.6.2 menaruhnya di `conversation/japanese.go`, tetapi `SentenceParser` di `prompt` memerlukannya); M5 memakai `prompt.NormalizeSpeakable`.
+- §8.1 butir 1 melarang `provider` mengimpor `platform/otel` sedangkan D-NEW-13-23 meminta span di layer provider → span dibuat di adapter vendor (M9); router/fake M4 tanpa OTel.
+- Hash keputusan gagal fake = FNV-64a + finalizer splitmix64 (spec tidak menetapkan fungsi hash).
+- `PROVIDER_CONCURRENCY_<VENDOR>_<CAP>` = 10 field eksplisit; instance fake memakai default kapabilitas.
+- Galat parse bool `RouterConfig` menyebut nama field Go; pemetaan ke nama env dilakukan saat `platform/config` menanam `RouterConfig`.
+- Rotasi koneksi STT membuka koneksi baru tanpa melewati breaker/semaphore lagi (sesi tetap memegang satu slot semaphore dan satu keputusan breaker dari `Open` awal); pseudocode §8.5.8 menulis "breaker+semaphore" untuk `Open` rotasi. Kegagalan `Open` rotasi tetap menjadi `STTError` dan masuk hitungan breaker lewat `ReportFinal`/`Record` hanya bila berupa ERROR vendor.
+- `fake`: `CapConfig.HangAfter` / `FAKE_<INST>_<CAP>_HANG_AFTER` / fault `after_events` ditambahkan agar skenario S-7 (macet setelah N delta) bisa diuji.
+- Wiring `RouterConfig`/`fake.Config` ke `platform/config` dan `cmd/*`, handler `GET /internal/providers` (hanya `HealthSnapshot` yang ada), serta observasi `kotoki_session_cost_usd` saat sesi terminal menjadi tugas M5/M6/M7.

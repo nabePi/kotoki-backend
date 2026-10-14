@@ -373,3 +373,27 @@ func TestRouterLogsNeverContainText(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerationDeadlineWhileWaitingForSlotDoesNotCountForBreaker(t *testing.T) { // review I7
+	hold := &scriptLLM{name: provider.OpenAI, hold: true}
+	r, _ := newTestRouter(t, withLLM(hold), withCfg(func(c *provider.RouterConfig) {
+		c.Concurrency.OpenAILLM = 1
+		c.CBFailureThreshold = 1
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first, err := r.NewGeneration(uuid.New(), 1, voice).StreamLLM(ctx, userReq("a"))
+	require.NoError(t, err)
+	defer func() { _ = first.Close() }()
+	require.Eventually(t, func() bool { return hold.calls.Load() == 1 }, 2*time.Second, 5*time.Millisecond)
+
+	short, cancel2 := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel2()
+	second, err := r.NewGeneration(uuid.New(), 2, voice).StreamLLM(short, userReq("b"))
+	require.NoError(t, err)
+	evs := drainLLM(t, second)
+	require.Len(t, evs, 1)
+	require.Equal(t, provider.LLMError, evs[0].Type)
+	require.Equal(t, provider.BreakerClosed, r.BreakerForTest(provider.OpenAI, provider.CapLLM).State(),
+		"a deadline spent waiting for a local slot never reached the vendor")
+}

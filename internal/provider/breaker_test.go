@@ -157,3 +157,36 @@ func TestBreakerConcurrent(_ *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestBreakerWouldAllowHasNoSideEffects(t *testing.T) {
+	clk := clock.NewFake(t0)
+	b := testBreaker(clk, nil)
+	require.True(t, b.WouldAllow())
+	failN(t, b, 5, unavailable)
+	require.False(t, b.WouldAllow())
+	clk.Advance(20 * time.Second)
+	require.True(t, b.WouldAllow(), "after the open duration a probe would be admitted")
+	require.Equal(t, BreakerOpen, b.State(), "peeking does not start the probe")
+	tk, ok := b.Allow()
+	require.True(t, ok)
+	require.False(t, b.WouldAllow(), "the probe slot is taken")
+	tk.Done(nil)
+	require.True(t, b.WouldAllow())
+}
+
+func TestBreakerRecordCountsWithoutTicket(t *testing.T) {
+	clk := clock.NewFake(t0)
+	var to []BreakerState
+	b := testBreaker(clk, func(_, s BreakerState) { to = append(to, s) })
+	for i := 0; i < 4; i++ {
+		b.Record(unavailable)
+	}
+	b.Record(nil)
+	b.Record(&Error{Kind: KindCancelled})
+	require.Equal(t, BreakerClosed, b.State())
+	b.Record(unavailable)
+	require.Equal(t, BreakerOpen, b.State())
+	require.Equal(t, []BreakerState{BreakerOpen}, to)
+	b.Record(unavailable) // already open: ignored
+	require.Equal(t, []BreakerState{BreakerOpen}, to)
+}

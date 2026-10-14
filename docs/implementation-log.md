@@ -757,3 +757,10 @@ Tanggal: 2026-10-14
 - `go test -tags integration ./internal/redisstore -run FakeFaults` — PASS
 - Review Focus 1–5 lulus (`ContentFiltered`, `NoResetEventExists`, `NoEpochSwitchAfterAudioSent`, `Truncated`, `DeadlineBeforeAudio`, `BreakerStateMachine`, `TestRotation*`, `VendorErrorForwarded`, `PollerClears`)
 - grep D-014/D-015/D-016/D-017: hanya komentar sah dan sakelar `PROVIDER_TTS_FALLBACK_ENABLED`
+
+## M4-Final — Perbaikan hasil review seluruh branch
+Status: DONE
+Tanggal: 2026-10-14
+- STT: ERROR vendor tidak lagi dihitung/diteruskan dua kali dan `Close` normal tidak menghitung kegagalan (flag `ending`); rotasi diset sinkron di `handle` (audio tidak pernah ditolak), Finalize yang belum dijawab diulang di koneksi baru, FINAL koneksi lama dibuang, trigger saat replay memicu rotasi ulang, `AudioMsSent` tidak ganda, titik replay dijepit ke audio yang tertulis, `ReportFinalTimeout` setelah close diabaikan
+- TTS: slot yang tak terdaftar tidak lagi menyebabkan nil-pointer; `audioSent` dicek ulang di bawah `g.mu` saat switch; memilih voice + mendaftarkan stream satu critical section; stream yang ditutup/deadline pemanggil tidak memicu switch
+- Router: menunggu slot semaphore bukan vonis breaker; `INVALID_RESPONSE` diulang sekali; `httpx` tidak lagi menggaungkan body mentah dan menyamarkan `sk_…`; `ttsCandidates` (kode mati) dihapus

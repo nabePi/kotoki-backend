@@ -145,11 +145,17 @@ func TestGenerateJSONInvalidResponseRetried(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 2, ev.calls.Load(), "INVALID_RESPONSE is retried on the same vendor")
 
+	twice := &stubEval{script: []error{perr(provider.KindInvalidResponse, true), perr(provider.KindInvalidResponse, true)}}
+	r3, _ := newTestRouter(t, withStubs(twice, nil))
+	_, err = r3.GenerateJSON(context.Background(), evalRequest())
+	require.Equal(t, provider.KindInvalidResponse, provider.KindOf(err))
+	require.EqualValues(t, 2, twice.calls.Load(), "a second INVALID_RESPONSE ends the call")
+
 	bad := &stubEval{json: `{not json`}
 	r2, _ := newTestRouter(t, withStubs(bad, nil))
 	_, err = r2.GenerateJSON(context.Background(), evalRequest())
 	require.Equal(t, provider.KindInvalidResponse, provider.KindOf(err))
-	require.EqualValues(t, 3, bad.calls.Load(), "a body that is not JSON is INVALID_RESPONSE and retried")
+	require.EqualValues(t, 2, bad.calls.Load(), "INVALID_RESPONSE is retried once (spec 8.3), not up to the attempt limit")
 }
 
 // stubEmbed answers Embed from a per-call script.

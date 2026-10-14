@@ -458,3 +458,122 @@ func TestTTSCallerCloseEndsWithoutError(t *testing.T) {
 	}
 	require.Equal(t, provider.BreakerClosed, r.BreakerForTest(provider.ElevenLabs, provider.CapTTS).State(), "a cancellation is not a failure")
 }
+
+func TestTTSUnregisteredPrimaryWithFallbackDoesNotPanic(t *testing.T) { // review C2
+	t.Run("real mode starts on the fallback", func(t *testing.T) {
+		eleven := &scriptTTS{name: provider.ElevenLabs}
+		r, _ := newTestRouter(t, withTTSVendors(), withTTS(provider.ElevenLabs, eleven), withCfg(realCfg))
+		v := provider.VoiceSelection{
+			Primary:  provider.VoiceRef{Provider: provider.Cartesia, ModelName: "m", VoiceID: "a"}, // not enabled
+			Fallback: &provider.VoiceRef{Provider: provider.ElevenLabs, ModelName: "m", VoiceID: "b"},
+		}
+		g := r.NewGeneration(uuid.New(), 1, v)
+		s, err := g.Synthesize(context.Background(), ttsReq(sentence))
+		require.NoError(t, err)
+		for _, c := range drainTTS(t, s) {
+			require.Nil(t, c.Err)
+			require.Equal(t, provider.ElevenLabs, c.Provider)
+		}
+		require.True(t, g.Summary().UsedFallback)
+	})
+	t.Run("fake mode with an unregistered fallback slot fails cleanly", func(t *testing.T) {
+		r, _ := newTestRouter(t, withTTSVendors(provider.FakePrimary), withTTSCap(provider.FakePrimary, failBeforeFirst()))
+		g := r.NewGeneration(uuid.New(), 1, fakeVoice(true))
+		s, _ := g.Synthesize(context.Background(), ttsReq(sentence))
+		chunks := drainTTS(t, s)
+		require.NotNil(t, chunks[len(chunks)-1].Err)
+		s2, _ := g.Synthesize(context.Background(), ttsReq(sentence)) // now pinned to the missing FAKE_FALLBACK
+		chunks = drainTTS(t, s2)
+		require.Equal(t, "voice_binding_missing", chunks[len(chunks)-1].Err.VendorCode)
+	})
+	t.Run("fake mode with an unregistered primary slot", func(t *testing.T) {
+		r, _ := newTestRouter(t, withTTSVendors(provider.FakeFallback))
+		g := r.NewGeneration(uuid.New(), 1, fakeVoice(false))
+		s, _ := g.Synthesize(context.Background(), ttsReq(sentence))
+		chunks := drainTTS(t, s)
+		require.Equal(t, "voice_binding_missing", chunks[len(chunks)-1].Err.VendorCode)
+	})
+}
+
+func TestTTSNoSwitchOnceAudioIsMarkedSent(t *testing.T) { // review I5
+	r, _ := newTestRouter(t, withTTSCap(provider.FakePrimary, fake.CapConfig{FailEveryN: 1, FailurePhase: fake.PhaseHang}),
+		withCfg(func(c *provider.RouterConfig) { c.TimeoutTTSFirstAudio = 60 * time.Millisecond }))
+	g := r.NewGeneration(uuid.New(), 1, fakeVoice(true))
+	s, _ := g.Synthesize(context.Background(), ttsReq(sentence))
+	time.Sleep(20 * time.Millisecond)
+	g.MarkAudioSent() // the pacer sends epoch-0 audio of ANOTHER sentence while this one is still failing over
+	chunks := drainTTS(t, s)
+	last := chunks[len(chunks)-1]
+	require.NotNil(t, last.Err)
+	require.NotEqual(t, "tts_provider_switched", last.Err.VendorCode, "no epoch change once audio was sent")
+	_, ok := epochNow(g)
+	require.False(t, ok)
+	require.False(t, g.Summary().UsedFallback)
+}
+
+func TestTTSStreamStartedDuringSwitchIsCancelled(t *testing.T) { // review I6
+	eleven := &scriptTTS{name: provider.ElevenLabs, hold: true}
+	cartesia := &scriptTTS{name: provider.Cartesia, fail: true}
+	r, _ := newTestRouter(t, withTTSVendors(), withTTS(provider.ElevenLabs, eleven), withTTS(provider.Cartesia, cartesia), withCfg(realCfg))
+	v := provider.VoiceSelection{
+		Primary:  provider.VoiceRef{Provider: provider.Cartesia, ModelName: "m", VoiceID: "a"},
+		Fallback: &provider.VoiceRef{Provider: provider.ElevenLabs, ModelName: "m", VoiceID: "b"},
+	}
+	g := r.NewGeneration(uuid.New(), 1, v)
+	// Run many sentences concurrently with the switch: every one that was bound to the old epoch
+	// must either finish or be cancelled; none may stay open on the primary after the switch.
+	var wg sync.WaitGroup
+	streams := make([]provider.TTSStream, 20)
+	for i := range streams {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			s, err := g.Synthesize(context.Background(), ttsReq(sentence))
+			if err == nil {
+				streams[i] = s
+			}
+		}(i)
+	}
+	wg.Wait()
+	for _, s := range streams {
+		require.NotNil(t, s)
+		done := make(chan struct{})
+		go func() {
+			for range s.Chunks() {
+			}
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			// a stream bound to the new (fallback) epoch legitimately holds; close it
+			_ = s.Close()
+			<-done
+		}
+	}
+	e, ok := epochNow(g)
+	require.True(t, ok)
+	require.Equal(t, 1, e)
+}
+
+func TestTTSParentDeadlineDoesNotSwitchVoice(t *testing.T) {
+	eleven := &scriptTTS{name: provider.ElevenLabs, hold: true}
+	cartesia := &scriptTTS{name: provider.Cartesia}
+	r, _ := newTestRouter(t, withTTSVendors(), withTTS(provider.ElevenLabs, eleven), withTTS(provider.Cartesia, cartesia), withCfg(realCfg))
+	v := provider.VoiceSelection{
+		Primary:  provider.VoiceRef{Provider: provider.ElevenLabs, ModelName: "m", VoiceID: "a"},
+		Fallback: &provider.VoiceRef{Provider: provider.Cartesia, ModelName: "m", VoiceID: "b"},
+	}
+	g := r.NewGeneration(uuid.New(), 1, v)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	s, _ := g.Synthesize(ctx, ttsReq(sentence))
+	for _, c := range drainTTS(t, s) {
+		if c.Err != nil {
+			require.NotEqual(t, "tts_provider_switched", c.Err.VendorCode, "the caller's own deadline is not the vendor's fault")
+		}
+	}
+	_, ok := epochNow(g)
+	require.False(t, ok)
+	require.Zero(t, cartesia.calls.Load())
+}

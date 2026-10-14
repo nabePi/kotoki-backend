@@ -15,11 +15,6 @@ func (r *Router) AdmitForTest(c Capability) (Ticket, error) {
 // BreakerForTest returns the breaker of a (vendor, capability).
 func (r *Router) BreakerForTest(p Name, c Capability) *Breaker { return r.breakers[key{p, c}] }
 
-// TTSCandidatesForTest exposes ttsCandidates.
-func (r *Router) TTSCandidatesForTest(v VoiceSelection) ([]ttsCandidate, error) {
-	return r.ttsCandidates(v)
-}
-
 // LLMModelForTest, TTSVendorsForTest and TextModelForTest expose the selection helpers.
 func (r *Router) LLMModelForTest() string                 { return r.llmModel() }
 func (r *Router) TTSVendorsForTest() []Name               { return r.ttsVendors() }
