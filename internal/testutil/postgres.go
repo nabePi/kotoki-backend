@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -29,9 +32,10 @@ const (
 )
 
 var pg struct {
-	once    sync.Once
-	baseDSN string // DSN of the maintenance database (no db name substitution needed)
-	err     error
+	once      sync.Once
+	baseDSN   string // DSN of the maintenance database (no db name substitution needed)
+	container testcontainers.Container
+	err       error
 }
 
 // pgDSN rewrites the database name of dsn.
@@ -45,7 +49,7 @@ func pgDSN(dsn, db string) string {
 	return out
 }
 
-func startPostgres(ctx context.Context, root string) (string, error) {
+func startPostgres(ctx context.Context, root string) (testcontainers.Container, string, error) {
 	c, err := tcpostgres.Run(ctx, postgresImage,
 		tcpostgres.WithDatabase("postgres"),
 		tcpostgres.WithUsername("kotoki"),
@@ -55,13 +59,13 @@ func startPostgres(ctx context.Context, root string) (string, error) {
 			wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(90*time.Second)),
 	)
 	if err != nil {
-		return "", fmt.Errorf("start postgres: %w", err)
+		return nil, "", fmt.Errorf("start postgres: %w", err)
 	}
 	dsn, err := c.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
-	return dsn, migrateTemplate(ctx, dsn, root)
+	return c, dsn, migrateTemplate(ctx, dsn, root)
 }
 
 func migrateTemplate(ctx context.Context, dsn, root string) error {
@@ -93,7 +97,7 @@ func maintenanceDSN(t testing.TB) string {
 			pg.baseDSN = v
 			return
 		}
-		pg.baseDSN, pg.err = startPostgres(context.Background(), ModuleRoot(t))
+		pg.container, pg.baseDSN, pg.err = startPostgres(context.Background(), ModuleRoot(t))
 	})
 	if pg.err != nil {
 		t.Fatalf("testutil: postgres: %v", pg.err)
@@ -143,4 +147,32 @@ func NewPostgres(t testing.TB) *pgxpool.Pool {
 func NewEmptyPostgresDSN(t testing.TB) string {
 	t.Helper()
 	return createDB(t, "e_", "template0")
+}
+
+// PgDumpSchema returns `pg_dump --schema-only` of the database named in dsn. It
+// runs inside the test container, or with the local pg_dump when TEST_DATABASE_URL is set.
+func PgDumpSchema(t testing.TB, dsn string) string {
+	t.Helper()
+	db := dsn[strings.LastIndex(strings.SplitN(dsn, "?", 2)[0], "/")+1:]
+	db = strings.SplitN(db, "?", 2)[0]
+	args := []string{"pg_dump", "--schema-only", "--no-owner", "--no-privileges", "--no-comments", "-U", "kotoki", "-d", db}
+	if pg.container == nil {
+		out, err := exec.Command(args[0], append(args[1:len(args)-2], dsn)...).CombinedOutput() //nolint:gosec // test helper, args are fixed
+		if err != nil {
+			t.Fatalf("testutil: pg_dump: %v\n%s", err, out)
+		}
+		return string(out)
+	}
+	code, r, err := pg.container.Exec(context.Background(), args, tcexec.Multiplexed())
+	if err != nil {
+		t.Fatalf("testutil: pg_dump exec: %v", err)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("testutil: pg_dump read: %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("testutil: pg_dump exit %d: %s", code, b)
+	}
+	return string(b)
 }
