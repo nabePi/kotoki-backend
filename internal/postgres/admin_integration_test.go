@@ -17,7 +17,6 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
-	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"github.com/nabePi/kotoki-backend/internal/platform/idgen"
 	"github.com/nabePi/kotoki-backend/internal/postgres"
 	"github.com/nabePi/kotoki-backend/internal/testutil"
@@ -153,17 +152,6 @@ func TestPGSessionGateNoSessions(t *testing.T) {
 		require.Empty(t, open)
 		return nil
 	}))
-}
-
-// TestPGSessionGateCancelReservedNotWired pins the M2 stub; M3 replaces CancelReserved
-// with session.Service.CancelInTx and turns this into a real cancellation test.
-func TestPGSessionGateCancelReservedNotWired(t *testing.T) {
-	p := newPGAdmin(t)
-	err := p.store.AdminStore().WithinTx(context.Background(), func(ctx context.Context, tx admin.Tx) error {
-		return tx.SessionGate().CancelReserved(ctx, uuid.New(), t0)
-	})
-	require.Equal(t, errs.CodeInternalError, errs.CodeOf(err))
-	require.Contains(t, err.Error(), "not wired")
 }
 
 func TestPGTicketSessionReaderNotFound(t *testing.T) {

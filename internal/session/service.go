@@ -1,10 +1,7 @@
 package session
 
 import (
-	"context"
 	"log/slog"
-
-	"github.com/google/uuid"
 
 	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/content"
@@ -78,7 +75,3 @@ func defaultProducer(f Fence) string {
 	}
 	return "WORKER"
 }
-
-type noControl struct{}
-
-func (noControl) Publish(context.Context, uuid.UUID, ControlMessage) error { return nil }

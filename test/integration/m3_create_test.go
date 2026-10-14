@@ -56,7 +56,7 @@ func newSessEnv(t *testing.T, available int64, wrap func(session.Store) session.
 	e.svc = session.NewService(session.Deps{
 		Store: st, Reader: postgres.NewSessionRepo(pool), Balance: balance.NewService(store.BalanceStore(), clk, ids), Resolver: resolver,
 		Adaptive: fakes.NewAdaptive(""), Users: fakes.NewUserGate(session.UserGateInfo{Status: "ACTIVE", TermsVersion: createTerms}),
-		Clock: clk, IDs: ids, TermsVersion: createTerms, ServiceName: "api",
+		OpeningPrompts: &fakes.OpeningSource{}, Clock: clk, IDs: ids, TermsVersion: createTerms, ServiceName: "api",
 	})
 	return e
 }
@@ -93,6 +93,32 @@ func TestCreate20ParallelDifferentKeys(t *testing.T) {
 	var reserves int
 	require.NoError(t, e.pool.QueryRow(context.Background(), `SELECT count(*) FROM balance_ledger WHERE entry_type = 'RESERVE'`).Scan(&reserves))
 	require.Equal(t, 1, reserves)
+
+	// after the winner is cancelled the minutes are back and the next round again has one winner
+	var winner uuid.UUID
+	require.NoError(t, e.pool.QueryRow(context.Background(), `SELECT id FROM sessions WHERE user_id = $1`, e.userID).Scan(&winner))
+	_, err := e.svc.Cancel(context.Background(), e.userID, winner)
+	require.NoError(t, err)
+	ok.Store(0)
+	open.Store(0)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := e.svc.Create(context.Background(), e.input("second-round-"+uuid.NewString()[:8]+string(rune('a'+i)), 300))
+			switch {
+			case err == nil:
+				ok.Add(1)
+			case errs.CodeOf(err) == errs.CodeSessionAlreadyOpen:
+				open.Add(1)
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, int32(1), ok.Load())
+	require.Equal(t, int32(n-1), open.Load())
 }
 
 func TestCreate20ParallelSameKey(t *testing.T) {

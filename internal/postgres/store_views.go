@@ -53,6 +53,8 @@ func (v adminStoreView) WithinTx(ctx context.Context, fn func(ctx context.Contex
 
 var _ admin.Tx = (*Tx)(nil)
 
+var _ session.Tx = (*Tx)(nil)
+
 type sessionStoreView struct{ s *Store }
 
 // SessionStore returns the session.Store view of s: *Tx satisfies session.Tx (balance, sessions,

@@ -39,16 +39,6 @@ type OpeningPromptSource interface {
 	PublishedPromptVersionID(ctx context.Context, key string) (*uuid.UUID, error)
 }
 
-// ControlMessage is published on kotoki:session:{id}:control after a transition to ENDING or a
-// terminal status (spec 5.6.6).
-type ControlMessage struct {
-	Type      string     `json:"type"` // "status_changed"
-	SessionID uuid.UUID  `json:"session_id"`
-	Status    Status     `json:"status"`
-	EndReason *EndReason `json:"end_reason,omitempty"`
-	Version   int64      `json:"version"`
-}
-
 // ControlPublisher publishes control messages; best effort, the Service only logs its errors.
 type ControlPublisher interface {
 	Publish(ctx context.Context, sessionID uuid.UUID, msg ControlMessage) error

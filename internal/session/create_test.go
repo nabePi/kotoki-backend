@@ -1,9 +1,11 @@
 package session_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -49,6 +51,9 @@ type env struct {
 	bal      *fakes.BalanceStore
 	users    *fakes.UserGate
 	adaptive *fakes.Adaptive
+	opening  *fakes.OpeningSource
+	control  *fakes.ControlPublisher
+	logs     *bytes.Buffer
 	repo     *fakes.ContentRepo
 	clk      *clock.Fake
 	metrics  *recMetrics
@@ -70,6 +75,9 @@ func newEnv(t *testing.T, availableSeconds int64) *env {
 	e.store = fakes.NewSessionStore(e.bal)
 	e.users = fakes.NewUserGate(session.UserGateInfo{Status: "ACTIVE", TermsVersion: terms})
 	e.adaptive = fakes.NewAdaptive("")
+	e.opening = &fakes.OpeningSource{}
+	e.control = &fakes.ControlPublisher{}
+	e.logs = &bytes.Buffer{}
 	e.userID = uuid.Must(uuid.NewV7())
 
 	e.topic = content.Topic{ID: uuid.New(), Code: "JOB_INTERVIEW", Name: "Job", Status: content.StatusActive}
@@ -89,6 +97,7 @@ func newEnv(t *testing.T, availableSeconds int64) *env {
 	resolver := content.NewResolver(e.repo, content.ResolverConfig{TTSMode: "fake", LLMConfigured: true}, nil)
 	bal := balance.NewService(e.bal, e.clk, ids)
 	e.svc = session.NewService(session.Deps{Store: e.store, Reader: e.store.Reader(), Balance: bal, Resolver: resolver, Adaptive: e.adaptive, Users: e.users,
+		OpeningPrompts: e.opening, Control: e.control, Log: slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Clock: e.clk, IDs: ids, TermsVersion: terms, Metrics: e.metrics, ServiceName: "api"})
 	return e
 }

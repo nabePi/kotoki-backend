@@ -13,14 +13,29 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"github.com/nabePi/kotoki-backend/internal/postgres/sqlcgen"
+	"github.com/nabePi/kotoki-backend/internal/session"
 )
 
-type sessionGate struct{ q *sqlcgen.Queries }
+type sessionGate struct {
+	q  *sqlcgen.Queries
+	tx *Tx
+}
+
+// SessionCanceller is what the admin session gate calls to cancel a RESERVED session inside the
+// admin transaction: *session.Service. It is injected with Store.SetSessionCanceller because the
+// Service itself is built on top of the Store.
+type SessionCanceller interface {
+	CancelInTx(ctx context.Context, tx session.Tx, sessionID uuid.UUID, actor session.Actor) (session.Session, error)
+}
+
+// SetSessionCanceller wires the session service into the admin gate; call it once at startup,
+// before the Store serves requests.
+func (s *Store) SetSessionCanceller(c SessionCanceller) { s.canceller = c }
 
 var _ admin.SessionGate = (*sessionGate)(nil)
 
 // SessionGate returns the transaction's view onto sessions for admin use cases.
-func (t *Tx) SessionGate() admin.SessionGate { return &sessionGate{q: t.Queries()} }
+func (t *Tx) SessionGate() admin.SessionGate { return &sessionGate{q: t.Queries(), tx: t} }
 
 // OpenSessions lists the user's sessions that are not terminal.
 func (g *sessionGate) OpenSessions(ctx context.Context, userID uuid.UUID) ([]admin.OpenSession, error) {
@@ -35,10 +50,16 @@ func (g *sessionGate) OpenSessions(ctx context.Context, userID uuid.UUID) ([]adm
 	return out, nil
 }
 
-// CancelReserved is a deliberate stub until M3 wires session.Service.CancelInTx.
-// Open RESERVED sessions cannot exist before M3, so this is only reachable by a bug.
-func (g *sessionGate) CancelReserved(context.Context, uuid.UUID, time.Time) error {
-	return errs.New(errs.CodeInternalError, "session cancel not wired before M3")
+// CancelReserved cancels a RESERVED session of the user being deleted and releases its reservation,
+// in the admin transaction (spec 3.13.3 step 3). The time comes from the session service's clock.
+func (g *sessionGate) CancelReserved(ctx context.Context, sessionID uuid.UUID, _ time.Time) error {
+	if g.tx.store.canceller == nil {
+		return errs.New(errs.CodeInternalError, "session canceller is not configured")
+	}
+	if _, err := g.tx.store.canceller.CancelInTx(ctx, g.tx, sessionID, session.ActorAdmin); err != nil {
+		return err
+	}
+	return nil
 }
 
 // TicketSessionReader implements auth.TicketSessionReader on the pool.
