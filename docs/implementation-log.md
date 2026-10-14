@@ -482,3 +482,15 @@ Tanggal: 2026-10-14
 - go test ./internal/httpapi ./internal/platform/metrics -race — PASS
 ### Penyimpangan
 - `Telemetry` ditulis sendiri di atas `platform/otel` (bukan `otelhttp`) supaya nama span memakai pola chi yang baru diketahui setelah routing; propagasi W3C tetap di-extract dari header
+
+## M2-T23 — Router, empat grup, rute auth & me, TestRouteTable
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/httpapi/{router,deps}.go`: `NewRouter(Deps)` (RequestID → ClientIP → Recoverer → AccessLog → HTTPMetrics → Telemetry → SecurityHeaders → CORS → BodyLimit; grup publik/user; 404 `NOT_FOUND`, 405 `METHOD_NOT_ALLOWED` lewat `WriteError`; `/healthz` dst. tidak dilayani), interface layanan kecil (`authService`, `userService`)
+- `auth_{routes,handler,dto}.go`: register 201, login 200, refresh (cookie; hapus cookie hanya pada `REFRESH_TOKEN_INVALID`, 409 tidak menyentuh cookie), logout 204 (selalu hapus cookie), forgot 202 generik, reset 204, terms 200; policy IP di rute, policy email (`auth_login_email`, `auth_forgot_email`) di handler setelah decode; `me_{routes,handler,dto}.go`: `GET /me`, `PUT /me/consents`, `DELETE /me` 202 + hapus cookie
+- Golden: `testdata/api/rest/auth/{register_201,terms_200}.json`, `me/me_200.json`
+### Test
+- go test ./internal/httpapi -race — PASS: `TestRouteTable` (rute terdaftar == baris Ready; grup & policy dibuktikan lewat perilaku), `TestInternalPathsNotServed`, alur register→login→refresh→409→logout→401, origin check, rate limit email, forgot identik, reset, terms, cookie `Secure=false`
+### Penyimpangan
+- Atribut `Set-Cookie` diverifikasi sebagai himpunan (Path, HttpOnly, Secure, SameSite=Strict, Max-Age=2592000), bukan urutan teks: `net/http` selalu menulis `Max-Age` sebelum `HttpOnly`
