@@ -738,3 +738,11 @@ Tanggal: 2026-10-14
 - `internal/prompt/{core,phrases,templates_v1,fixtures_conversation}.go`: `CoreRules`, `OutputContract(closing)`, `FormalityInstruction`, `ConversationV1`/`OpeningV1` (teks §6.8.3 verbatim tanpa rujukan silang), `FixtureMinimal`/`FixtureMaximal`, fixture CONVERSATION/OPENING terdaftar saat init
 ### Test
 - `templates_test.go`, `phrases_test.go` — PASS (race); render maksimum ≤ 12.000 karakter
+
+## M4-T23 — `SentenceParser`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/prompt/sentence_parser.go`: `NewSentenceParser(maxSentences)`, `Feed`/`Close`, sanitasi (buang `* # ` _`, emoji `So`, ringkas spasi lintas delta; `<`/`>` apa adanya), pemotongan kalimat (terminator + closer, tunggu bila terminator rune terakhir, soft boundary ≥ 20, potong keras 60), kalimat tanpa ucapan ditempel ke sebelumnya, kalimat 1 rune digabung ke berikutnya (kecuali di akhir stream), `Limited` setelah kalimat ke-`MaxSentences` (sisa delta dibuang dari `clean`), hasil identik untuk feed per rune dan sekaligus
+### Test
+- `sentence_parser_test.go` — PASS (race), cakupan paket 97 %
