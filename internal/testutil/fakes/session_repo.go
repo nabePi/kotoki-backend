@@ -420,17 +420,17 @@ func (r *sessionRepoFake) ListHandoffStale(_ context.Context, cutoff time.Time, 
 	}), nil
 }
 
-func (r *sessionRepoFake) ListActiveForHeartbeat(_ context.Context, cutoff time.Time, limit int) ([]session.ActiveRef, error) {
+func (r *sessionRepoFake) ListActiveForHeartbeat(_ context.Context, limit int) ([]session.ActiveRef, error) {
 	ids := r.ids(limit, func(v session.Session) (time.Time, bool) {
 		if v.Status != session.StatusActive || v.HandoffAt != nil {
 			return time.Time{}, false
 		}
-		return before(v.StartedAt, cutoff)
+		return *v.StartedAt, true
 	})
 	out := make([]session.ActiveRef, len(ids))
 	for i, id := range ids {
 		v, _ := r.get(id)
-		out[i] = session.ActiveRef{ID: id, StartedAt: *v.StartedAt, HandoffAt: v.HandoffAt}
+		out[i] = session.ActiveRef{ID: id, StartedAt: *v.StartedAt, ExpiresAt: *v.ExpiresAt}
 	}
 	return out, nil
 }

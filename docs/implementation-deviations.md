@@ -44,3 +44,16 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - Key prompt tanpa versi `PUBLISHED` di `ValidateCatalog`: ERROR hanya untuk `CONVERSATION`; WARNING `missing_published_prompt` untuk `OPENING`, `SUMMARY`, `EVALUATION`, `MEMORY_EXTRACTION` (versi SUMMARY/EVALUATION/MEMORY_EXTRACTION dan fixture-nya ditambahkan M7/M8; OPENING boleh tidak ada karena fallback `opening_line`, S-2).
 - `provider_not_configured` (karakter `ACTIVE` dengan vendor TTS tidak enabled) berlaku di mode fake maupun real, mengikuti brief plan (spec §6.10.1 menyebut hanya mode real).
 - Normalisasi huruf besar nama vendor diekspos sebagai `content.NormalizeCharacter` (validator mengembalikan daftar isu, bukan nilai); `ParseVoice` dan `ParseLLMParams` memeriksa key tak dikenal dari JSON mentah (`voice.providers`, `model` di `llm_params`, dst.) karena tipe Go tidak bisa memuat key asing.
+
+## M3-T10 / T12 — admin konten
+- §6.13.1 menulis action audit `CONTENT_CHARACTER_UPDATED` dan kolom `metadata`; implementasi memakai action `CHARACTER_UPDATED` dan kolom `details` sesuai CHECK `admin_audit_logs` (Bab 3).
+- Retire version prompt `PUBLISHED` selalu 409 `CONTENT_VERSION_REQUIRED` (§6.13.1/§6.x: tidak boleh tanpa pengganti, dan hanya satu `PUBLISHED` per induk, jadi satu-satunya jalan adalah publish pengganti). Skenario e2e E12 yang me-retire `OPENING` lewat endpoint retire harus memakai jalur lain.
+
+## M3-T13 / T15 — session
+- `TurnRepository` tidak memuat `SetUserAudioKey` (§7.13.1) karena §5.3.2/D-099: audio user tidak pernah disimpan dan `session_turns` tidak punya kolom referensi audio.
+- `MaxSeqAndGeneration` mengembalikan `(-1, 0)` bila belum ada turn; `Stats.hasAudio` = ada `stt_audio_ms` atau `tts_first_audio_ms`.
+
+## M3-T21 — sweeper
+- Kandidat aturan (b) memakai bentuk §9.9.2 (semua sesi `ACTIVE` non-handoff, LIMIT 5000, heartbeat dicek in-process via MGET per 500 key; kandidat bila heartbeat hilang/usang > 45 s **dan** `started_at < now − 45 s`), bukan teks §5.6.4 (LIMIT 2000 dan filter `started_at` di SQL). `ListActiveForHeartbeat(ctx, limit)` tidak menerima cutoff.
+- Probe konektivitas Redis untuk `HeartbeatGuard` = `HeartbeatReader.Read(ctx, nil)` (adapter Redis menjalankan `PING`), bukan method terpisah, agar port `HeartbeatReader` tetap satu method.
+- Aturan (e) memakai `Service.EndStaleHandoff`, yang memeriksa ulang `handoff_at IS NOT NULL AND handoff_at < cutoff` di bawah row lock (spec §9.9.2); sesi yang sudah di-claim runtime baru → no-op.

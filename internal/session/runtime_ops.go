@@ -119,8 +119,25 @@ func endReasonOK(r EndReason) bool {
 // already ENDING (or finished) is returned as it is. A non-runtime caller (fence nil) raises the
 // fence so a live runtime stops.
 func (s *Service) BeginEnding(ctx context.Context, sessionID uuid.UUID, fence Fence, r EndReason, detail string, actor Actor) (Session, error) {
+	sess, _, err := s.beginEnding(ctx, sessionID, fence, r, detail, actor, nil)
+	return sess, err
+}
+
+// EndStaleHandoff is rule (e) of the sweeper: BeginEnding(RECONNECT_TIMEOUT) for a session whose
+// handoff began before the cutoff and has not been taken over since. The condition is re-checked
+// under the row lock; when a new runtime has claimed the session in the meantime nothing changes and
+// changed is false.
+func (s *Service) EndStaleHandoff(ctx context.Context, sessionID uuid.UUID, handoffBefore time.Time) (Session, bool, error) {
+	return s.beginEnding(ctx, sessionID, nil, EndReconnectTimeout, "handoff_not_resumed", ActorSweeper, func(sess Session) bool {
+		return sess.HandoffAt != nil && sess.HandoffAt.Before(handoffBefore)
+	})
+}
+
+// beginEnding is BeginEnding with an optional extra guard evaluated on an ACTIVE session under the
+// row lock; changed tells whether this call made the transition.
+func (s *Service) beginEnding(ctx context.Context, sessionID uuid.UUID, fence Fence, r EndReason, detail string, actor Actor, onlyIf func(Session) bool) (Session, bool, error) {
 	if !endReasonOK(r) {
-		return Session{}, validationError("end_reason", "not_allowed")
+		return Session{}, false, validationError("end_reason", "not_allowed")
 	}
 	var out Session
 	changed := false
@@ -139,6 +156,10 @@ func (s *Service) BeginEnding(ctx context.Context, sessionID uuid.UUID, fence Fe
 		}
 		if fence != nil && sess.RuntimeFence != *fence {
 			return ErrFenceLost
+		}
+		if onlyIf != nil && !onlyIf(sess) {
+			out = sess
+			return nil
 		}
 		now := s.d.Clock.Now()
 		endingAt := now
@@ -163,12 +184,12 @@ func (s *Service) BeginEnding(ctx context.Context, sessionID uuid.UUID, fence Fe
 		return nil
 	})
 	if err != nil {
-		return Session{}, err
+		return Session{}, false, err
 	}
 	if changed {
 		s.publishControl(ctx, out)
 	}
-	return out, nil
+	return out, changed, nil
 }
 
 // settleSpec describes the two settle paths of spec 4.6.3.

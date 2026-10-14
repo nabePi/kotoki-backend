@@ -87,9 +87,9 @@ SELECT id FROM sessions WHERE status = 'STARTING' AND starting_at < $1 ORDER BY 
 SELECT id FROM sessions WHERE status = 'ACTIVE' AND handoff_at < $1 ORDER BY handoff_at LIMIT $2;
 
 -- name: ListActiveSessionsForHeartbeat :many
-SELECT id, started_at, handoff_at FROM sessions
- WHERE status = 'ACTIVE' AND handoff_at IS NULL AND started_at < $1
- ORDER BY started_at LIMIT $2;
+SELECT id, started_at, expires_at FROM sessions
+ WHERE status = 'ACTIVE' AND handoff_at IS NULL
+ ORDER BY started_at LIMIT $1;
 
 -- name: CountActiveNonHandoffSessions :one
 SELECT count(*)::int FROM sessions WHERE status = 'ACTIVE' AND handoff_at IS NULL;

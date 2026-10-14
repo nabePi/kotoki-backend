@@ -509,24 +509,19 @@ func (q *Queries) ListAbandonCandidates(ctx context.Context, arg ListAbandonCand
 }
 
 const listActiveSessionsForHeartbeat = `-- name: ListActiveSessionsForHeartbeat :many
-SELECT id, started_at, handoff_at FROM sessions
- WHERE status = 'ACTIVE' AND handoff_at IS NULL AND started_at < $1
- ORDER BY started_at LIMIT $2
+SELECT id, started_at, expires_at FROM sessions
+ WHERE status = 'ACTIVE' AND handoff_at IS NULL
+ ORDER BY started_at LIMIT $1
 `
-
-type ListActiveSessionsForHeartbeatParams struct {
-	StartedAt pgtype.Timestamptz
-	Limit     int32
-}
 
 type ListActiveSessionsForHeartbeatRow struct {
 	ID        uuid.UUID
 	StartedAt pgtype.Timestamptz
-	HandoffAt pgtype.Timestamptz
+	ExpiresAt pgtype.Timestamptz
 }
 
-func (q *Queries) ListActiveSessionsForHeartbeat(ctx context.Context, arg ListActiveSessionsForHeartbeatParams) ([]ListActiveSessionsForHeartbeatRow, error) {
-	rows, err := q.db.Query(ctx, listActiveSessionsForHeartbeat, arg.StartedAt, arg.Limit)
+func (q *Queries) ListActiveSessionsForHeartbeat(ctx context.Context, limit int32) ([]ListActiveSessionsForHeartbeatRow, error) {
+	rows, err := q.db.Query(ctx, listActiveSessionsForHeartbeat, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -534,7 +529,7 @@ func (q *Queries) ListActiveSessionsForHeartbeat(ctx context.Context, arg ListAc
 	var items []ListActiveSessionsForHeartbeatRow
 	for rows.Next() {
 		var i ListActiveSessionsForHeartbeatRow
-		if err := rows.Scan(&i.ID, &i.StartedAt, &i.HandoffAt); err != nil {
+		if err := rows.Scan(&i.ID, &i.StartedAt, &i.ExpiresAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

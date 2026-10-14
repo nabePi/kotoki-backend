@@ -256,14 +256,14 @@ func (r *sessionRepo) ListHandoffStale(ctx context.Context, before time.Time, li
 	return ids, wrapList(err, "list stale handoff sessions")
 }
 
-func (r *sessionRepo) ListActiveForHeartbeat(ctx context.Context, startedBefore time.Time, limit int) ([]session.ActiveRef, error) {
-	rows, err := r.q.ListActiveSessionsForHeartbeat(ctx, sqlcgen.ListActiveSessionsForHeartbeatParams{StartedAt: tsz(startedBefore), Limit: limit32(limit)})
+func (r *sessionRepo) ListActiveForHeartbeat(ctx context.Context, limit int) ([]session.ActiveRef, error) {
+	rows, err := r.q.ListActiveSessionsForHeartbeat(ctx, limit32(limit))
 	if err != nil {
 		return nil, wrapList(err, "list active sessions")
 	}
 	out := make([]session.ActiveRef, len(rows))
 	for i, row := range rows {
-		out[i] = session.ActiveRef{ID: row.ID, StartedAt: fromTsz(row.StartedAt), HandoffAt: fromTszPtr(row.HandoffAt)}
+		out[i] = session.ActiveRef{ID: row.ID, StartedAt: fromTsz(row.StartedAt), ExpiresAt: fromTsz(row.ExpiresAt)}
 	}
 	return out, nil
 }

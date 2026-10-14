@@ -367,7 +367,9 @@ type Repository interface {
 	ListStuckEnding(ctx context.Context, endingBefore time.Time, limit int) ([]uuid.UUID, error)
 	ListStuckStarting(ctx context.Context, startingBefore time.Time, limit int) ([]uuid.UUID, error)
 	ListHandoffStale(ctx context.Context, handoffBefore time.Time, limit int) ([]uuid.UUID, error)
-	ListActiveForHeartbeat(ctx context.Context, startedBefore time.Time, limit int) ([]ActiveRef, error)
+	// ListActiveForHeartbeat returns every ACTIVE session that is not handed off (spec 9.9.2: at most
+	// 5000); the sweeper checks heartbeats in process.
+	ListActiveForHeartbeat(ctx context.Context, limit int) ([]ActiveRef, error)
 	CountActiveNonHandoff(ctx context.Context) (int, error)
 	// ListAbandonCandidates is the candidate query of spec 4.6.2 without FOR UPDATE, ordered by
 	// start_deadline_at; reservation_cleanup (M6) feeds the ids to Service.Abandon.
@@ -378,7 +380,7 @@ type Repository interface {
 type ActiveRef struct {
 	ID        uuid.UUID
 	StartedAt time.Time
-	HandoffAt *time.Time
+	ExpiresAt time.Time
 }
 
 // TurnRepository is the turns port (spec 7.13.1 signatures). Writes with a fence only succeed
