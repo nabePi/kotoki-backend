@@ -119,14 +119,11 @@ func TestCodeConstantNames(t *testing.T) {
 		{CodeCharacterNotAvailable, "CHARACTER_NOT_AVAILABLE"},
 		{CodeCommandRejected, "COMMAND_REJECTED"},
 		{CodeContentInvalidTransition, "CONTENT_INVALID_TRANSITION"},
-		{CodeContentInUseAsDefault, "CONTENT_IN_USE_AS_DEFAULT"},
 		{CodeContentMisconfigured, "CONTENT_MISCONFIGURED"},
 		{CodeContentValidationFailed, "CONTENT_VALIDATION_FAILED"},
 		{CodeContentVersionRequired, "CONTENT_VERSION_REQUIRED"},
-		{CodeConversationStyleNotAvailable, "CONVERSATION_STYLE_NOT_AVAILABLE"},
 		{CodeEmailAlreadyRegistered, "EMAIL_ALREADY_REGISTERED"},
 		{CodeEvaluationNotAvailable, "EVALUATION_NOT_AVAILABLE"},
-		{CodeExpressionProfileNotAvailable, "EXPRESSION_PROFILE_NOT_AVAILABLE"},
 		{CodeForbidden, "FORBIDDEN"},
 		{CodeHandshakeTimeout, "HANDSHAKE_TIMEOUT"},
 		{CodeHeartbeatTimeout, "HEARTBEAT_TIMEOUT"},
@@ -179,7 +176,7 @@ func TestCodeConstantNames(t *testing.T) {
 		{CodeUserNotFound, "USER_NOT_FOUND"},
 		{CodeValidationFailed, "VALIDATION_FAILED"},
 	}
-	if len(table) != 70 {
+	if len(table) != 67 {
 		t.Fatalf("table has %d pairs", len(table))
 	}
 	fset := token.NewFileSet()
@@ -210,7 +207,7 @@ func TestCodeConstantNames(t *testing.T) {
 		}
 		got = append(got, p.s)
 	}
-	if len(names) != 70 {
+	if len(names) != 67 {
 		t.Errorf("codes.go declares %d constants", len(names))
 	}
 	var all []string
@@ -227,7 +224,7 @@ func TestCodeConstantNames(t *testing.T) {
 }
 
 func TestMessagesComplete(t *testing.T) {
-	if len(AllCodes()) != 70 || len(Messages) != 70 {
+	if len(AllCodes()) != 67 || len(Messages) != 67 {
 		t.Fatalf("codes=%d messages=%d", len(AllCodes()), len(Messages))
 	}
 	for _, c := range AllCodes() {
@@ -267,5 +264,59 @@ func TestDetails(t *testing.T) {
 	}
 	if CodeOf(WithDetails(New(CodeNotFound, "x"), 1)) != CodeNotFound {
 		t.Error("code lost through WithDetails")
+	}
+}
+
+func TestRemovedContentCodesAbsent(t *testing.T) {
+	removed := []string{"CONVERSATION_STYLE_NOT_AVAILABLE", "EXPRESSION_PROFILE_NOT_AVAILABLE", "CONTENT_IN_USE_AS_DEFAULT"}
+	for _, c := range AllCodes() {
+		for _, r := range removed {
+			if string(c) == r {
+				t.Errorf("AllCodes still contains %s", r)
+			}
+		}
+	}
+	for c := range Messages {
+		for _, r := range removed {
+			if string(c) == r {
+				t.Errorf("Messages still contains %s", r)
+			}
+		}
+	}
+	f, err := parser.ParseFile(token.NewFileSet(), "codes.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			switch id.Name {
+			case "CodeConversationStyleNotAvailable", "CodeExpressionProfileNotAvailable", "CodeContentInUseAsDefault":
+				t.Errorf("codes.go still declares %s", id.Name)
+			}
+		}
+		return true
+	})
+}
+
+// wsOnly are the codes that appear only in the WebSocket catalog (spec 7.4.8).
+var wsOnly = map[Code]bool{
+	CodeAiGenerationFailed: true, CodeAudioFrameInvalid: true, CodeCommandRejected: true, CodeHandshakeTimeout: true,
+	CodeHeartbeatTimeout: true, CodeInvalidMessage: true, CodeProtocolViolation: true, CodeProviderFailure: true,
+	CodeServerAtCapacity: true, CodeServerDraining: true, CodeSessionNotResumable: true, CodeSessionStateConflict: true,
+	CodeSessionTakenOver: true, CodeSlowConsumer: true, CodeTicketInvalid: true, CodeUnsupportedAudioFormat: true,
+	CodeUnsupportedProtocolVersion: true,
+}
+
+func TestRestAndWSCounts(t *testing.T) {
+	rest, ws := 0, 0
+	for _, c := range AllCodes() {
+		if wsOnly[c] {
+			ws++
+		} else {
+			rest++
+		}
+	}
+	if rest != 50 || ws != 17 {
+		t.Fatalf("rest=%d ws-only=%d, want 50 and 17", rest, ws)
 	}
 }
