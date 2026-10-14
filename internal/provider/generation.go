@@ -24,10 +24,12 @@ type generation struct {
 	mu      sync.Mutex
 	summary GenerationSummary
 
-	// TTS state (generation_tts.go)
-	ttsVoice   VoiceRef
-	epochCh    chan int
-	ttsStreams map[*ttsOut]struct{}
+	// TTS state (generation_tts.go), guarded by mu
+	ttsInit       bool // the initial slot (primary or fallback) has been pinned
+	ttsOnFallback bool
+	ttsEpoch      int
+	epochCh       chan int
+	ttsStreams    map[*ttsOut]struct{}
 }
 
 var _ Generation = (*generation)(nil)
@@ -36,7 +38,7 @@ var _ Generation = (*generation)(nil)
 // the session snapshot (D-015).
 func (r *Router) NewGeneration(sessionID uuid.UUID, gen int64, voice VoiceSelection) Generation {
 	return &generation{
-		r: r, sessionID: sessionID, gen: gen, voice: voice, ttsVoice: voice.Primary,
+		r: r, sessionID: sessionID, gen: gen, voice: voice,
 		epochCh: make(chan int, 1), ttsStreams: map[*ttsOut]struct{}{},
 		summary: GenerationSummary{LLMProvider: r.llm.Name(), LLMModel: r.llmModel()},
 	}

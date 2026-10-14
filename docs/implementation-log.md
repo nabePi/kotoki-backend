@@ -682,3 +682,11 @@ Tanggal: 2026-10-14
 - `fake`: `HangAfter` (`FAKE_<INST>_<CAP>_HANG_AFTER`, fault `after_events`) agar stream bisa macet setelah N delta
 ### Test
 - `generation_llm_test.go` (13 tes) — PASS (race, count=5)
+
+## M4-T16 — `Generation`: TTS (epoch, voice dipin, VoiceID/model per vendor)
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/generation_tts.go`: `Synthesize` (validasi `SpeakingRate` 0 → 1,0 dan 0,80–1,05; slot primary/fallback dipin per generasi, awal di fallback bila breaker primary terbuka; mode fake memakai `FAKE_PRIMARY`/`FAKE_FALLBACK` dengan `VoiceID="FAKE"`, `Model="fake-tts"`; mode real memakai `VoiceRef` karakter apa adanya + `voice_binding_missing` yang tidak dihitung breaker; breaker + semaphore per vendor; timer first-audio dan total per kalimat), fallback hanya sebelum `MarkAudioSent`, sekali per generasi, `tts_provider_switched` + epoch naik + stream epoch lama dibatalkan, `Epoch` pada setiap chunk, ringkasan TTS (provider/model/voice/karakter/first audio), metrik/health/log
+### Test
+- `generation_tts_test.go` (17 tes) — PASS (race, count=5)

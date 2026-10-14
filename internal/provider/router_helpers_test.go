@@ -47,6 +47,8 @@ type testBuild struct {
 	llmName  provider.Name
 	llmCap   fake.CapConfig
 	llm      provider.LLMProvider // replaces the fake LLM when set
+	ttsCap   map[provider.Name]fake.CapConfig
+	ttsStub  map[provider.Name]provider.TTSProvider
 }
 
 func withCfg(f func(*provider.RouterConfig)) testOpt {
@@ -62,6 +64,32 @@ func withLLMCap(c fake.CapConfig) testOpt { return func(_ *testEnv, b *testBuild
 
 // withLLM replaces the LLM adapter (scripted stubs).
 func withLLM(p provider.LLMProvider) testOpt { return func(_ *testEnv, b *testBuild) { b.llm = p } }
+
+// withTTSCap configures the failure behaviour of the fake TTS registered under name.
+func withTTSCap(name provider.Name, c fake.CapConfig) testOpt {
+	return func(_ *testEnv, b *testBuild) {
+		if b.ttsCap == nil {
+			b.ttsCap = map[provider.Name]fake.CapConfig{}
+		}
+		b.ttsCap[name] = c
+	}
+}
+
+// withTTS registers a stub TTS adapter under name (replacing the fake one).
+func withTTS(name provider.Name, p provider.TTSProvider) testOpt {
+	return func(_ *testEnv, b *testBuild) {
+		if b.ttsStub == nil {
+			b.ttsStub = map[provider.Name]provider.TTSProvider{}
+		}
+		b.ttsStub[name] = p
+		for _, n := range b.ttsNames {
+			if n == name {
+				return
+			}
+		}
+		b.ttsNames = append(b.ttsNames, name)
+	}
+}
 
 func withLLMName(n provider.Name) testOpt { return func(_ *testEnv, b *testBuild) { b.llmName = n } }
 
@@ -91,7 +119,11 @@ func newTestRouter(t *testing.T, opts ...testOpt) (*provider.Router, *testEnv) {
 	require.NoError(t, err)
 	tts := map[provider.Name]provider.TTSProvider{}
 	for _, n := range build.ttsNames {
-		tts[n] = fake.NewTTS(n, fake.CapConfig{}, fcfg, fd)
+		if stub, ok := build.ttsStub[n]; ok {
+			tts[n] = stub
+			continue
+		}
+		tts[n] = fake.NewTTS(n, build.ttsCap[n], fcfg, fd)
 	}
 	var llm provider.LLMProvider = namedLLM{fake.NewLLM(provider.FakePrimary, build.llmCap, fcfg, fd), build.llmName}
 	if build.llm != nil {
