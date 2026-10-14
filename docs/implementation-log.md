@@ -825,3 +825,12 @@ Tanggal: 2026-10-14
 - `internal/platform/metrics/content.go`: `metrics.Content` (`kotoki_content_resolve_errors_total{code}`, `kotoki_content_voice_fallback_missing_total{character}`, `kotoki_content_validation_issues{severity}`)
 ### Test
 - `validator_test.go` (satu kasus per aturan), `metrics/content_test.go` — PASS
+
+## M3-T8 — Repository konten, cache, `Resolver`, `SessionConfigLoader`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/content/{ports,cache,resolver,config_loader}.go`: `Repository` (baca; keluarga "live" ber-TTL dan keluarga by-id LRU 1.000 tanpa TTL), `CachedRepository` (+`Invalidate`), `Resolver` §6.9 (urutan topic → scenario → mismatch → versi → karakter → TTS → prompt → LLM; vendor TTS tidak enabled → `CHARACTER_NOT_AVAILABLE` di kedua mode; mode real: model/voice kosong atau placeholder → `CONTENT_MISCONFIGURED`; fallback hilang → WARN + `VoiceFallbackMissing`; snapshot salinan dalam), `SessionConfigLoader` (tanpa filter status, snapshot dari sesi bukan baris karakter hidup)
+- `fakes.ContentRepo` (pencacah panggilan untuk tes cache)
+### Test
+- `resolver_test.go`, `cache_test.go` — PASS (race)
