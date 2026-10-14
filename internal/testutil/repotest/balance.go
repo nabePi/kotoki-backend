@@ -19,6 +19,15 @@ type BalanceHarness struct {
 	// SeedSession returns the id of a session row owned by userID (balance_reservations has a
 	// foreign key to sessions in PostgreSQL); nil means any fresh uuid will do (the fake).
 	SeedSession func(t *testing.T, userID uuid.UUID) uuid.UUID
+	// Unreconciled tells the harness the case books reservations without the matching ledger
+	// entries or session states, so the end-of-test reconciliation must be skipped (nil: no-op).
+	Unreconciled func()
+}
+
+func (h BalanceHarness) unreconciled() {
+	if h.Unreconciled != nil {
+		h.Unreconciled()
+	}
 }
 
 func (h BalanceHarness) session(t *testing.T, userID uuid.UUID) uuid.UUID {
@@ -175,6 +184,7 @@ func BalanceRepoSuite(t *testing.T, newHarness func(t *testing.T) BalanceHarness
 			}))
 		}},
 		Case[BalanceHarness]{Name: "ReservationLifecycleSettled", Run: func(t *testing.T, h BalanceHarness) {
+			h.unreconciled()
 			uid := openAccount(t, h)
 			sid := h.session(t, uid)
 			require.NoError(t, h.Store.WithinTx(context.Background(), func(ctx context.Context, tx balance.Tx) error {
@@ -205,6 +215,7 @@ func BalanceRepoSuite(t *testing.T, newHarness func(t *testing.T) BalanceHarness
 			}))
 		}},
 		Case[BalanceHarness]{Name: "ReservationLifecycleReleased", Run: func(t *testing.T, h BalanceHarness) {
+			h.unreconciled()
 			uid := openAccount(t, h)
 			sid := h.session(t, uid)
 			require.NoError(t, h.Store.WithinTx(context.Background(), func(ctx context.Context, tx balance.Tx) error {
@@ -225,6 +236,7 @@ func BalanceRepoSuite(t *testing.T, newHarness func(t *testing.T) BalanceHarness
 			}))
 		}},
 		Case[BalanceHarness]{Name: "ReservationConstraints", Run: func(t *testing.T, h BalanceHarness) {
+			h.unreconciled()
 			uid := openAccount(t, h)
 			sid := h.session(t, uid)
 			inconsistent := func(name string, fn func(ctx context.Context, repo balance.Repository, res balance.Reservation) error) {

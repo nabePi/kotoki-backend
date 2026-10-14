@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
@@ -143,22 +144,64 @@ func (r *balanceRepo) ListLedger(ctx context.Context, userID uuid.UUID, types []
 	return out, nil
 }
 
-// Reservation methods arrive with Task 5 (M3), together with their sqlc queries and the
-// integration contract suite; until then they refuse instead of guessing.
-var errReservationsNotWired = errors.New("postgres: balance reservations are wired in M3 Task 5")
-
-func (r *balanceRepo) LockReservationBySessionID(context.Context, uuid.UUID) (balance.Reservation, error) {
-	return balance.Reservation{}, errReservationsNotWired
+func toReservation(r sqlcgen.BalanceReservation) balance.Reservation {
+	i64 := func(v pgtype.Int8) *int64 {
+		if !v.Valid {
+			return nil
+		}
+		x := v.Int64
+		return &x
+	}
+	return balance.Reservation{
+		ID: r.ID, UserID: r.UserID, AccountID: r.AccountID, SessionID: r.SessionID, ReservedSeconds: r.ReservedSeconds,
+		ConsumedSeconds: i64(r.ConsumedSeconds), ReleasedSeconds: i64(r.ReleasedSeconds), Status: balance.ReservationStatus(r.Status),
+		StartDeadlineAt: fromTsz(r.StartDeadlineAt), CreatedAt: fromTsz(r.CreatedAt),
+		SettledAt: fromTszPtr(r.SettledAt), ReleasedAt: fromTszPtr(r.ReleasedAt),
+	}
 }
 
-func (r *balanceRepo) InsertReservation(context.Context, balance.Reservation) error {
-	return errReservationsNotWired
+func (r *balanceRepo) LockReservationBySessionID(ctx context.Context, sessionID uuid.UUID) (balance.Reservation, error) {
+	res, err := r.q.LockReservationBySession(ctx, sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return balance.Reservation{}, balance.ErrReservationNotFound
+	}
+	if err != nil {
+		return balance.Reservation{}, internalErr(err, "lock reservation failed")
+	}
+	return toReservation(res), nil
 }
 
-func (r *balanceRepo) MarkReservationSettled(context.Context, uuid.UUID, int64, int64, time.Time) error {
-	return errReservationsNotWired
+func (r *balanceRepo) InsertReservation(ctx context.Context, res balance.Reservation) error {
+	err := r.q.InsertReservation(ctx, sqlcgen.InsertReservationParams{
+		ID: res.ID, UserID: res.UserID, AccountID: res.AccountID, SessionID: res.SessionID, ReservedSeconds: res.ReservedSeconds,
+		StartDeadlineAt: tsz(res.StartDeadlineAt), CreatedAt: tsz(res.CreatedAt),
+	})
+	if err != nil {
+		return internalErr(err, "insert reservation failed")
+	}
+	return nil
 }
 
-func (r *balanceRepo) MarkReservationReleased(context.Context, uuid.UUID, time.Time) error {
-	return errReservationsNotWired
+// MarkReservationSettled and MarkReservationReleased only move a HELD reservation; zero rows
+// means it was not HELD (callers lock and check first, so this is a bug guard).
+func (r *balanceRepo) MarkReservationSettled(ctx context.Context, id uuid.UUID, consumed, released int64, at time.Time) error {
+	n, err := r.q.MarkReservationSettled(ctx, sqlcgen.MarkReservationSettledParams{Consumed: consumed, Released: released, At: tsz(at), ID: id})
+	if err != nil {
+		return internalErr(err, "settle reservation failed")
+	}
+	if n != 1 {
+		return balance.ErrReservationState
+	}
+	return nil
+}
+
+func (r *balanceRepo) MarkReservationReleased(ctx context.Context, id uuid.UUID, at time.Time) error {
+	n, err := r.q.MarkReservationReleased(ctx, sqlcgen.MarkReservationReleasedParams{At: tsz(at), ID: id})
+	if err != nil {
+		return internalErr(err, "release reservation failed")
+	}
+	if n != 1 {
+		return balance.ErrReservationState
+	}
+	return nil
 }

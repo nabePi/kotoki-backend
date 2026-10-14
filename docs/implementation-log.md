@@ -799,3 +799,12 @@ Tanggal: 2026-10-14
 - `internal/balance/reconcile.go`: `ReconcileRepository.RunCheck`, `Violation`, `Reconcile` (R1–R6 berurutan, berhenti pada error yang menyebut check); SQL di Postgres (Task 5)
 ### Test
 - `reconcile_test.go` — PASS
+
+## M3-T5 — Repository reservasi dan reconcile di Postgres
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `db/queries/balance.sql`: `LockReservationBySession`, `InsertReservation`, `MarkReservationSettled/Released` (hanya dari `HELD`), `ReconcileR1..R6` (§4.8, satu kolom teks tanpa data pribadi); `postgres.balanceRepo` kini memenuhi `ReservationRepository` (stub T3 dihapus); `postgres.NewReconcileRepo` (`RunCheck`)
+- `BalanceRepoSuite`: hook `Unreconciled`; harness Postgres menyediakan `SeedSession` (sesi per user baru)
+### Test
+- `balance_repo_integration_test.go`: suite kontrak (fake + Postgres), reserve+settle contoh 1 bersih, `chk_ledger_shape`, `chk_reservation_state`, R1/R3/R4/R6 mendeteksi pelanggaran — PASS (Podman)
