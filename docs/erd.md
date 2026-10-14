@@ -166,7 +166,7 @@ erDiagram
         text avatar_key
         text persona
         text greeting_hint
-        text provider_name "ELEVENLABS CARTESIA DEEPGRAM OPENAI; TTS utama"
+        text provider_name "ELEVENLABS CARTESIA; TTS utama"
         text model_name "nama model TTS, teks bebas"
         text voice_id "ID suara di vendor, teks bebas"
         jsonb voice "gender accent speaking_rate fallback opsional"
@@ -352,7 +352,6 @@ erDiagram
         uuid prompt_version_id FK "key EVALUATION; nullable"
         text provider
         text model
-        boolean used_fallback
         smallint llm_call_count
         int input_tokens
         int output_tokens
