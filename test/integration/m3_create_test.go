@@ -38,9 +38,13 @@ type sessEnv struct {
 // adaptive provider and the user gate are fakes. A funded account is opened for the user.
 func newSessEnv(t *testing.T, available int64, wrap func(session.Store) session.Store) *sessEnv {
 	t.Helper()
+	return newSessEnvClock(t, available, clock.System{}, wrap)
+}
+
+func newSessEnvClock(t *testing.T, available int64, clk clock.Clock, wrap func(session.Store) session.Store) *sessEnv {
+	t.Helper()
 	pool := testutil.NewPostgres(t)
 	ids := idgen.NewV7()
-	clk := clock.System{}
 	store := postgres.NewStore(pool, postgres.WithIDs(ids), postgres.WithClock(clk))
 	t.Cleanup(func() { testutil.AssertReconciled(t, pool) })
 	e := &sessEnv{pool: pool, store: store, ids: ids, content: testutil.SeedContent(t, pool), userID: testutil.SeedUser(t, pool, nil)}
