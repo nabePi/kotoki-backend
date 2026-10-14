@@ -647,3 +647,11 @@ Tanggal: 2026-10-14
 - `fake/stt_test.go` — PASS (race, count=3)
 ### Penyimpangan
 - Skor kecocokan dikalikan overlap/panjang terpanjang supaya input pendek tidak cocok dengan fixture panjang; `CapConfig` dengan phase/kind kosong diperlakukan sebagai `start`/`UNAVAILABLE`
+
+## M4-T12 — Fake Evaluation dan Embedding + suite
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/fake/{eval,embedding,oneshot}.go` + `fixtures/kotoki_fake_example.json`: fixture JSON ter-embed (`FAKE_EVAL_FIXTURE_DIR` menimpa), `"{{score}}"` → `50 + fnv32(RequestID) % 41`, `SchemaName` divalidasi `[a-z0-9_]{1,64}` (tak bisa keluar dari direktori), embedding 1536 dim via trigram hashing + L2, fault error/timeout/slow lewat `oneShot`; `providertest/{eval,embedding}.go`: `EvaluationSuite`, `EmbeddingSuite`
+### Test
+- `fake/eval_test.go`, `fake/embedding_test.go` — PASS (race)
