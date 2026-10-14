@@ -859,3 +859,9 @@ Tanggal: 2026-10-14
 - Tes: golden `testdata/api/rest/content/*`, `TestCharacterResponseHasNoVoiceIDs`, error/403/PATCH karakter/lifecycle, `TestRouteTable` (5 baris katalog Ready + 10 baris admin content).
 - Ruling: `POST …/versions` memakai body `json.RawMessage` yang di-decode ketat oleh `AdminService` (field per family berbeda); field tak dikenal → 400 `VALIDATION_FAILED`. Objek `voice` PATCH yang cacat (key tak dikenal) → 422 `CONTENT_VALIDATION_FAILED` dengan issue `unknown_key`.
 - Catatan: wiring `cmd/api` (Deps.Content/ContentAdmin) ditunda ke Task 23 sesuai plan; sampai saat itu route konten di binary `cmd/api` belum berfungsi.
+
+## M3-T13 — Domain `session`
+- `internal/session/{session,tx,transition,ports}.go`: `Status/EndReason/Actor/StartMode/Fence`, `CanTransition` (tabel privat, matriks 8×8 teruji), `TerminalStatusFor`, error domain, `Session`/`RuntimeRecord`/`Settlement`/`Event`/`Turn*`, `Patch`, `Repository`/`TurnRepository`/`EventRepository`, `Store/Tx`, port `UserGate/AdaptiveProvider/OpeningPromptSource/ControlPublisher/HeartbeatReader`.
+- Ruling: `TurnRepository` tidak memuat `SetUserAudioKey` (signature §7.13.1 menyebutnya, tetapi §5.3.2/D-099: audio user tidak pernah disimpan dan `session_turns` tidak punya kolom referensi audio). Biaya bila salah: satu method tambahan di M5.
+- Ruling: `internal/events/outbox.go` (`Event`, `OutboxWriter`) dimajukan dari Task 14 karena `session.Tx.Outbox()` membutuhkannya; Task 14 menambah `types.go`, builder dan writer Postgres.
+- Ruling: bentuk field `TurnStart/TurnUser/TurnFinal/TurnRecord/Patch/ListFilter/ActiveRef` ditetapkan dari kolom DDL §5.3.2 dan transisi §5.4–5.6 (spec hanya memberi nama tipe); `CreatedAt` turn ikut dibawa untuk partition pruning.
