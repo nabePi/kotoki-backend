@@ -11,7 +11,8 @@ export DOCKER_HOST ?= unix://$(XDG_RUNTIME_DIR)/podman/podman.sock
 else
 CONTAINER_ENGINE ?= docker
 endif
-MIGRATE_IMAGE   := migrate/migrate:v4.18.3
+COMPOSE ?= $(CONTAINER_ENGINE) compose
+MIGRATE_IMAGE   := docker.io/migrate/migrate:v4.18.3
 COMPOSE_NETWORK := kotoki_default
 MIGRATE_DB_URL  := postgres://kotoki:kotoki@postgres:5432/kotoki?sslmode=disable
 GOLANGCI_LINT_VERSION := v2.1.6
@@ -28,35 +29,35 @@ env:            ## salin .env.example → .env (tidak menimpa)
 	@test -f .env || cp .env.example .env
 
 up:             ## jalankan dependency lokal
-	docker compose up -d --wait
+	$(COMPOSE) up -d --wait
 
 up-obs:         ## dependency + otel-collector + grafana/otel-lgtm (Grafana http://localhost:3000)
-	docker compose --profile observability up -d --wait
+	$(COMPOSE) --profile observability up -d --wait
 
 down:
-	docker compose --profile observability down
+	$(COMPOSE) --profile observability down
 
 reset:          ## hapus volume (data lokal hilang)
-	docker compose --profile observability down -v
+	$(COMPOSE) --profile observability down -v
 
 migrate-up:
-	docker run --rm --network $(COMPOSE_NETWORK) -v $(CURDIR)/migrations:/migrations \
+	$(CONTAINER_ENGINE) run --rm --network $(COMPOSE_NETWORK) -v $(CURDIR)/migrations:/migrations \
 	  $(MIGRATE_IMAGE) -path=/migrations -database "$(MIGRATE_DB_URL)" up
 
 migrate-down:   ## turun N langkah (default 1): make migrate-down N=3
-	docker run --rm --network $(COMPOSE_NETWORK) -v $(CURDIR)/migrations:/migrations \
+	$(CONTAINER_ENGINE) run --rm --network $(COMPOSE_NETWORK) -v $(CURDIR)/migrations:/migrations \
 	  $(MIGRATE_IMAGE) -path=/migrations -database "$(MIGRATE_DB_URL)" down $(N)
 
 migrate-create: ## make migrate-create NAME=add_x
-	docker run --rm -v $(CURDIR)/migrations:/migrations -u $$(id -u):$$(id -g) \
+	$(CONTAINER_ENGINE) run --rm -v $(CURDIR)/migrations:/migrations -u $$(id -u):$$(id -g) \
 	  $(MIGRATE_IMAGE) create -ext sql -dir /migrations -seq -digits 6 $(NAME)
 
 seed:           ## jalankan seed/*.sql (idempoten) berurutan
 	@for f in seed/*.sql; do echo "seed $$f"; \
-	  docker compose exec -T postgres psql -U kotoki -d kotoki -v ON_ERROR_STOP=1 < $$f || exit 1; done
+	  $(COMPOSE) exec -T postgres psql -U kotoki -d kotoki -v ON_ERROR_STOP=1 < $$f || exit 1; done
 
 promote-admin:  ## make promote-admin EMAIL=dev@example.test
-	docker compose exec -T postgres psql -U kotoki -d kotoki -v ON_ERROR_STOP=1 \
+	$(COMPOSE) exec -T postgres psql -U kotoki -d kotoki -v ON_ERROR_STOP=1 \
 	  -c "UPDATE users SET role='ADMIN' WHERE email='$(EMAIL)'"
 
 sqlc:
@@ -121,7 +122,7 @@ cli:
 
 docker-build:
 	for b in api realtime worker migrate; do \
-	  docker build -f deploy/docker/$$b.Dockerfile --build-arg VERSION=$(VERSION) \
+	  $(CONTAINER_ENGINE) build -f deploy/docker/$$b.Dockerfile --build-arg VERSION=$(VERSION) \
 	    --build-arg GIT_COMMIT=$(GIT_COMMIT) -t kotoki/$$b:$(VERSION) . || exit 1; done
 
 load:           ## make load ARGS="--vus 20 --hold 5m"
