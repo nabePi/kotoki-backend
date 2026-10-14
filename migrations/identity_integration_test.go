@@ -53,11 +53,11 @@ func TestIdentitySchemaViolations(t *testing.T) {
 		{"phone fmt", userWith(testutil.Row{"phone_number": "0812"}), "23514", "chk_users_phone_fmt"},
 		{"terms version", userWith(testutil.Row{"terms_version": "bad version"}), "23514", "chk_users_terms_version"},
 		{"email case-insensitive", func(t *testing.T, db testutil.DBTX) error {
-			testutil.MustInsert(t, ctx, db, "users", testutil.UserRow(testutil.Row{"email": "A@x.id"}))
+			testutil.MustInsert(ctx, t, db, "users", testutil.UserRow(testutil.Row{"email": "A@x.id"}))
 			return testutil.TryInsert(ctx, db, "users", testutil.UserRow(testutil.Row{"email": "a@x.id"}))
 		}, "23505", "ux_users_email"},
 		{"duplicate phone", func(t *testing.T, db testutil.DBTX) error {
-			testutil.MustInsert(t, ctx, db, "users", testutil.UserRow(testutil.Row{"phone_number": "+628123456789"}))
+			testutil.MustInsert(ctx, t, db, "users", testutil.UserRow(testutil.Row{"phone_number": "+628123456789"}))
 			return testutil.TryInsert(ctx, db, "users", testutil.UserRow(testutil.Row{"phone_number": "+628123456789"}))
 		}, "23505", "ux_users_phone"},
 		{"refresh hash len", func(_ *testing.T, db testutil.DBTX) error {
@@ -70,7 +70,7 @@ func TestIdentitySchemaViolations(t *testing.T) {
 			return testutil.TryInsert(ctx, db, "refresh_tokens", tokenRow(uid, testutil.Row{"token_hash": hash(32), "revoked_at": now, "revoke_reason": "X"}))
 		}, "23514", "chk_refresh_revoke_reason"},
 		{"duplicate refresh hash", func(t *testing.T, db testutil.DBTX) error {
-			testutil.MustInsert(t, ctx, db, "refresh_tokens", tokenRow(uid, testutil.Row{"token_hash": hash(32)}))
+			testutil.MustInsert(ctx, t, db, "refresh_tokens", tokenRow(uid, testutil.Row{"token_hash": hash(32)}))
 			return testutil.TryInsert(ctx, db, "refresh_tokens", tokenRow(uid, testutil.Row{"token_hash": hash(32)}))
 		}, "23505", "ux_refresh_tokens_hash"},
 		{"reset expiry", func(_ *testing.T, db testutil.DBTX) error {
@@ -88,12 +88,12 @@ func TestIdentitySchemaViolations(t *testing.T) {
 		}, "23514", "chk_balance_reserved_non_negative"},
 		{"two accounts per user", func(t *testing.T, db testutil.DBTX) error {
 			u := testutil.SeedUser(t, db, nil)
-			testutil.MustInsert(t, ctx, db, "balance_accounts", testutil.BalanceAccountRow(u, nil))
+			testutil.MustInsert(ctx, t, db, "balance_accounts", testutil.BalanceAccountRow(u, nil))
 			return testutil.TryInsert(ctx, db, "balance_accounts", testutil.BalanceAccountRow(u, nil))
 		}, "23505", "ux_balance_accounts_user"},
 		{"delete user with account", func(t *testing.T, db testutil.DBTX) error {
 			u := testutil.SeedUser(t, db, nil)
-			testutil.MustInsert(t, ctx, db, "balance_accounts", testutil.BalanceAccountRow(u, nil))
+			testutil.MustInsert(ctx, t, db, "balance_accounts", testutil.BalanceAccountRow(u, nil))
 			_, err := db.Exec(ctx, "DELETE FROM users WHERE id=$1", u)
 			return err
 		}, "23503", ""},

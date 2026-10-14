@@ -34,9 +34,9 @@ func families() []family {
 			statusTS: "chk_scenario_versions_status_ts", published: "ux_scenario_versions_published",
 			mkParent: func(t *testing.T, db testutil.DBTX) uuid.UUID {
 				tp := testutil.TopicRow(nil)
-				testutil.MustInsert(t, ctx, db, "topics", tp)
+				testutil.MustInsert(ctx, t, db, "topics", tp)
 				sc := testutil.ScenarioRow(tp["id"].(uuid.UUID), nil)
-				testutil.MustInsert(t, ctx, db, "scenarios", sc)
+				testutil.MustInsert(ctx, t, db, "scenarios", sc)
 				return sc["id"].(uuid.UUID)
 			},
 			mkVersion: testutil.ScenarioVersionRow,
@@ -47,7 +47,7 @@ func families() []family {
 			mkParent: func(t *testing.T, db testutil.DBTX) uuid.UUID {
 				promptKeyN++
 				pc := testutil.PromptConfigRow(promptKeys[promptKeyN%len(promptKeys)], nil)
-				testutil.MustInsert(t, ctx, db, "prompt_configs", pc)
+				testutil.MustInsert(ctx, t, db, "prompt_configs", pc)
 				return pc["id"].(uuid.UUID)
 			},
 			mkVersion: testutil.PromptVersionRow,
@@ -57,13 +57,13 @@ func families() []family {
 
 func (f family) pub(t *testing.T, db testutil.DBTX, parent uuid.UUID, v int) uuid.UUID {
 	r := f.mkVersion(parent, v, testutil.Row{"status": "PUBLISHED", "published_at": time.Now().UTC()})
-	testutil.MustInsert(t, context.Background(), db, f.table, r)
+	testutil.MustInsert(context.Background(), t, db, f.table, r)
 	return r["id"].(uuid.UUID)
 }
 
 func (f family) draft(t *testing.T, db testutil.DBTX, parent uuid.UUID, v int) uuid.UUID {
 	r := f.mkVersion(parent, v, nil)
-	testutil.MustInsert(t, context.Background(), db, f.table, r)
+	testutil.MustInsert(context.Background(), t, db, f.table, r)
 	return r["id"].(uuid.UUID)
 }
 
@@ -133,9 +133,9 @@ func TestContentChecks(t *testing.T) {
 	pool := testutil.NewPostgres(t)
 	ctx := context.Background()
 	tp := testutil.TopicRow(nil)
-	testutil.MustInsert(t, ctx, pool, "topics", tp)
+	testutil.MustInsert(ctx, t, pool, "topics", tp)
 	sc := testutil.ScenarioRow(tp["id"].(uuid.UUID), nil)
-	testutil.MustInsert(t, ctx, pool, "scenarios", sc)
+	testutil.MustInsert(ctx, t, pool, "scenarios", sc)
 	sid := sc["id"].(uuid.UUID)
 
 	ins := func(table string, r testutil.Row) error { return testutil.TryInsert(ctx, pool, table, r) }
@@ -162,7 +162,7 @@ func TestContentChecks(t *testing.T) {
 
 	t.Run("formality default POLITE", func(t *testing.T) {
 		r := testutil.ScenarioVersionRow(sid, 9, nil)
-		testutil.MustInsert(t, ctx, pool, "scenario_versions", r)
+		testutil.MustInsert(ctx, t, pool, "scenario_versions", r)
 		var f string
 		require.NoError(t, pool.QueryRow(ctx, "SELECT formality FROM scenario_versions WHERE id=$1", r["id"]).Scan(&f))
 		require.Equal(t, "POLITE", f)

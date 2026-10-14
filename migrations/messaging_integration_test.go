@@ -71,7 +71,7 @@ func TestProcessedEvents(t *testing.T) {
 		return testutil.Row{"consumer": consumer, "event_id": id, "event_type": "session.completed"}
 	}
 	id := uuid.Must(uuid.NewV7())
-	testutil.MustInsert(t, ctx, pool, "processed_events", row("evaluation.session_completed", id))
+	testutil.MustInsert(ctx, t, pool, "processed_events", row("evaluation.session_completed", id))
 	testutil.RequirePgErr(t, testutil.TryInsert(ctx, pool, "processed_events", row("evaluation.session_completed", id)), "23505", "processed_events_pkey")
 	testutil.RequirePgErr(t, testutil.TryInsert(ctx, pool, "processed_events", row("nobody", uuid.Must(uuid.NewV7()))), "23514", "chk_processed_events_consumer")
 }
@@ -93,7 +93,7 @@ func TestAdminAudit(t *testing.T) {
 	testutil.RequirePgErr(t, testutil.TryInsert(ctx, pool, "admin_audit_logs", row(testutil.Row{"action": "HACK"})), "23514", "chk_admin_audit_action")
 	testutil.RequirePgErr(t, testutil.TryInsert(ctx, pool, "admin_audit_logs", row(testutil.Row{"target_type": "X"})), "23514", "chk_admin_audit_target_type")
 	ok := row(nil)
-	testutil.MustInsert(t, ctx, pool, "admin_audit_logs", ok)
+	testutil.MustInsert(ctx, t, pool, "admin_audit_logs", ok)
 	_, err := pool.Exec(ctx, `UPDATE admin_audit_logs SET reason='x' WHERE id=$1`, ok["id"])
 	testutil.RequirePgErr(t, err, "23001", "")
 	_, err = pool.Exec(ctx, `DELETE FROM admin_audit_logs WHERE id=$1`, ok["id"])

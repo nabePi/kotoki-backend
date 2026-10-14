@@ -59,7 +59,7 @@ func TryInsert(ctx context.Context, db DBTX, table string, r Row) error {
 }
 
 // MustInsert is TryInsert that fails the test on error.
-func MustInsert(t testing.TB, ctx context.Context, db DBTX, table string, r Row) {
+func MustInsert(ctx context.Context, t testing.TB, db DBTX, table string, r Row) {
 	t.Helper()
 	if err := TryInsert(ctx, db, table, r); err != nil {
 		t.Fatalf("testutil: insert into %s: %v", table, err)

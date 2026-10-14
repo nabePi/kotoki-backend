@@ -38,7 +38,7 @@ func queryStrings(t *testing.T, dsn, sql string) []string {
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	require.NoError(t, err)
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 	rows, err := conn.Query(ctx, sql)
 	require.NoError(t, err)
 	defer rows.Close()

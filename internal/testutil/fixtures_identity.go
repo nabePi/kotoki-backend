@@ -34,7 +34,7 @@ func UserRow(o Row) Row {
 func SeedUser(t testing.TB, db DBTX, o Row) uuid.UUID {
 	t.Helper()
 	r := UserRow(o)
-	MustInsert(t, context.Background(), db, "users", r)
+	MustInsert(context.Background(), t, db, "users", r)
 	return r["id"].(uuid.UUID)
 }
 

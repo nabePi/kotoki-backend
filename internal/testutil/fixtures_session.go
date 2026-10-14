@@ -40,7 +40,7 @@ func SessionRow(userID uuid.UUID, c ContentIDs, o Row) Row {
 func SeedSession(t testing.TB, db DBTX, userID uuid.UUID, c ContentIDs, o Row) uuid.UUID {
 	t.Helper()
 	r := SessionRow(userID, c, o)
-	MustInsert(t, context.Background(), db, "sessions", r)
+	MustInsert(context.Background(), t, db, "sessions", r)
 	return r["id"].(uuid.UUID)
 }
 

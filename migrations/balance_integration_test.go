@@ -35,14 +35,14 @@ func (e balEnv) fresh(t *testing.T) *balCtx {
 	ctx := context.Background()
 	uid := testutil.SeedUser(t, e.pool, nil)
 	acc := testutil.BalanceAccountRow(uid, nil)
-	testutil.MustInsert(t, ctx, e.pool, "balance_accounts", acc)
+	testutil.MustInsert(ctx, t, e.pool, "balance_accounts", acc)
 	sid := testutil.SeedSession(t, e.pool, uid, e.c, nil)
 	return &balCtx{uid: uid, acc: acc["id"].(uuid.UUID), sid: sid}
 }
 
 func (e balEnv) reservation(t *testing.T, b *balCtx, o testutil.Row) testutil.Row {
 	r := testutil.ReservationRow(b.acc, b.uid, b.sid, o)
-	testutil.MustInsert(t, context.Background(), e.pool, "balance_reservations", r)
+	testutil.MustInsert(context.Background(), t, e.pool, "balance_reservations", r)
 	return r
 }
 

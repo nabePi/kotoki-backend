@@ -4,6 +4,7 @@ package testutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,7 +79,7 @@ func migrateTemplate(ctx context.Context, dsn, root string) error {
 		return fmt.Errorf("migrator: %w", err)
 	}
 	defer func() { _, _ = m.Close() }()
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("migrate up: %w", err)
 	}
 	return nil

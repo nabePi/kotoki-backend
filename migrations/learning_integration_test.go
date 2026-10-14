@@ -26,7 +26,7 @@ func (e learnEnv) profile(t *testing.T, o testutil.Row) uuid.UUID {
 	for k, v := range o {
 		r[k] = v
 	}
-	testutil.MustInsert(t, context.Background(), e.pool, "learner_profiles", r)
+	testutil.MustInsert(context.Background(), t, e.pool, "learner_profiles", r)
 	return uid
 }
 
@@ -45,7 +45,7 @@ func (e learnEnv) evaluation(t *testing.T, o testutil.Row) testutil.Row {
 	uid := testutil.SeedUser(t, e.pool, nil)
 	sid := testutil.SeedSession(t, e.pool, uid, e.c, nil)
 	r := evalRow(uid, sid, o)
-	testutil.MustInsert(t, context.Background(), e.pool, "evaluations", r)
+	testutil.MustInsert(context.Background(), t, e.pool, "evaluations", r)
 	return r
 }
 
@@ -64,7 +64,7 @@ func memoryRow(uid uuid.UUID, o testutil.Row) testutil.Row {
 	now := time.Now().UTC()
 	r := testutil.Row{
 		"id": uuid.Must(uuid.NewV7()), "user_id": uid, "category": "PREFERENCE", "memory_key": "likes_tea",
-		"content": "お茶が好き。", "display_text": "Suka teh.", "evidence_type": "EXPLICIT_USER_STATEMENT",
+		"content": "お茶が好き。", "display_text": "Suka kopi.", "evidence_type": "EXPLICIT_USER_STATEMENT",
 		"confidence": 0.8, "importance": 0.5, "first_observed_at": now, "last_observed_at": now,
 		"expires_at": now.Add(365 * 24 * time.Hour),
 	}
@@ -156,7 +156,7 @@ func TestEvaluationsChecks(t *testing.T) {
 	})
 	t.Run("one evaluation per session", func(t *testing.T) {
 		uid, sid := fresh(t)
-		testutil.MustInsert(t, ctx, e.pool, "evaluations", evalRow(uid, sid, nil))
+		testutil.MustInsert(ctx, t, e.pool, "evaluations", evalRow(uid, sid, nil))
 		testutil.RequirePgErr(t, testutil.TryInsert(ctx, e.pool, "evaluations", evalRow(uid, sid, nil)), "23505", "uq_evaluations_session")
 	})
 	t.Run("TestEvaluationsNoUsedFallback", func(t *testing.T) {
@@ -182,7 +182,7 @@ func TestEvaluationsChecks(t *testing.T) {
 	})
 	t.Run("finding duplicate ordinal", func(t *testing.T) {
 		ev := e.evaluation(t, nil)
-		testutil.MustInsert(t, ctx, e.pool, "evaluation_findings", finding(ev, 1, nil))
+		testutil.MustInsert(ctx, t, e.pool, "evaluation_findings", finding(ev, 1, nil))
 		testutil.RequirePgErr(t, testutil.TryInsert(ctx, e.pool, "evaluation_findings", finding(ev, 1, nil)), "23505", "uq_evaluation_findings_ordinal")
 	})
 }

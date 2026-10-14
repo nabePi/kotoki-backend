@@ -88,17 +88,17 @@ func SeedContent(t testing.TB, db DBTX) ContentIDs {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	topic := TopicRow(nil)
-	MustInsert(t, ctx, db, "topics", topic)
+	MustInsert(ctx, t, db, "topics", topic)
 	sc := ScenarioRow(topic["id"].(uuid.UUID), nil)
-	MustInsert(t, ctx, db, "scenarios", sc)
+	MustInsert(ctx, t, db, "scenarios", sc)
 	sv := ScenarioVersionRow(sc["id"].(uuid.UUID), 1, Row{"status": "PUBLISHED", "published_at": now})
-	MustInsert(t, ctx, db, "scenario_versions", sv)
+	MustInsert(ctx, t, db, "scenario_versions", sv)
 	ch := CharacterRow(nil)
-	MustInsert(t, ctx, db, "characters", ch)
+	MustInsert(ctx, t, db, "characters", ch)
 	pc := PromptConfigRow("CONVERSATION", nil)
-	MustInsert(t, ctx, db, "prompt_configs", pc)
+	MustInsert(ctx, t, db, "prompt_configs", pc)
 	pv := PromptVersionRow(pc["id"].(uuid.UUID), 1, Row{"status": "PUBLISHED", "published_at": now})
-	MustInsert(t, ctx, db, "prompt_versions", pv)
+	MustInsert(ctx, t, db, "prompt_versions", pv)
 	return ContentIDs{
 		TopicID: topic["id"].(uuid.UUID), ScenarioID: sc["id"].(uuid.UUID), ScenarioVersionID: sv["id"].(uuid.UUID),
 		CharacterID: ch["id"].(uuid.UUID), PromptVersionID: pv["id"].(uuid.UUID),
