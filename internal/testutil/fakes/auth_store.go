@@ -384,3 +384,10 @@ func (s *AuthStore) MutateUser(id uuid.UUID, fn func(*auth.User)) {
 	fn(&u)
 	s.st.users[id] = u
 }
+
+// ResetTokens returns every stored password reset token.
+func (s *AuthStore) ResetTokens() []auth.PasswordResetToken {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Collect(maps.Values(s.st.resets))
+}

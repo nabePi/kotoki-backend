@@ -480,3 +480,147 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	}
 	return nil
 }
+
+// ForgotInput is a forgot-password request. EmailLimited says the per-email rate
+// limit rejected it: the answer stays generic and no mail is sent (spec 3.9.1).
+type ForgotInput struct {
+	Email        string
+	IP           netip.Addr
+	EmailLimited bool
+}
+
+// ForgotPassword always succeeds for a well-formed email so the response never
+// reveals whether the account exists. An invalid email format is the only error.
+func (s *Service) ForgotPassword(ctx context.Context, in ForgotInput) error {
+	email, err := NormalizeEmail(in.Email)
+	if err != nil {
+		return err
+	}
+	defer s.audit(ctx, "password_reset_requested", "success", uuid.Nil, in.IP, "")
+	if in.EmailLimited {
+		return nil
+	}
+	var user User
+	var found bool
+	err = s.store.WithinTx(ctx, func(ctx context.Context, tx Tx) error {
+		u, gerr := tx.Users().GetByEmail(ctx, email)
+		switch {
+		case errors.Is(gerr, ErrUserNotFound):
+			return nil
+		case gerr != nil:
+			return gerr
+		}
+		user, found = u, true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !found || user.Status != UserStatusActive {
+		return nil
+	}
+	raw, hash, err := newOpaqueToken(s.cfg.Rand)
+	if err != nil {
+		return err
+	}
+	now := s.clk.Now()
+	err = s.store.WithinTx(ctx, func(ctx context.Context, tx Tx) error {
+		if err := tx.PasswordResets().InvalidateOpenForUser(ctx, user.ID, now); err != nil {
+			return err
+		}
+		return tx.PasswordResets().Insert(ctx, PasswordResetToken{
+			ID: s.ids.New(), UserID: user.ID, TokenHash: hash, RequestedIP: ipPtr(in.IP),
+			CreatedAt: now, ExpiresAt: now.Add(s.cfg.ResetTTL),
+		})
+	})
+	if err != nil {
+		return err
+	}
+	msg, err := RenderPasswordReset(s.cfg.ResetURLBase, raw, user.Email)
+	if err != nil {
+		return errs.Wrap(err, errs.CodeInternalError, "render reset mail failed")
+	}
+	s.mail.Enqueue(msg) // a dropped mail is logged by the dispatcher; the user can ask again
+	return nil
+}
+
+// ResetInput is a reset-password request.
+type ResetInput struct{ Token, NewPassword string }
+
+func resetUsable(l ResetLookup, now time.Time) bool {
+	return l.Token.UsedAt == nil && l.Token.InvalidatedAt == nil && l.Token.ExpiresAt.After(now) && l.UserStatus == UserStatusActive
+}
+
+func invalidReset() error { return errs.New(errs.CodeResetTokenInvalid, "reset token invalid") }
+
+// ResetPassword sets a new password for the owner of a valid reset token and
+// revokes every refresh token of that user (spec 3.9.2).
+func (s *Service) ResetPassword(ctx context.Context, in ResetInput) (err error) {
+	var userID uuid.UUID
+	defer func() {
+		result := "success"
+		if err != nil {
+			result = "failure"
+		}
+		s.events.Record("password_reset", result)
+		if err == nil {
+			s.audit(ctx, "password_reset_completed", result, userID, netip.Addr{}, "")
+		}
+	}()
+
+	hash, ok := decodeToken(in.Token)
+	if !ok {
+		return invalidReset()
+	}
+	now := s.clk.Now()
+	var lookup ResetLookup
+	err = s.store.WithinTx(ctx, func(ctx context.Context, tx Tx) error {
+		l, ferr := tx.PasswordResets().FindByHash(ctx, hash)
+		if errors.Is(ferr, ErrResetTokenNotFound) {
+			return invalidReset()
+		}
+		lookup = l
+		return ferr
+	})
+	if err != nil {
+		return err
+	}
+	if !resetUsable(lookup, now) {
+		return invalidReset()
+	}
+	if err := s.passPolicy.Validate(in.NewPassword, lookup.Email); err != nil {
+		return err
+	}
+	newHash, err := s.hasher.Hash(ctx, in.NewPassword)
+	if err != nil {
+		return err
+	}
+	err = s.store.WithinTx(ctx, func(ctx context.Context, tx Tx) error {
+		l, lerr := tx.PasswordResets().LockByHash(ctx, hash)
+		if errors.Is(lerr, ErrResetTokenNotFound) {
+			return invalidReset()
+		}
+		if lerr != nil {
+			return lerr
+		}
+		if !resetUsable(l, now) {
+			return invalidReset()
+		}
+		uid := l.Token.UserID
+		if err := tx.Users().SetPasswordHash(ctx, uid, newHash, &now); err != nil {
+			return err
+		}
+		if err := tx.PasswordResets().MarkUsed(ctx, l.Token.ID, now); err != nil {
+			return err
+		}
+		if err := tx.PasswordResets().InvalidateOthers(ctx, uid, l.Token.ID, now); err != nil {
+			return err
+		}
+		if _, err := tx.RefreshTokens().RevokeAllForUser(ctx, uid, "PASSWORD_RESET", now); err != nil {
+			return err
+		}
+		userID = uid
+		return nil
+	})
+	return err
+}

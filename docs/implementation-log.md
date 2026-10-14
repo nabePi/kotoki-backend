@@ -367,3 +367,13 @@ Tanggal: 2026-10-14
 - `fakes.AuthStore.MutateUser` untuk setup test
 ### Test
 - go test ./internal/auth -race — PASS (12 test refresh/logout termasuk konkurensi 2 goroutine)
+
+## M2-T11 — auth.Service: Forgot & Reset password
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `ForgotPassword`: email invalid → `VALIDATION_FAILED`; selain itu selalu nil (limiter email, user tak dikenal/non-ACTIVE → tanpa token & mail); user ACTIVE → tx (invalidate token terbuka + insert token TTL 15 m, hash SHA-256) lalu `Enqueue` mail; audit `password_reset_requested`
+- `ResetPassword`: decode token → `FindByHash` → `ValidatePassword` (token tidak terpakai bila lemah) → `Hash` di luar tx → tx `LockByHash` re-check → ganti password (`password_changed_at = now`), `MarkUsed`, `InvalidateOthers`, revoke semua refresh `PASSWORD_RESET`; `expires_at <= now` → invalid; event metrik `password_reset`; audit `password_reset_completed`
+- `fakes.AuthStore.ResetTokens` untuk test
+### Test
+- go test ./internal/auth -race — PASS (12 test forgot/reset)

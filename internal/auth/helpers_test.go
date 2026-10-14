@@ -134,3 +134,23 @@ func (e *authEnv) register(t *testing.T, email string) auth.AuthResult {
 }
 
 func newUUID() uuid.UUID { return uuid.Must(uuid.NewV7()) }
+
+func (m *mailSink) all() []auth.MailMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]auth.MailMessage(nil), m.msgs...)
+}
+
+// drainMail closes the dispatcher (flushing the queue) and returns everything sent.
+func (e *authEnv) drainMail(t *testing.T) []auth.MailMessage {
+	t.Helper()
+	require.NoError(t, e.dispatch.Close(context.Background()))
+	return e.mail.all()
+}
+
+// waitMail waits until at least n messages were delivered.
+func (e *authEnv) waitMail(t *testing.T, n int) []auth.MailMessage {
+	t.Helper()
+	require.Eventually(t, func() bool { return len(e.mail.all()) >= n }, 2*time.Second, 5*time.Millisecond)
+	return e.mail.all()
+}
