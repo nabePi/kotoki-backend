@@ -347,3 +347,12 @@ Tanggal: 2026-10-14
 - `repotest.{UserRepoSuite,RefreshTokenRepoSuite,PasswordResetRepoSuite}` (+ `NewUser`); hanya mengimpor `auth` dan testify, siap dipakai ulang oleh repo PostgreSQL (Task 16)
 ### Test
 - go test ./internal/testutil/... -race — PASS (3 suite + rollback/commit/FailNext)
+
+## M2-T9 — auth.Service: Register & Login
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth/service.go`: `Config`, `Events`, `NewService` (dummy hash untuk menyamakan timing login), `Register` (hash di luar tx; tx: Insert user → `OpenAccount` → refresh family; `ErrEmailTaken`/`ErrPhoneTaken` → 409), `Login` (email tak dikenal / DELETED → `Verify(dummy)` tepat 1× → `INVALID_CREDENTIALS`; SUSPENDED hanya setelah password benar; rehash best-effort tanpa mengubah `password_changed_at`), audit log `audit=true` (`register`, `login_succeeded`, `login_failed`) tanpa email/password mentah
+- `internal/platform/metrics/auth.go`: `kotoki_auth_events_total{event,result}`; nilai di luar daftar di-ignore
+### Test
+- go test ./internal/auth ./internal/platform/metrics -race — PASS
