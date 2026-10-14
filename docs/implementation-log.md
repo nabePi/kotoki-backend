@@ -834,3 +834,8 @@ Tanggal: 2026-10-14
 - `fakes.ContentRepo` (pencacah panggilan untuk tes cache)
 ### Test
 - `resolver_test.go`, `cache_test.go` — PASS (race)
+
+## M3-T9 — Repository konten di Postgres
+- `db/queries/content.sql` + sqlc; `postgres.NewContentRepo` (`content.Repository`) dan `(*Tx).Content()` (`content.TxRepository`, `internal/content/tx.go`): lock parent → versi, `NextVersionNumber`, insert draft, publish/retire/delete, status topik/skenario, lock+update karakter.
+- Tes integrasi: published-only, load by id, unik satu PUBLISHED, versi immutable (trigger), nomor versi di bawah lock parent (2 tx paralel → 2 dan 3), round-trip karakter + `voice.fallback`, patch karakter paralel serial, `GetUserVoiceExposure` (hanya COMPLETED, stabil setelah voice karakter diubah).
+- Ruling: `ListPublic*` (§6.12) dilewati — katalog publik disusun dari `content.Repository` di Task berikutnya; `GetUserVoiceExposure` dipakai lewat sqlc langsung sampai ada konsumennya.
