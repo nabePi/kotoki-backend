@@ -544,3 +544,223 @@ Tanggal: 2026-10-14
 - Migrasi 000013/000018 diubah di tempat (belum ada tag v0.1.0, `migcheck` lulus); golden skema diperbarui
 - Tidak dikerjakan: REVOKE ulang untuk role yang dibuat setelah migrasi (sudah dijadwalkan M10) dan penggantian error 40001 saat ctx dibatalkan di tengah backoff (mengembalikan error ctx dinilai benar)
 - Tanpa tes otomatis: urutan shutdown ops (draining tidak teramati pada shutdown cepat) dan span panic
+
+## M4-T1 — Tipe umum, port, error taxonomy, guard aturan impor
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/{provider,errors,stt,llm,tts,evaluation,embedding}.go`: tipe dan port §8.2, `ErrorKind`/`*Error`, `KindOf`, `IsRetryable`, `FallbackEligible`, `CountsForBreaker`, `ClassifyHTTPStatus`, `NewError` (pesan dipotong 512 byte di batas rune), `NewCircuitOpen`
+### Test
+- `errors_test.go` (tabel taksonomi, 404, local_concurrency, kuota, KindOf, status HTTP, string, potong 512, Unwrap) dan `importrules_test.go` (aturan impor provider/fake/prompt) — PASS
+### Penyimpangan
+- `NewCircuitOpen` diekspor (test di paket eksternal)
+
+## M4-T2 — `NormalizeJA` dan util PCM
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/text.go`: `NormalizeJA` (komposisi kana + dakuten/handakuten tanpa `x/text`, spasi antar rune non-ASCII dibuang, trim)
+- `internal/provider/pcm.go`: `EncodeWAV`/`DecodeWAV`/`WAVDurationMs`, `ResamplePCM16` (linear), `RMSdBFS`, `pcmRing` (posisi logis absolut)
+### Test
+- `text_test.go`, `pcm_test.go`, `pcm_internal_test.go` — PASS (race)
+
+## M4-T3 — `RouterConfig` dan `Validate()`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/config.go`: `RouterConfig` (tag `env`/`envDefault` sesuai §8.5.1, D-017), `ConcurrencyConfig` + `Limit`, `ModeFor`, `ActiveSTT`/`ActiveLLM`/`TTSVendors`/`STTModel`/`LLMModel`/`EvaluationModel`, `Validate` (flag/key/model hanya untuk kapabilitas mode `real`; semua pesan menyebut nama env), `Secret` untuk API key (tidak tercetak)
+### Test
+- `config_test.go`, `config_env_test.go`: satu kasus per aturan §8.5.1, default env, override env, tidak ada seleksi vendor/profil TTS — PASS
+### Penyimpangan
+- Galat parse bool menyebut nama field Go (bukan nama env); pemetaan nama env dilakukan saat `platform/config` menanam `RouterConfig`
+
+## M4-T4 — Circuit breaker
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/breaker.go`: `Breaker`/`Ticket`/`BreakerConfig`, 9 transisi §8.5.4, window bergeser, probe half-open (tiket usang diabaikan lewat epoch), `onTransition` dipanggil di luar lock
+### Test
+- `breaker_test.go`: `TestBreakerStateMachine` (8 subtest), `TestBreakerConcurrent` (50 goroutine) — PASS `-race -count=20`
+
+## M4-T5 — Semaphore konkurensi dan `HealthTracker`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/semaphore.go`: `semaphoreSlot` (try atau tunggu `wait`; penuh → `RATE_LIMITED{local_concurrency}` yang tidak dihitung breaker; ctx habis → `CANCELLED`/`TIMEOUT`; release idempoten)
+- `internal/provider/health.go`: `HealthTracker` (60 bucket × 1 s, p95 latensi, `last_error` bertahan di luar window), `ProviderHealth` dengan bentuk JSON §8.5.5, `BreakerState.String()`
+### Test
+- `semaphore_test.go`, `health_test.go` — PASS (race)
+
+## M4-T6 — Metrik Prometheus provider
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/metrics.go`: `Metrics` dengan seluruh metrik §8.8.1 + §8.7.4 (nama/label persis), helper per metrik yang aman untuk receiver nil, `vendor_code` tak dikenal → `other`, `kotoki_session_cost_usd`/`_per_minute_usd` tanpa label, `SetDefaultMetrics` + `ObserveLLMFirstSentence`
+### Test
+- `metrics_test.go` — PASS (race)
+### Penyimpangan
+- Bucket `kotoki_session_cost_per_minute_usd` tidak dinyatakan spec: dipilih 0,001…0,5; `final_timeout` ditambahkan ke daftar vendor_code yang dikenal
+
+## M4-T7 — `PriceTable` port dan `pricing.Table`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/pricer.go`: port `PriceTable`, `ModelRef`; `internal/provider/pricing/{pricing.go,prices.yaml}`: loader YAML ketat (`KnownFields`, UPPERCASE, duplikat/negatif ditolak), `LLM`/`TTS`/`Audio` (wildcard `*`, harga cache-hit), `Missing` (tanpa entri atau harga 0); semua harga 0 sampai benchmark
+### Test
+- `pricing/pricing_test.go` — PASS (race)
+
+## M4-T8 — Fake: konfigurasi, keputusan gagal, fault set, poller
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/fake/config.go`: `Config` (env `FAKE_*`), `CapConfig` + `LoadCapConfig` (`FAKE_<PRIMARY|FALLBACK>_<CAP>_*`, FALLBACK hanya TTS, galat menyebut nama env), `Deps`
+- `internal/provider/fake/faults.go`: `Fault`/`FaultSet`/`FaultSource`/`NoFaults`, `ParseFaultSet` (until, kombinasi mode/kapabilitas, status→kind), `decider` deterministik (every-N atau hash seed|instance|capability|counter), `Poller` (snapshot atomik; galat fetch → pertahankan ≤ 10 s lalu kosongkan; WARN ≤ 1×/menit)
+### Test
+- `faults_test.go`, `config_env_test.go` — PASS (race); termasuk `TestPollerClearsAfterStaleWindow` (review focus 5)
+### Penyimpangan
+- Hash keputusan = FNV-64a + finalizer splitmix64 (FNV saja bias pada bit tinggi untuk counter berurutan)
+
+## M4-T9 — Fake LLM + `providertest.LLMSuite`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/fake/llm.go` (+ `errors.go`): `LLM` deterministik (template opening/regular, `#long` ×5, delta 3 rune, `MaxTokens`/`Stop`, usage nyata, fase gagal start/before_first/mid/hang, fault runtime error/slow/timeout, override template), `internal/provider/providertest/llm.go`: `LLMSuite` (7 subtest) untuk fake dan adapter M9
+### Test
+- `fake/llm_test.go` — PASS (race)
+### Penyimpangan
+- Lihat ledger: pembagian template (4 reguler + opening) dan `SyncErrorIsProviderError` memakai ctx yang sudah dibatalkan
+
+## M4-T10 — Fake TTS + `providertest.TTSSuite`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/fake/tts.go`: PCM16 24 kHz, durasi `max(300 ms, rune×120)/SpeakingRate` (0 → 1), chunk 20 ms, nada 220 Hz −20 dBFS atau senyap, fault start/before_first/mid/hang + runtime `fail_after_first_audio`, mengabaikan voice/model karakter; `providertest/tts.go`: `TTSSuite` (5 subtest)
+### Test
+- `fake/tts_test.go` — PASS (race)
+
+## M4-T11 — Fake STT (korelasi envelope) + `providertest.STTSuite`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/fake/stt.go`, `stt_match.go`: segmentasi energi (mulai ≥ 200 ms bicara, tutup 600 ms senyap atau `Finalize`), PARTIAL tiap 200 ms waktu audio, FINAL setelah `LatencyMS`, korelasi envelope fixture (±10 frame, skor diskalakan overlap/panjang, tie → nama file terkecil) atau frasa energi, antrean event (PARTIAL baru menggantikan yang antre; FINAL/ERROR/CLOSED tidak pernah dibuang), buffer audio 2 s, fault timeout/disconnect/phase env; `providertest/stt.go`: `STTSuite` (6 subtest)
+### Test
+- `fake/stt_test.go` — PASS (race, count=3)
+### Penyimpangan
+- Skor kecocokan dikalikan overlap/panjang terpanjang supaya input pendek tidak cocok dengan fixture panjang; `CapConfig` dengan phase/kind kosong diperlakukan sebagai `start`/`UNAVAILABLE`
+
+## M4-T12 — Fake Evaluation dan Embedding + suite
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/fake/{eval,embedding,oneshot}.go` + `fixtures/kotoki_fake_example.json`: fixture JSON ter-embed (`FAKE_EVAL_FIXTURE_DIR` menimpa), `"{{score}}"` → `50 + fnv32(RequestID) % 41`, `SchemaName` divalidasi `[a-z0-9_]{1,64}` (tak bisa keluar dari direktori), embedding 1536 dim via trigram hashing + L2, fault error/timeout/slow lewat `oneShot`; `providertest/{eval,embedding}.go`: `EvaluationSuite`, `EmbeddingSuite`
+### Test
+- `fake/eval_test.go`, `fake/embedding_test.go` — PASS (race)
+
+## M4-T13 — `redisstore.FakeFaults`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/redisstore/fakefaults.go`: `FakeFaults` membungkus `fake.Poller` dengan fetch `GET` (`redis.Nil` → tanpa fault); snapshot bertahan ≤ 10 s saat Redis mati lalu dikosongkan
+### Test
+- `fakefaults_integration_test.go` (integration, Podman): polling set/del key, key tak ada, outage dengan jam palsu, dokumen rusak — PASS
+
+## M4-T14 — Router inti
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/router.go`: interface `RealtimeRouter`/`AsyncRouter`/`RoutedSTTSession`/`Generation`/`GenerationSummary`/`TextRequest`/`TextResult`, `ProcessRole`, `RouterDeps`, `NewRouter` (validasi config + adapter), breaker & semaphore per (vendor, kapabilitas) (wait STT 0, LLM/TTS 100 ms realtime atau 30 s worker, EVALUATION/EMBEDDING 30 s), `admit` (breaker lalu semaphore, fail-fast `circuit_open`), `ttsCandidates` (primary + fallback karakter, `voice_binding_missing`, circuit-open), `HealthSnapshot`, `llmModel`/`evaluationModel`/`textModel`/`ttsVendors`; `Breaker.WouldAllow`, `HealthTracker.Touch`
+### Test
+- `router_test.go`, `router_helpers_test.go` (+ `export_test.go`) — PASS (race)
+### Penyimpangan
+- Asersi `var _ RealtimeRouter/AsyncRouter` dipindah ke Task 18 (method lain menyusul di T15–T18)
+
+## M4-T15 — `Generation`: LLM satu vendor
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/generation.go`: `Router.NewGeneration`, `StreamLLM` (breaker + semaphore, model/default dari config, first-token timer, `LLM_TOTAL`, `DONE{TRUNCATED}` setelah `MarkAudioSent` (deadline sesi tidak dihitung breaker, `LLM_TOTAL` dihitung), `CONTENT_FILTERED` tidak dihitung breaker dan diteruskan, cancel → `DONE{CANCELLED}`, usage estimasi saat gagal, metrik/biaya/health, log DEBUG tanpa teks), `Summary`, `MarkAudioSent`, `TTSEpochChanged`; `generation_tts.go` berisi stub `Synthesize` sampai T16
+- `fake`: `HangAfter` (`FAKE_<INST>_<CAP>_HANG_AFTER`, fault `after_events`) agar stream bisa macet setelah N delta
+### Test
+- `generation_llm_test.go` (13 tes) — PASS (race, count=5)
+
+## M4-T16 — `Generation`: TTS (epoch, voice dipin, VoiceID/model per vendor)
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/generation_tts.go`: `Synthesize` (validasi `SpeakingRate` 0 → 1,0 dan 0,80–1,05; slot primary/fallback dipin per generasi, awal di fallback bila breaker primary terbuka; mode fake memakai `FAKE_PRIMARY`/`FAKE_FALLBACK` dengan `VoiceID="FAKE"`, `Model="fake-tts"`; mode real memakai `VoiceRef` karakter apa adanya + `voice_binding_missing` yang tidak dihitung breaker; breaker + semaphore per vendor; timer first-audio dan total per kalimat), fallback hanya sebelum `MarkAudioSent`, sekali per generasi, `tts_provider_switched` + epoch naik + stream epoch lama dibatalkan, `Epoch` pada setiap chunk, ringkasan TTS (provider/model/voice/karakter/first audio), metrik/health/log
+### Test
+- `generation_tts_test.go` (17 tes) — PASS (race, count=5)
+
+## M4-T17 — `rotatingSTT`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/stt_session.go`: `Router.OpenSTT` (breaker → semaphore tanpa tunggu → `Open` dengan timeout connect), `rotatingSTT` (offset logis, rotation buffer 15 s = 480.000 byte, rotasi ke vendor yang sama untuk `session_time_limit_exceeded`/`insufficient_audio_activity` tanpa dihitung breaker, replay potongan 3.200 byte, `Finalize` ditunda selama replay, FINAL{FromFinalize} koneksi lama dibuang, ERROR lain/penutupan tak terduga diteruskan sebagai `STTError` tanpa pindah vendor, `ReportFinalTimeout` ×3 → `final_timeout`), antrean event (PARTIAL digantikan), metrik rotasi/replay; `Breaker.Record` untuk kegagalan sesi tanpa tiket; `pcmRing.readFromBytes`
+### Test
+- `stt_session_test.go` (17 tes) — PASS (race, count=5)
+
+## M4-T18 — Router async
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/async.go`: `doAsync` (breaker + semaphore per attempt, retry ke vendor yang sama, `Retry-After` ≤ 30 s, non-retryable/cancelled langsung gagal), `GenerateJSON` (3 attempt, backoff 1 s/4 s, temperatur negatif → 0,2, body non-JSON → `INVALID_RESPONSE`), `Evaluation()` (satu attempt), `CompleteText` (worker 3 / realtime 1 attempt, `CONTENT_FILTERED` non-retryable), `Embed` (3 attempt, 500 ms/2 s), metrik/biaya/health per attempt; asersi `RealtimeRouter`/`AsyncRouter`; `RouterDeps.AsyncWait`
+### Test
+- `async_test.go` (16 tes) — PASS (race, count=3)
+
+## M4-T19 — `provider/httpx`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/httpx/{client,classify,sse}.go`: `NewClient` (HTTP/2, pool 256/host, idle 90 s, TLS 3 s, tanpa timeout respons), `ClassifyHTTP` (tabel §8.3, `Retry-After` detik atau HTTP-date relatif header `Date`, kuota habis tidak retryable, pesan ≤ 512 byte dan disamarkan), `Redact`, `ClassifyBody`, `ClassifyError`, `ClassifyWSClose`, `SSEReader`
+### Test
+- `httpx_test.go` — PASS (race)
+
+## M4-T20 — `prompt`: estimator, budget, tipe data
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/prompt/{tokens,budget,learner_context,data,text}.go`: `EstimateTokens` (aritmetika integer `(77·cjk + 20·other)/70` dibulatkan ke atas, bebas drift float), `ItemOverheadTokens`, `Budget`/`DefaultBudget` (total 6.450), `LearnerContext`, `VocabHint`, `PromptData`/`OpeningPromptData` (tanpa style/ekspresi/identitas user), `NormalizeSpeakable` (diekspor di `prompt`, dipakai M5)
+### Test
+- `tokens_test.go`, `budget_test.go`, `data_test.go` — PASS (race); aturan impor `prompt` (tanpa paket fitur) lulus
+
+## M4-T21 — `prompt.Render`, `Template`, `Params`, FuncMap, registry fixture
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/prompt/{render,funcs,fixtures}.go`: `Template`/`Rendered`/`Render` (`text/template`, `missingkey=error`, struct bertipe; galat menyebut template dan placeholder, bukan nilai data), `Params` (+`TemperatureOr`/`MaxOutputTokensOr`; nilai DB menang), FuncMap tetap `join`/`bullets`/`quote`/`vocab`, registry fixture (`RegisterFixtures` ganda → panic menyebut key)
+### Test
+- `render_test.go`, `funcs_test.go` — PASS (race)
+
+## M4-T22 — `CoreRules`, `OutputContract`, frasa, template v1, fixture
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/prompt/{core,phrases,templates_v1,fixtures_conversation}.go`: `CoreRules`, `OutputContract(closing)`, `FormalityInstruction`, `ConversationV1`/`OpeningV1` (teks §6.8.3 verbatim tanpa rujukan silang), `FixtureMinimal`/`FixtureMaximal`, fixture CONVERSATION/OPENING terdaftar saat init
+### Test
+- `templates_test.go`, `phrases_test.go` — PASS (race); render maksimum ≤ 12.000 karakter
+
+## M4-T23 — `SentenceParser`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/prompt/sentence_parser.go`: `NewSentenceParser(maxSentences)`, `Feed`/`Close`, sanitasi (buang `* # ` _`, emoji `So`, ringkas spasi lintas delta; `<`/`>` apa adanya), pemotongan kalimat (terminator + closer, tunggu bila terminator rune terakhir, soft boundary ≥ 20, potong keras 60), kalimat tanpa ucapan ditempel ke sebelumnya, kalimat 1 rune digabung ke berikutnya (kecuali di akhir stream), `Limited` setelah kalimat ke-`MaxSentences` (sisa delta dibuang dari `clean`), hasil identik untuk feed per rune dan sekaligus
+### Test
+- `sentence_parser_test.go` — PASS (race), cakupan paket 97 %
+
+## Gerbang milestone M4
+Status: LULUS
+Tanggal: 2026-10-14
+- `go build ./... && go vet ./internal/provider/... ./internal/prompt/...` — bersih
+- `go test ./internal/provider/... ./internal/prompt/... -race -count=5` — semua `ok`; suite `providertest` (LLM, TTS, STT, Evaluation, Embedding) dijalankan terhadap `fake`
+- Cakupan (`covercheck`): `internal/provider` (+ sub-paket, kecuali `providertest`) ≥ 85 %, `internal/prompt` 97 % — `covercheck` kini mendukung `except=` pada baris prefix
+- `make arch-check` memuat `TestImportRules` provider/prompt; `make lint` 0 issue; `make test`, `make test-cover`, `migrations-check`, `sqlc-check`, `tidy-check`, `vuln` hijau
+- `go test -tags integration ./internal/redisstore -run FakeFaults` — PASS
+- Review Focus 1–5 lulus (`ContentFiltered`, `NoResetEventExists`, `NoEpochSwitchAfterAudioSent`, `Truncated`, `DeadlineBeforeAudio`, `BreakerStateMachine`, `TestRotation*`, `VendorErrorForwarded`, `PollerClears`)
+- grep D-014/D-015/D-016/D-017: hanya komentar sah dan sakelar `PROVIDER_TTS_FALLBACK_ENABLED`
+
+## M4-Final — Perbaikan hasil review seluruh branch
+Status: DONE
+Tanggal: 2026-10-14
+- STT: ERROR vendor tidak lagi dihitung/diteruskan dua kali dan `Close` normal tidak menghitung kegagalan (flag `ending`); rotasi diset sinkron di `handle` (audio tidak pernah ditolak), Finalize yang belum dijawab diulang di koneksi baru, FINAL koneksi lama dibuang, trigger saat replay memicu rotasi ulang, `AudioMsSent` tidak ganda, titik replay dijepit ke audio yang tertulis, `ReportFinalTimeout` setelah close diabaikan
+- TTS: slot yang tak terdaftar tidak lagi menyebabkan nil-pointer; `audioSent` dicek ulang di bawah `g.mu` saat switch; memilih voice + mendaftarkan stream satu critical section; stream yang ditutup/deadline pemanggil tidak memicu switch
+- Router: menunggu slot semaphore bukan vonis breaker; `INVALID_RESPONSE` diulang sekali; `httpx` tidak lagi menggaungkan body mentah dan menyamarkan `sk_…`; `ttsCandidates` (kode mati) dihapus

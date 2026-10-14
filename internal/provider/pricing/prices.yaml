@@ -1,0 +1,17 @@
+# Estimated vendor prices in USD (spec 8.7.2). Every price is 0 until the benchmark task
+# fills it from the vendors' official pricing pages: do not invent numbers. provider and
+# capability are UPPERCASE; model "*" is a per-vendor wildcard.
+version: "2026-10-12"
+currency: USD
+entries:
+  - {provider: OPENAI,     capability: LLM,        model: gpt-4.1,                input_per_1m_tokens: 0, output_per_1m_tokens: 0}
+  - {provider: OPENAI,     capability: LLM,        model: gpt-4.1-mini,           input_per_1m_tokens: 0, output_per_1m_tokens: 0}
+  - {provider: DEEPSEEK,   capability: LLM,        model: deepseek-flash,         input_per_1m_tokens: 0, input_cache_hit_per_1m_tokens: 0, output_per_1m_tokens: 0}
+  - {provider: DEEPSEEK,   capability: EVALUATION, model: deepseek-v4-pro,        input_per_1m_tokens: 0, input_cache_hit_per_1m_tokens: 0, output_per_1m_tokens: 0}
+  - {provider: ELEVENLABS, capability: TTS,        model: "*",                    per_1m_characters: 0}
+  - {provider: CARTESIA,   capability: TTS,        model: "*",                    per_1m_characters: 0}
+  - {provider: OPENAI,     capability: STT,        model: gpt-live-transcribe,    per_audio_hour: 0}
+  - {provider: ELEVENLABS, capability: STT,        model: scribe_v2_realtime,     per_audio_hour: 0}
+  - {provider: CARTESIA,   capability: STT,        model: ink-2,                  per_audio_hour: 0}
+  - {provider: OPENAI,     capability: EVALUATION, model: gpt-4.1,                input_per_1m_tokens: 0, output_per_1m_tokens: 0}
+  - {provider: OPENAI,     capability: EMBEDDING,  model: text-embedding-3-small, input_per_1m_tokens: 0}

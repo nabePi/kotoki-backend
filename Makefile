@@ -75,7 +75,8 @@ migrations-check:
 modelname-check:
 	$(GO) run ./test/tools/modelcheck ./internal ./cmd
 
-arch-check:     ## §2.2 aturan 5: api & worker tanpa cgo (depguard menangani impor langsung)
+arch-check:     ## §2.2 aturan 5: api & worker tanpa cgo (depguard menangani impor langsung); aturan impor provider/prompt
+	$(GO) test ./internal/provider ./internal/prompt -run 'TestImportRules' -count=1
 	@pkgs=""; for p in api worker; do [ -d cmd/$$p ] && pkgs="$$pkgs ./cmd/$$p"; done; \
 	if [ -z "$$pkgs" ]; then echo 'arch-check: cmd/api dan cmd/worker belum ada, dilewati (dibuat di Task 23)'; exit 0; fi; \
 	CGO_ENABLED=0 $(GO) build -o /dev/null $$pkgs || exit 1; \
