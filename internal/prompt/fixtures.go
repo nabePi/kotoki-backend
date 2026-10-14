@@ -8,6 +8,9 @@ import (
 var (
 	fixtureMu sync.Mutex
 	fixtures  = map[string]func() []any{}
+	// builtinFixtures re-register the fixtures owned by this package (CONVERSATION, OPENING)
+	// after ResetFixturesForTest.
+	builtinFixtures []func()
 )
 
 // RegisterFixtures lets the package that owns a prompt key (Bab 9–12) register the data values
@@ -33,9 +36,13 @@ func Fixtures(key string) []any {
 	return fn()
 }
 
-// ResetFixturesForTest clears the registry; tests only.
+// ResetFixturesForTest restores the registry to the fixtures this package owns; tests only.
 func ResetFixturesForTest() {
 	fixtureMu.Lock()
-	defer fixtureMu.Unlock()
 	fixtures = map[string]func() []any{}
+	builtin := builtinFixtures
+	fixtureMu.Unlock()
+	for _, f := range builtin {
+		f()
+	}
 }

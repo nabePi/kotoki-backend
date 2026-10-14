@@ -22,3 +22,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 
 ## M1-T18 — ambang coverage adapter
 - Ambang `internal/postgres|redisstore|amqp` dipindah ke `thresholds.integration.txt` + `make test-cover-integration`; `TOTAL internal` run unit mengecualikan adapter (`except=`).
+
+## M4-T22 — template v1 dan fixture maksimum
+- Baris `Memory rules` di template seed v1 mengakhiri kalimat dengan "(Bab 11 §11.7)" pada spec; itu rujukan silang dokumen, bukan teks prompt, sehingga dibuang dari `prompt.ConversationV1`/`OpeningV1`. **Seed M3 MUST memakai teks konstanta ini**, bukan menyalin ulang dari spec.
+- `FixtureMaximal` mengisi `persona` (3000 rune), `situation` (2000), `greeting_hint` (200) pada batas penuh dan jumlah item pada batas (6 task, 8 constraint, 8 grammar target, 20 vocab hint, 20 memory item, 3 episode), tetapi panjang tiap item berulang dibuat realistis (40–60 rune). Semua field pada batas literal sekaligus sudah melebihi 12.000 karakter tanpa teks template (3000 + 2000 + 6×200 + 8×200 + 8×100 > 8.600), jadi syarat "fixture maksimum ≤ 12.000" hanya bisa dipenuhi dengan cara ini (render maksimum saat ini ≈ 10,9 rb karakter CONVERSATION dan 11,2 rb OPENING).
+- `prompt.ResetFixturesForTest` mengembalikan fixture bawaan paket (CONVERSATION/OPENING) alih-alih mengosongkan registry sepenuhnya.

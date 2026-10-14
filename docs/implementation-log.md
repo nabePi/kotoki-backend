@@ -730,3 +730,11 @@ Tanggal: 2026-10-14
 - `internal/prompt/{render,funcs,fixtures}.go`: `Template`/`Rendered`/`Render` (`text/template`, `missingkey=error`, struct bertipe; galat menyebut template dan placeholder, bukan nilai data), `Params` (+`TemperatureOr`/`MaxOutputTokensOr`; nilai DB menang), FuncMap tetap `join`/`bullets`/`quote`/`vocab`, registry fixture (`RegisterFixtures` ganda → panic menyebut key)
 ### Test
 - `render_test.go`, `funcs_test.go` — PASS (race)
+
+## M4-T22 — `CoreRules`, `OutputContract`, frasa, template v1, fixture
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/prompt/{core,phrases,templates_v1,fixtures_conversation}.go`: `CoreRules`, `OutputContract(closing)`, `FormalityInstruction`, `ConversationV1`/`OpeningV1` (teks §6.8.3 verbatim tanpa rujukan silang), `FixtureMinimal`/`FixtureMaximal`, fixture CONVERSATION/OPENING terdaftar saat init
+### Test
+- `templates_test.go`, `phrases_test.go` — PASS (race); render maksimum ≤ 12.000 karakter

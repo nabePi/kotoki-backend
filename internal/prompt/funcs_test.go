@@ -37,6 +37,7 @@ func TestParamsJSONOmitsNil(t *testing.T) {
 func TestFixturesRegistry(t *testing.T) {
 	prompt.ResetFixturesForTest()
 	t.Cleanup(prompt.ResetFixturesForTest)
+	require.Len(t, prompt.Fixtures("CONVERSATION"), 2, "the package's own fixtures survive a reset")
 	require.Nil(t, prompt.Fixtures("EVALUATION"))
 	calls := 0
 	prompt.RegisterFixtures("EVALUATION", func() []any { calls++; return []any{1, "two"} })
