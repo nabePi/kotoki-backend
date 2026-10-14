@@ -103,6 +103,13 @@ func (h *HealthTracker) Record(p Name, c Capability, err error, latency time.Dur
 	e.lastErrKind, e.lastErrAt = kind, h.clk.Now()
 }
 
+// Touch registers a (vendor, capability) so it shows up in snapshots before its first call.
+func (h *HealthTracker) Touch(p Name, c Capability) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.entry(p, c)
+}
+
 // IncActive and DecActive track in-flight streams/requests.
 func (h *HealthTracker) IncActive(p Name, c Capability) {
 	h.mu.Lock()

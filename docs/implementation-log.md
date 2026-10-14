@@ -663,3 +663,13 @@ Tanggal: 2026-10-14
 - `internal/redisstore/fakefaults.go`: `FakeFaults` membungkus `fake.Poller` dengan fetch `GET` (`redis.Nil` → tanpa fault); snapshot bertahan ≤ 10 s saat Redis mati lalu dikosongkan
 ### Test
 - `fakefaults_integration_test.go` (integration, Podman): polling set/del key, key tak ada, outage dengan jam palsu, dokumen rusak — PASS
+
+## M4-T14 — Router inti
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/router.go`: interface `RealtimeRouter`/`AsyncRouter`/`RoutedSTTSession`/`Generation`/`GenerationSummary`/`TextRequest`/`TextResult`, `ProcessRole`, `RouterDeps`, `NewRouter` (validasi config + adapter), breaker & semaphore per (vendor, kapabilitas) (wait STT 0, LLM/TTS 100 ms realtime atau 30 s worker, EVALUATION/EMBEDDING 30 s), `admit` (breaker lalu semaphore, fail-fast `circuit_open`), `ttsCandidates` (primary + fallback karakter, `voice_binding_missing`, circuit-open), `HealthSnapshot`, `llmModel`/`evaluationModel`/`textModel`/`ttsVendors`; `Breaker.WouldAllow`, `HealthTracker.Touch`
+### Test
+- `router_test.go`, `router_helpers_test.go` (+ `export_test.go`) — PASS (race)
+### Penyimpangan
+- Asersi `var _ RealtimeRouter/AsyncRouter` dipindah ke Task 18 (method lain menyusul di T15–T18)

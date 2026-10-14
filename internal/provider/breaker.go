@@ -153,3 +153,18 @@ func (t Ticket) Done(err error) {
 		tr = append(tr, b.move(BreakerOpen))
 	}
 }
+
+// WouldAllow reports whether Allow would admit a call right now, without consuming a
+// probe slot or changing state.
+func (b *Breaker) WouldAllow() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch b.state {
+	case BreakerOpen:
+		return !b.clk.Now().Before(b.openedAt.Add(b.cfg.OpenDuration))
+	case BreakerHalfOpen:
+		return b.probes < b.cfg.HalfOpenProbes
+	default:
+		return true
+	}
+}
