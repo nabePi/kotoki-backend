@@ -655,3 +655,11 @@ Tanggal: 2026-10-14
 - `internal/provider/fake/{eval,embedding,oneshot}.go` + `fixtures/kotoki_fake_example.json`: fixture JSON ter-embed (`FAKE_EVAL_FIXTURE_DIR` menimpa), `"{{score}}"` → `50 + fnv32(RequestID) % 41`, `SchemaName` divalidasi `[a-z0-9_]{1,64}` (tak bisa keluar dari direktori), embedding 1536 dim via trigram hashing + L2, fault error/timeout/slow lewat `oneShot`; `providertest/{eval,embedding}.go`: `EvaluationSuite`, `EmbeddingSuite`
 ### Test
 - `fake/eval_test.go`, `fake/embedding_test.go` — PASS (race)
+
+## M4-T13 — `redisstore.FakeFaults`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/redisstore/fakefaults.go`: `FakeFaults` membungkus `fake.Poller` dengan fetch `GET` (`redis.Nil` → tanpa fault); snapshot bertahan ≤ 10 s saat Redis mati lalu dikosongkan
+### Test
+- `fakefaults_integration_test.go` (integration, Podman): polling set/del key, key tak ada, outage dengan jam palsu, dokumen rusak — PASS
