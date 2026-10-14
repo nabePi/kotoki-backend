@@ -581,3 +581,12 @@ Tanggal: 2026-10-14
 - `internal/provider/breaker.go`: `Breaker`/`Ticket`/`BreakerConfig`, 9 transisi §8.5.4, window bergeser, probe half-open (tiket usang diabaikan lewat epoch), `onTransition` dipanggil di luar lock
 ### Test
 - `breaker_test.go`: `TestBreakerStateMachine` (8 subtest), `TestBreakerConcurrent` (50 goroutine) — PASS `-race -count=20`
+
+## M4-T5 — Semaphore konkurensi dan `HealthTracker`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/semaphore.go`: `semaphoreSlot` (try atau tunggu `wait`; penuh → `RATE_LIMITED{local_concurrency}` yang tidak dihitung breaker; ctx habis → `CANCELLED`/`TIMEOUT`; release idempoten)
+- `internal/provider/health.go`: `HealthTracker` (60 bucket × 1 s, p95 latensi, `last_error` bertahan di luar window), `ProviderHealth` dengan bentuk JSON §8.5.5, `BreakerState.String()`
+### Test
+- `semaphore_test.go`, `health_test.go` — PASS (race)
