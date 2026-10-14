@@ -70,8 +70,8 @@ func TestQuerySpanAndMetric(t *testing.T) {
 	span := rec.Find("db.Ping")
 	attrs := map[string]string{}
 	for _, kv := range span.Attributes {
-		attrs[string(kv.Key)] = kv.Value.Emit()
-		require.NotContains(t, strings.ToUpper(kv.Value.Emit()), "SELECT", string(kv.Key))
+		attrs[string(kv.Key)] = kv.Value.String()
+		require.NotContains(t, strings.ToUpper(kv.Value.String()), "SELECT", string(kv.Key))
 	}
 	require.Equal(t, "postgresql", attrs["db.system"])
 	require.Equal(t, "Ping", attrs["db.operation.name"])

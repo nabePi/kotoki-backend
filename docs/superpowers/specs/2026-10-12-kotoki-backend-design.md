@@ -54,7 +54,7 @@ Platform latihan **kaiwa (percakapan) bahasa Jepang** dengan AI secara real-time
 | ID | Keputusan |
 |---|---|
 | D-001 | Repo ini **hanya backend**. Go module di root repo (tidak ada subfolder `backend/`). Module path `github.com/nabePi/kotoki-backend`. [builder call] |
-| D-002 | Go **1.25**. Satu `go.mod`. Tiga binary: `cmd/api`, `cmd/realtime`, `cmd/worker`, plus tool `cmd/kotoki-cli` (test client). Tidak ada `cmd/migrate`: migration dijalankan dengan CLI `migrate` dari golang-migrate (target Makefile `migrate-up`/`migrate-down`, Job migration di Kubernetes). [builder call] |
+| D-002 | Go **1.27**. Satu `go.mod`. Tiga binary: `cmd/api`, `cmd/realtime`, `cmd/worker`, plus tool `cmd/kotoki-cli` (test client). Tidak ada `cmd/migrate`: migration dijalankan dengan CLI `migrate` dari golang-migrate (target Makefile `migrate-up`/`migrate-down`, Job migration di Kubernetes). [builder call] |
 | D-003 | Library baseline (allowlist; library di luar daftar ini butuh perubahan register) [builder call]: HTTP router `github.com/go-chi/chi/v5`; PostgreSQL `github.com/jackc/pgx/v5` (pgxpool) + **sqlc** untuk query type-safe; pgvector `github.com/pgvector/pgvector-go`; YAML `gopkg.in/yaml.v3` (hanya `prices.yaml`); Unicode normalisasi `golang.org/x/text/unicode/norm` (NFC/NFKC password & nickname); JSON Schema validator `github.com/santhosh-tekuri/jsonschema/v6` (validasi `output_schema` prompt & output LLM); migration **golang-migrate** (file `migrations/000001_name.up.sql` / `.down.sql`, 6 digit; library-nya boleh dipakai di test); WebSocket `github.com/coder/websocket`; Redis `github.com/redis/go-redis/v9`; RabbitMQ `github.com/rabbitmq/amqp091-go`; JWT `github.com/golang-jwt/jwt/v5`; password hash **argon2id** (`golang.org/x/crypto/argon2`); concurrency helper `golang.org/x/sync` (errgroup, semaphore); UUID `github.com/google/uuid` (**UUIDv7** untuk semua ID baru); logging `log/slog` (JSON); **metrik** `github.com/prometheus/client_golang` (endpoint `/metrics`); **trace** OpenTelemetry SDK + exporter OTLP + `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` (OTel hanya untuk trace, bukan metrik); config dari environment variable (`github.com/caarlos0/env/v11`); test `testing` + `github.com/stretchr/testify` + `github.com/testcontainers/testcontainers-go` beserta modul `postgres`, `redis`, `rabbitmq`. Opus codec `gopkg.in/hraban/opus.v2` (cgo, libopus). VAD `github.com/maxhawkins/go-webrtcvad` (cgo, WebRTC VAD). Adapter provider (STT/LLM/TTS/evaluation/embedding) memakai `net/http` + `coder/websocket` langsung, **tanpa SDK vendor**. |
 | D-004 | Dependency injection: **manual wiring** di `cmd/*/main.go` (tanpa framework DI). Tanpa ORM. |
 | D-005 | **Layout per fitur (package by feature) dengan pemisahan handler / service / repository** (detail §2.2). Paket fitur (`auth`, `balance`, `session`, `content`, `conversation`, `prompt`, `provider`, `evaluation`, `memory`, `learner`, `summary`, `admin`, `events`) berisi tipe domain, aturan bisnis (`Service`), dan **interface port yang didefinisikan di sisi pemakai** (mis. `session.Repository`). Paket fitur MUST NOT mengimpor paket adapter (`postgres`, `redisstore`, `amqp`, `httpapi`, `wsgateway`, `jobs`, `mailer`, vendor adapter `provider/<vendor>`) maupun library infrastruktur (`chi`, `pgx`, `go-redis`, `amqp091`, `coder/websocket`). Adapter mengimplementasikan port; handler (`httpapi`, `wsgateway`) hanya decode → panggil `Service` → encode. Ditegakkan `depguard` di `golangci-lint` (Bab 14). [builder call] |
@@ -13103,7 +13103,7 @@ Purge asinkron — job `account_purge` (flag `cleanup`, tiap 15 menit; lock & ti
 
 Nama Deployment worker dan grace mengikuti Bab 9 §9.8 (grace = `WORKER_SHUTDOWN_GRACE` + 10 s; env per Deployment: core `25s`, evaluation `200s`, memory `120s`, learner `60s` — ≥ handler timeout Bab 9 §9.6.2). Replika min/max dan autoscaling ditetapkan bab ini (§13.10.3). Worker men-set `WORKER_HTTP_ADDR=:9090` (port `ops`); api/realtime men-set `OPS_ADDR=:9090`.
 
-Go 1.25 menyetel `GOMAXPROCS` sesuai CPU limit container secara otomatis; jangan override. Angka resource adalah titik awal dan divalidasi load test (§13.12); perubahan dicatat di register.
+Go 1.27 menyetel `GOMAXPROCS` sesuai CPU limit container secara otomatis; jangan override. Angka resource adalah titik awal dan divalidasi load test (§13.12); perubahan dicatat di register.
 
 Semua Deployment: `strategy.rollingUpdate.maxSurge: 25%`, `maxUnavailable: 0`; `topologySpreadConstraints` zone (`maxSkew: 1`, `DoNotSchedule`) dan hostname (`maxSkew: 1`, `ScheduleAnyway`); `priorityClassName`: realtime `kotoki-realtime-high`, lainnya `kotoki-default`; label standar `app.kubernetes.io/name`, `app.kubernetes.io/component`, `app.kubernetes.io/version`.
 
@@ -13344,7 +13344,7 @@ Urutan deploy (pipeline): (1) `kubectl apply -k overlays/<env>` untuk Job `kotok
 
 ```dockerfile
 # syntax=docker/dockerfile:1.7
-FROM golang:1.25-trixie AS build
+FROM golang:1.27-trixie AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends pkg-config libopus-dev libopusfile-dev \
  && rm -rf /var/lib/apt/lists/*
@@ -13375,7 +13375,7 @@ ENTRYPOINT ["/usr/local/bin/realtime"]
 
 ```dockerfile
 # syntax=docker/dockerfile:1.7
-FROM golang:1.25-trixie AS build
+FROM golang:1.27-trixie AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -14143,7 +14143,7 @@ Versi golangci-lint dipin di `Makefile` (`GOLANGCI_LINT_VERSION := v2.1.6` atau 
 
 #### 14.10.1 Prasyarat
 
-Go 1.25, Docker Engine + Compose v2, GNU make, gcc, pkg-config, libopus + libopusfile (header):
+Go 1.27, Docker Engine + Compose v2, GNU make, gcc, pkg-config, libopus + libopusfile (header):
 - Debian/Ubuntu: `sudo apt-get install -y build-essential pkg-config libopus-dev libopusfile-dev`
 - macOS: `xcode-select --install && brew install pkg-config opus opusfile`
 
@@ -14472,7 +14472,7 @@ Semua target test memakai `-race` (§14.1). Paket cgo (`hraban/opus`, `go-webrtc
 ```bash
 # 1. clone & tools
 git clone git@github.com:nabePi/kotoki-backend.git && cd kotoki-backend
-go version            # harus go1.25.x
+go version            # harus go1.27.x
 pkg-config --modversion opus opusfile   # libopus & libopusfile terpasang
 
 # 2. konfigurasi
@@ -14641,7 +14641,7 @@ Trigger: `pull_request` (semua branch) dan `push` ke `main` serta tag `v*`. `con
 
 | Job | Kapan | Langkah | Timeout |
 |---|---|---|---|
-| `lint` | PR, push | checkout (`fetch-depth: 0`), setup-go 1.25 (cache), `apt-get install pkg-config libopus-dev libopusfile-dev`, `make tidy-check sqlc-check migrations-check modelname-check`, golangci-lint-action (versi `GOLANGCI_LINT_VERSION`; termasuk depguard §14.9.5), `make vuln`, `make arch-check` (`CGO_ENABLED=0` build `cmd/api`/`cmd/worker` + cek graf impor), gitleaks | 10 m |
+| `lint` | PR, push | checkout (`fetch-depth: 0`), setup-go 1.27 (cache), `apt-get install pkg-config libopus-dev libopusfile-dev`, `make tidy-check sqlc-check migrations-check modelname-check`, golangci-lint-action (versi `GOLANGCI_LINT_VERSION`; termasuk depguard §14.9.5), `make vuln`, `make arch-check` (`CGO_ENABLED=0` build `cmd/api`/`cmd/worker` + cek graf impor), gitleaks | 10 m |
 | `unit` | PR, push | setup + libopus, `make test-cover`, upload `coverage.out`; bandingkan dengan artifact coverage `main` terakhir (gagal bila turun > 1 poin per package) | 10 m |
 | `integration` | PR, push | setup + libopus, `make test-integration` (Docker tersedia di runner; testcontainers) | 25 m |
 | `e2e` | PR, push (needs `unit`) | setup + libopus, `make test-e2e` | 20 m |
@@ -14669,7 +14669,7 @@ jobs:
       - uses: actions/checkout@<sha>          # v4
         with: {fetch-depth: 0}
       - uses: actions/setup-go@<sha>          # v5
-        with: {go-version: "1.25", cache: true}
+        with: {go-version: "1.27", cache: true}
       - run: sudo apt-get update && sudo apt-get install -y pkg-config libopus-dev libopusfile-dev
       - run: make tidy-check sqlc-check migrations-check modelname-check
       - uses: golangci/golangci-lint-action@<sha>   # v8
@@ -14683,7 +14683,7 @@ jobs:
     steps:
       - uses: actions/checkout@<sha>
       - uses: actions/setup-go@<sha>
-        with: {go-version: "1.25", cache: true}
+        with: {go-version: "1.27", cache: true}
       - run: sudo apt-get update && sudo apt-get install -y pkg-config libopus-dev libopusfile-dev
       - run: make test-cover
       - uses: actions/upload-artifact@<sha>   # v4
@@ -14694,7 +14694,7 @@ jobs:
     steps:
       - uses: actions/checkout@<sha>
       - uses: actions/setup-go@<sha>
-        with: {go-version: "1.25", cache: true}
+        with: {go-version: "1.27", cache: true}
       - run: sudo apt-get update && sudo apt-get install -y pkg-config libopus-dev libopusfile-dev
       - run: make test-integration
   e2e:
@@ -14704,7 +14704,7 @@ jobs:
     steps:
       - uses: actions/checkout@<sha>
       - uses: actions/setup-go@<sha>
-        with: {go-version: "1.25", cache: true}
+        with: {go-version: "1.27", cache: true}
       - run: sudo apt-get update && sudo apt-get install -y pkg-config libopus-dev libopusfile-dev
       - run: make test-e2e
   build-images:

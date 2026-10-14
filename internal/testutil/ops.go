@@ -3,6 +3,7 @@
 package testutil
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -15,7 +16,7 @@ import (
 // FreeAddr returns a loopback address with a currently free port.
 func FreeAddr(t testing.TB) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("testutil: free port: %v", err)
 	}
@@ -74,7 +75,7 @@ func AssertOpsEndpoints(t testing.TB, addr string, exited <-chan error) {
 // AssertNothingListening fails if addr accepts TCP connections.
 func AssertNothingListening(t testing.TB, addr string) {
 	t.Helper()
-	conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+	conn, err := (&net.Dialer{Timeout: 200 * time.Millisecond}).DialContext(context.Background(), "tcp", addr)
 	if err == nil {
 		_ = conn.Close()
 		t.Fatalf("testutil: %s unexpectedly accepts connections", addr)

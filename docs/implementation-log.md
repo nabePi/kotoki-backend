@@ -260,3 +260,14 @@ Tanggal: 2026-10-14
 - Tiga binary hidup: `:9090/:9091/:9092` `/healthz`=`{"status":"ok"}`, `/readyz`=`{"status":"ready"}`, `/metrics` memuat `go_goroutines` dan `kotoki_db_pool_max_conns` (10/6/4); SIGTERM → `stopped`
 - `make docker-build` → api/realtime/worker/migrate ter-build; `podman run --rm kotoki/api:<VERSION>` exit 1 dengan `DB_URL: required`
 - `make up-obs` + `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317`: trace `redis.PING` (service `kotoki-api`) tercari di Tempo via Grafana (span `db.Ping`/`db.tx` baru muncul saat fitur memanggilnya)
+
+## Go 1.27
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- Direktif `go 1.27` (toolchain lokal go1.27.2); `go get -u ./...` menaikkan semua dependensi (pin lama untuk `go 1.25` dicabut: otel, x/sys, client_golang, migrate, testcontainers, pgx, go-redis, …)
+- golangci-lint v2.14.0 (dibangun dengan go1.27.2; `GOTOOLCHAIN=go1.25.5` tidak diperlukan lagi), govulncheck v1.9.0 (v1.1.4 crash di go1.27), Dockerfile `golang:1.27-trixie`, CI `go-version: "1.27"`
+- Perbaikan lint baru (noctx, gosec G101/G204/G703, staticcheck `Value.Emit` → `Value.String`)
+- `make vuln` → "No vulnerabilities found" (menutup GO-2026-6629 x/text dan temuan stdlib net/http)
+### Test
+- make lint 0 issue, make test, make test-integration (podman, -p 1), make test-cover, arch/sqlc/migrations/modelname/tidy check — PASS

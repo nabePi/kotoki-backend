@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM golang:1.25-trixie AS build
+FROM golang:1.27-trixie AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends pkg-config libopus-dev libopusfile-dev \
  && rm -rf /var/lib/apt/lists/*

@@ -132,12 +132,12 @@ func TestEndDoesNotLeakErrorText(t *testing.T) {
 	var all []string
 	all = append(all, s.Status.Description)
 	for _, kv := range s.Attributes {
-		all = append(all, kv.Value.Emit())
+		all = append(all, kv.Value.String())
 	}
 	var stack string
 	for _, e := range s.Events {
 		for _, kv := range e.Attributes {
-			all = append(all, kv.Value.Emit())
+			all = append(all, kv.Value.String())
 			if kv.Key == "exception.stacktrace" {
 				stack = kv.Value.AsString()
 			}

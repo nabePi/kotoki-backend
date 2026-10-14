@@ -15,7 +15,7 @@ COMPOSE ?= $(CONTAINER_ENGINE) compose
 MIGRATE_IMAGE   := docker.io/migrate/migrate:v4.18.3
 COMPOSE_NETWORK := kotoki_default
 MIGRATE_DB_URL  := postgres://kotoki:kotoki@postgres:5432/kotoki?sslmode=disable
-GOLANGCI_LINT_VERSION := v2.1.6
+GOLANGCI_LINT_VERSION := v2.14.0
 VERSION         ?= $(shell git describe --tags --always --dirty)
 GIT_COMMIT      ?= $(shell git rev-parse --short HEAD)
 N               ?= 1
@@ -107,7 +107,7 @@ lint:           ## golangci-lint $(GOLANGCI_LINT_VERSION); pasang: GOBIN=$$PWD/b
 	PATH="$(CURDIR)/bin/tools:$$PATH" golangci-lint run ./...
 
 vuln:
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 run-api:
 	$(GO) run ./cmd/api

@@ -57,9 +57,9 @@ func TestHookSpan(t *testing.T) {
 	span := rec.Find("redis.SET")
 	attrs := map[string]string{}
 	for _, kv := range span.Attributes {
-		attrs[string(kv.Key)] = kv.Value.Emit()
-		require.NotContains(t, kv.Value.Emit(), id)
-		require.NotContains(t, kv.Value.Emit(), "secretvalue")
+		attrs[string(kv.Key)] = kv.Value.String()
+		require.NotContains(t, kv.Value.String(), id)
+		require.NotContains(t, kv.Value.String(), "secretvalue")
 	}
 	require.Equal(t, "redis", attrs["db.system"])
 	require.Equal(t, "kotoki:session:*:rt", attrs["kotoki.redis.key_prefix"])

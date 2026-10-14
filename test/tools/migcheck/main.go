@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -80,7 +81,7 @@ func modifiedGuard(tagExists bool, modified []string) error {
 }
 
 func git(args ...string) (string, error) {
-	out, err := exec.Command("git", args...).Output()
+	out, err := exec.CommandContext(context.Background(), "git", args...).Output() //nolint:gosec // dev CLI: fixed "git" binary, arguments from our own flags
 	return strings.TrimSpace(string(out)), err
 }
 
