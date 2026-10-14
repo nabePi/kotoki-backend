@@ -619,3 +619,13 @@ Tanggal: 2026-10-14
 - `faults_test.go`, `config_env_test.go` — PASS (race); termasuk `TestPollerClearsAfterStaleWindow` (review focus 5)
 ### Penyimpangan
 - Hash keputusan = FNV-64a + finalizer splitmix64 (FNV saja bias pada bit tinggi untuk counter berurutan)
+
+## M4-T9 — Fake LLM + `providertest.LLMSuite`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/fake/llm.go` (+ `errors.go`): `LLM` deterministik (template opening/regular, `#long` ×5, delta 3 rune, `MaxTokens`/`Stop`, usage nyata, fase gagal start/before_first/mid/hang, fault runtime error/slow/timeout, override template), `internal/provider/providertest/llm.go`: `LLMSuite` (7 subtest) untuk fake dan adapter M9
+### Test
+- `fake/llm_test.go` — PASS (race)
+### Penyimpangan
+- Lihat ledger: pembagian template (4 reguler + opening) dan `SyncErrorIsProviderError` memakai ctx yang sudah dibatalkan

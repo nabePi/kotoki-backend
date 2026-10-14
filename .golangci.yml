@@ -132,7 +132,7 @@ linters:
         # 6. Helper test tidak masuk kode produksi.
         no-test-deps-in-prod:
           list-mode: lax
-          files: ["$all", "!$test", "!**/internal/testutil/**", "!**/test/**"]
+          files: ["$all", "!$test", "!**/internal/testutil/**", "!**/internal/provider/providertest/**", "!**/test/**"]
           deny:
             - {pkg: "github.com/nabePi/kotoki-backend/internal/testutil", desc: "hanya untuk *_test.go"}
             - {pkg: "github.com/stretchr/testify", desc: "hanya untuk *_test.go"}
@@ -157,6 +157,9 @@ linters:
         linters: [forbidigo]
         text: 'fmt\.Print|log\.'
       - path-except: 'internal/(auth|balance|session|content|conversation|prompt|provider|evaluation|memory|learner|summary|admin|events)/'
+        linters: [forbidigo]
+        text: 'time\.Now'
+      - path: 'internal/provider/providertest/'
         linters: [forbidigo]
         text: 'time\.Now'
       - path: 'internal/provider/(elevenlabs|deepgram|openai|gemini|azure)/'
