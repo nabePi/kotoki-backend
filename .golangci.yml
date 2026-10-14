@@ -149,7 +149,7 @@ linters:
     generated: lax
     rules:
       - path: '_test\.go'
-        linters: [gosec, forbidigo, noctx, contextcheck]
+        linters: [gosec, forbidigo, noctx, contextcheck, bodyclose]
       - path: 'internal/(platform/config|testutil)/'
         linters: [forbidigo]
         text: 'os\.Getenv'

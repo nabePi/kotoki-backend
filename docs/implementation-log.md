@@ -706,3 +706,11 @@ Tanggal: 2026-10-14
 - `internal/provider/async.go`: `doAsync` (breaker + semaphore per attempt, retry ke vendor yang sama, `Retry-After` ≤ 30 s, non-retryable/cancelled langsung gagal), `GenerateJSON` (3 attempt, backoff 1 s/4 s, temperatur negatif → 0,2, body non-JSON → `INVALID_RESPONSE`), `Evaluation()` (satu attempt), `CompleteText` (worker 3 / realtime 1 attempt, `CONTENT_FILTERED` non-retryable), `Embed` (3 attempt, 500 ms/2 s), metrik/biaya/health per attempt; asersi `RealtimeRouter`/`AsyncRouter`; `RouterDeps.AsyncWait`
 ### Test
 - `async_test.go` (16 tes) — PASS (race, count=3)
+
+## M4-T19 — `provider/httpx`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/httpx/{client,classify,sse}.go`: `NewClient` (HTTP/2, pool 256/host, idle 90 s, TLS 3 s, tanpa timeout respons), `ClassifyHTTP` (tabel §8.3, `Retry-After` detik atau HTTP-date relatif header `Date`, kuota habis tidak retryable, pesan ≤ 512 byte dan disamarkan), `Redact`, `ClassifyBody`, `ClassifyError`, `ClassifyWSClose`, `SSEReader`
+### Test
+- `httpx_test.go` — PASS (race)
