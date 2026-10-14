@@ -808,3 +808,11 @@ Tanggal: 2026-10-14
 - `BalanceRepoSuite`: hook `Unreconciled`; harness Postgres menyediakan `SeedSession` (sesi per user baru)
 ### Test
 - `balance_repo_integration_test.go`: suite kontrak (fake + Postgres), reserve+settle contoh 1 bersih, `chk_ledger_shape`, `chk_reservation_state`, R1/R3/R4/R6 mendeteksi pelanggaran — PASS (Podman)
+
+## M3-T6 — Domain konten, `ScenarioFormality`, `SpeakingRate`, voice/snapshot
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/content/{types,character}.go`: tipe §6.5 (Topic, Scenario, ScenarioVersion, PromptVersion + `Template()`, Character/Voice/TTSBinding, CharacterSnapshot/SessionSnapshot), `ScenarioFormality`, `DifficultyBand`, `DefaultStyle`, `SpeakingRate` (clamp 0,80–1,05), `NormalizeProviderName`, `MarshalJSONB`/`ParseSnapshot` (key tak dikenal ditolak); `content` hanya mengimpor `prompt`
+### Test
+- `types_test.go` — PASS; `make arch-check` bersih
