@@ -386,3 +386,12 @@ Tanggal: 2026-10-14
 - Kontrak repo diperketat: `UpdateConsents` hanya menggeser `terms_accepted_at` bila versi berubah (`repotest` kasus baru; fake diperbaiki)
 ### Test
 - go test ./internal/auth ./internal/testutil/... -race — PASS
+
+## M2-T13 — TicketService + redisstore.TicketStore
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `auth.TicketService.Issue` (§3.11): user ACTIVE (terms usang tetap boleh), sesi RESERVED sebelum deadline / STARTING / ACTIVE, selain itu `SESSION_START_DEADLINE_PASSED` / `SESSION_NOT_CONNECTABLE {status}`; error store → `SERVICE_UNAVAILABLE`; `realtime_url` = `REALTIME_PUBLIC_URL` + `/api/v1/realtime`
+- `redisstore.TicketStore`: key `kotoki:ws_ticket:{hex sha256(ticket)}`, `SET NX EX`, ulang sekali bila tabrakan, `GETDEL` untuk Consume; `fakes.TicketSessionReader`/`fakes.TicketStore`
+### Test
+- go test ./internal/auth -run Ticket; `-tags integration ./internal/redisstore -run Ticket` (Podman) — PASS (single-use konkuren, expiry, Redis down)
