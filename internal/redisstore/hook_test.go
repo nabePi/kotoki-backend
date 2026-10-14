@@ -1,10 +1,11 @@
 package redisstore
 
 import (
-	"github.com/nabePi/kotoki-backend/internal/platform/config"
-	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"strings"
 	"testing"
+
+	"github.com/nabePi/kotoki-backend/internal/platform/config"
+	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 )
 
 func TestKeyPrefix(t *testing.T) {
