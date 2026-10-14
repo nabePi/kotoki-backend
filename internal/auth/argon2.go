@@ -101,7 +101,7 @@ func parsePHC(encoded string) (phc, bool) {
 	var err1, err2 error
 	out.salt, err1 = base64.RawStdEncoding.DecodeString(parts[4])
 	out.k, err2 = base64.RawStdEncoding.DecodeString(parts[5])
-	if err1 != nil || err2 != nil || len(out.salt) == 0 || len(out.k) == 0 {
+	if err1 != nil || err2 != nil || len(out.salt) == 0 || len(out.k) != argonKeyLen {
 		return phc{}, false
 	}
 	return out, true
@@ -119,10 +119,10 @@ func (h *Argon2Hasher) Verify(ctx context.Context, plaintext, encoded string) (b
 	}
 	defer h.release()
 	var key []byte
-	if parsed.m == h.cfg.MemoryKiB && parsed.t == h.cfg.Iterations && parsed.p == h.cfg.Parallelism && len(parsed.k) == argonKeyLen {
+	if parsed.m == h.cfg.MemoryKiB && parsed.t == h.cfg.Iterations && parsed.p == h.cfg.Parallelism {
 		key = h.derive([]byte(plaintext), parsed.salt)
 	} else {
-		key = argon2.IDKey([]byte(plaintext), parsed.salt, parsed.t, parsed.m, parsed.p, uint32(len(parsed.k)))
+		key = argon2.IDKey([]byte(plaintext), parsed.salt, parsed.t, parsed.m, parsed.p, argonKeyLen)
 	}
 	return subtle.ConstantTimeCompare(key, parsed.k) == 1, nil
 }

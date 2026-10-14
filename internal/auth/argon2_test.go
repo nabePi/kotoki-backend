@@ -61,7 +61,7 @@ func TestArgon2ConcurrencyLimit(t *testing.T) {
 	cfg.MaxConcurrent, cfg.MaxWait = 1, time.Millisecond
 	h := NewArgon2Hasher(cfg)
 	started, release := make(chan struct{}), make(chan struct{})
-	h.derive = func(pw, salt []byte) []byte {
+	h.derive = func(_, _ []byte) []byte {
 		close(started)
 		<-release
 		return make([]byte, 32)
@@ -75,7 +75,7 @@ func TestArgon2ConcurrencyLimit(t *testing.T) {
 
 	close(release)
 	require.NoError(t, <-done)
-	h.derive = func(pw, salt []byte) []byte { return make([]byte, 32) }
+	h.derive = func(_, _ []byte) []byte { return make([]byte, 32) }
 	_, err = h.Hash(context.Background(), "another password!!")
 	require.NoError(t, err)
 }
