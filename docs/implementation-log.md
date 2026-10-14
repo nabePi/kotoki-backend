@@ -896,3 +896,8 @@ Tanggal: 2026-10-14
 ## M3-T19 — `session.RuntimeService`
 - `internal/session/runtime.go`: fasad ber-fence dengan signature §7.13.1 (`GetForAttach/ClaimRuntime/MarkStarting/Activate/FailStart/AddDisconnected/MarkHandoff/BeginEnding/Complete/Fail`) di atas `Service`; `Settlement` dari baris sesi (waktu nol bila sesi tak pernah mulai). `RuntimeRecord` mendapat `CharacterID`; `session.RuntimeRecordOf(Session)` dipakai postgres dan fake.
 - Tes: assertion kompilasi terhadap salinan `conversation.SessionRuntime`, opening id, snapshot dapat di-`ParseSnapshot`, settlement, alasan `Fail` berbeda → alasan tersimpan + WARN, fence basi.
+
+## M3-T20 — `session.QueryService`
+- `internal/session/query.go` (`View`, `ViewRepository`, `QueryService.Get/List/Turns`), `postgres.NewSessionViewRepo` + `db/queries/session_views.sql` (join topics/scenarios, LEFT JOIN reservasi; nama/avatar karakter dari `config_snapshot`), `fakes.SessionViews`, `SessionStore.TurnReader()`.
+- `Turns`: 404 untuk sesi orang lain; 410 `TRANSCRIPT_EXPIRED` bila `transcript_purged_at` atau `ended_at` > retensi (180 hari); sesi tanpa `starting_at` → daftar kosong tanpa query; hanya turn `COMPLETED/INTERRUPTED/FAILED` (SQL `status IN (…)`, jadi paginasi tetap benar).
+- Ruling: `NewQueryService` menerima `TurnRepository` tambahan (brief tidak menyebutnya tetapi `Turns` membutuhkannya); batas pruning (`starting_at − 1 menit`, `ended_at + 1 menit`) diterapkan di repo Postgres, jadi tes unit menegaskan bahwa service meneruskan `starting_at`/`ended_at` apa adanya.

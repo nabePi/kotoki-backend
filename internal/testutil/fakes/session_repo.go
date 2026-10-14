@@ -46,6 +46,14 @@ type SessionStore struct {
 	mu           sync.Mutex
 	st           sessionState
 	puts         []session.Session // PutSession calls model rows committed by someone else: a rollback keeps them
+
+	// ListForUserCalls counts TurnRepository.ListForUser calls and LastListForUser keeps the last
+	// bounds they were given (partition pruning, spec 5.3.2).
+	ListForUserCalls int
+	LastListForUser  struct {
+		StartingAt time.Time
+		EndedAt    *time.Time
+	}
 }
 
 // NewSessionStore returns an empty store whose transactions also cover bal.
@@ -83,6 +91,9 @@ func (s *SessionStore) WithinTx(ctx context.Context, fn func(ctx context.Context
 		return nil
 	})
 }
+
+// TurnReader returns the turn repository for use outside a transaction (the QueryService).
+func (s *SessionStore) TurnReader() session.TurnRepository { return &turnRepoFake{s: s} }
 
 // Reader returns the repository for reads outside a transaction (Deps.Reader).
 func (s *SessionStore) Reader() session.Repository { return &sessionRepoFake{s: s} }
@@ -607,12 +618,14 @@ func (r *turnRepoFake) Stats(_ context.Context, sessionID uuid.UUID, _ time.Time
 
 func trimSpace(s string) string { return strings.TrimSpace(s) }
 
-func (r *turnRepoFake) ListForUser(_ context.Context, sessionID uuid.UUID, _ time.Time, _ *time.Time, afterSeq *int, limit int) ([]session.TurnRecord, error) {
+func (r *turnRepoFake) ListForUser(_ context.Context, sessionID uuid.UUID, startingAt time.Time, endedAt *time.Time, afterSeq *int, limit int) ([]session.TurnRecord, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
+	r.s.ListForUserCalls++
+	r.s.LastListForUser.StartingAt, r.s.LastListForUser.EndedAt = startingAt, endedAt
 	var out []session.Turn
 	for _, t := range r.s.turnsOf(sessionID) {
-		if (t.Status != nil && *t.Status == session.TurnDiscarded) || (afterSeq != nil && t.Sequence <= *afterSeq) {
+		if t.Status == nil || *t.Status == session.TurnDiscarded || (afterSeq != nil && t.Sequence <= *afterSeq) {
 			continue
 		}
 		out = append(out, t)

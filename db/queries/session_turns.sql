@@ -74,6 +74,6 @@ SELECT * FROM session_turns
    AND created_at >= sqlc.arg(since)::timestamptz
    AND (sqlc.narg(until)::timestamptz IS NULL OR created_at <= sqlc.narg(until)::timestamptz)
    AND (sqlc.narg(after_seq)::int IS NULL OR sequence_number > sqlc.narg(after_seq)::int)
-   AND status IS DISTINCT FROM 'DISCARDED'
+   AND status IN ('COMPLETED', 'INTERRUPTED', 'FAILED')
  ORDER BY sequence_number
  LIMIT sqlc.arg(row_limit)::int;

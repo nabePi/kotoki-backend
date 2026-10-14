@@ -238,7 +238,7 @@ SELECT id, session_id, sequence_number, status, user_text, user_started_at, user
    AND created_at >= $2::timestamptz
    AND ($3::timestamptz IS NULL OR created_at <= $3::timestamptz)
    AND ($4::int IS NULL OR sequence_number > $4::int)
-   AND status IS DISTINCT FROM 'DISCARDED'
+   AND status IN ('COMPLETED', 'INTERRUPTED', 'FAILED')
  ORDER BY sequence_number
  LIMIT $5::int
 `
