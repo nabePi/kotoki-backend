@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -41,4 +42,12 @@ func SeedSession(t testing.TB, db DBTX, userID uuid.UUID, c ContentIDs, o Row) u
 	r := SessionRow(userID, c, o)
 	MustInsert(t, context.Background(), db, "sessions", r)
 	return r["id"].(uuid.UUID)
+}
+
+// ReservationRow returns a valid HELD balance_reservations row.
+func ReservationRow(acc, userID, sessionID uuid.UUID, o Row) Row {
+	return merge(Row{
+		"id": newID(), "user_id": userID, "account_id": acc, "session_id": sessionID,
+		"reserved_seconds": 300, "start_deadline_at": time.Now().UTC().Add(5 * time.Minute),
+	}, o)
 }
