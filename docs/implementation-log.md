@@ -544,3 +544,13 @@ Tanggal: 2026-10-14
 - Migrasi 000013/000018 diubah di tempat (belum ada tag v0.1.0, `migcheck` lulus); golden skema diperbarui
 - Tidak dikerjakan: REVOKE ulang untuk role yang dibuat setelah migrasi (sudah dijadwalkan M10) dan penggantian error 40001 saat ctx dibatalkan di tengah backoff (mengembalikan error ctx dinilai benar)
 - Tanpa tes otomatis: urutan shutdown ops (draining tidak teramati pada shutdown cepat) dan span panic
+
+## M4-T1 — Tipe umum, port, error taxonomy, guard aturan impor
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/{provider,errors,stt,llm,tts,evaluation,embedding}.go`: tipe dan port §8.2, `ErrorKind`/`*Error`, `KindOf`, `IsRetryable`, `FallbackEligible`, `CountsForBreaker`, `ClassifyHTTPStatus`, `NewError` (pesan dipotong 512 byte di batas rune), `NewCircuitOpen`
+### Test
+- `errors_test.go` (tabel taksonomi, 404, local_concurrency, kuota, KindOf, status HTTP, string, potong 512, Unwrap) dan `importrules_test.go` (aturan impor provider/fake/prompt) — PASS
+### Penyimpangan
+- `NewCircuitOpen` diekspor (test di paket eksternal)
