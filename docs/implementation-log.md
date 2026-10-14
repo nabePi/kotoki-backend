@@ -459,3 +459,15 @@ Tanggal: 2026-10-14
 - `redisstore.RateLimiter`: script Lua §13.4.3 verbatim (`redis.NewScript` → EVALSHA, fallback EVAL otomatis), key `kotoki:ratelimit:{policy}:{subject}` dengan `PEXPIRE`, waktu dari `redis.call('TIME')`; Redis error → limiter lokal (fail-open), `kotoki_ratelimit_backend_errors_total`, log warn maksimal 1×/10 s (jam dari `clock.Clock`); `metrics.RateLimit` (`kotoki_ratelimit_rejected_total{policy}`, `kotoki_ratelimit_backend_errors_total`)
 ### Test
 - go test ./internal/platform/metrics -run RateLimit; go test -tags integration ./internal/redisstore -run RedisLimiter (Podman) — PASS (burst, refill, TTL, isolasi subject, fallback saat Redis mati)
+
+## M2-T21 — httpapi fondasi: Handle, Page, WriteError, cursor, golden error
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/httpapi`: `Handle`/`HandleNoBody` (Content-Type wajib `application/json` → 415, `DisallowUnknownFields` → `unknown_field`, tipe salah → `invalid_type`, JSON rusak/sisa data → `INVALID_JSON`, > 64 KiB → 413, `Validate()`), `Request[B]` (+ `PathUUID`, `Query`, `Cookie`, `SetCookie`, `SetHeader`, `SetStatus`, `ClientIP`, `UserAgent`; efek diterapkan di jalur sukses dan error), `NoContent` → 204, `WriteError` (kode dikenal → status §5.10; kode tak dikenal → 500 `INTERNAL_ERROR` tanpa bocor details; error internal di-log ERROR sekali dengan `error_code` + `error_location`; `Retry-After: 1` untuk 503 kecuali sudah diset), `WriteJSON`, `StatusOf`, `FieldError`, `Page`/`NewPage`, `EncodeCursor`/`DecodeCursor`, `ParseLimit`; konteks `WithRequestID`/`WithLogger`/`WithClientIP`
+- Golden `testdata/api/rest/errors/<KODE>.json` untuk 50 kode katalog REST
+- Dependensi baru: `github.com/go-chi/chi/v5`
+### Test
+- go test ./internal/httpapi -race — PASS (74 test)
+### Penyimpangan
+- 17 kode yang hanya ada di katalog WebSocket tidak punya status REST; bila bocor ke `WriteError` diperlakukan seperti kode tak dikenal (500 `INTERNAL_ERROR`) — test `TestWriteErrorUnknownAndWSOnlyCodes`
