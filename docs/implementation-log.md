@@ -590,3 +590,13 @@ Tanggal: 2026-10-14
 - `internal/provider/health.go`: `HealthTracker` (60 bucket × 1 s, p95 latensi, `last_error` bertahan di luar window), `ProviderHealth` dengan bentuk JSON §8.5.5, `BreakerState.String()`
 ### Test
 - `semaphore_test.go`, `health_test.go` — PASS (race)
+
+## M4-T6 — Metrik Prometheus provider
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/metrics.go`: `Metrics` dengan seluruh metrik §8.8.1 + §8.7.4 (nama/label persis), helper per metrik yang aman untuk receiver nil, `vendor_code` tak dikenal → `other`, `kotoki_session_cost_usd`/`_per_minute_usd` tanpa label, `SetDefaultMetrics` + `ObserveLLMFirstSentence`
+### Test
+- `metrics_test.go` — PASS (race)
+### Penyimpangan
+- Bucket `kotoki_session_cost_per_minute_usd` tidak dinyatakan spec: dipilih 0,001…0,5; `final_timeout` ditambahkan ke daftar vendor_code yang dikenal
