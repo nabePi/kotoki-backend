@@ -780,3 +780,14 @@ Tanggal: 2026-10-14
 - `internal/balance/charge.go`: rumus §4.5 apa adanya (satu-satunya tempat)
 ### Test
 - `charge_test.go`: 11 contoh §4.5 (billable end + charged) dan batas (59.999/60.000 ms untuk kegagalan, clamp ke reservasi, ending_at ± expires_at, disconnected > aktif) — PASS
+
+## M3-T3 — Reservasi dan operasi `balance.Service` tx-bound
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `balance.Reservation`/`ReservationRepository` (di-embed ke `Repository`), `Service.Reserve` (validasi durasi, `BALANCE_INSUFFICIENT`, deadline +5 menit, RESERVE `reserve:{rid}`), `ReleaseReservation` (RELEASE `release:{rid}`), `SettleReservation` (CONSUME lalu RELEASE; entry nol tidak ditulis); `ErrReservationNotFound`/`ErrReservationState`
+- `fakes.BalanceStore`: reservasi + `chk_reservation_state` setara, rollback-copy ikut menyalin reservasi; `repotest.BalanceRepoSuite` + kasus reservasi dan hook `SeedSession`
+### Test
+- `internal/balance/reservation_test.go` (10 tes) — PASS
+### Penyimpangan
+- Repo Postgres untuk reservasi baru di Task 5; sementara method menolak (lihat ledger)

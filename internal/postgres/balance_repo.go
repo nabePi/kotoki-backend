@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -140,4 +141,24 @@ func (r *balanceRepo) ListLedger(ctx context.Context, userID uuid.UUID, types []
 		out[i] = toLedger(l)
 	}
 	return out, nil
+}
+
+// Reservation methods arrive with Task 5 (M3), together with their sqlc queries and the
+// integration contract suite; until then they refuse instead of guessing.
+var errReservationsNotWired = errors.New("postgres: balance reservations are wired in M3 Task 5")
+
+func (r *balanceRepo) LockReservationBySessionID(context.Context, uuid.UUID) (balance.Reservation, error) {
+	return balance.Reservation{}, errReservationsNotWired
+}
+
+func (r *balanceRepo) InsertReservation(context.Context, balance.Reservation) error {
+	return errReservationsNotWired
+}
+
+func (r *balanceRepo) MarkReservationSettled(context.Context, uuid.UUID, int64, int64, time.Time) error {
+	return errReservationsNotWired
+}
+
+func (r *balanceRepo) MarkReservationReleased(context.Context, uuid.UUID, time.Time) error {
+	return errReservationsNotWired
 }
