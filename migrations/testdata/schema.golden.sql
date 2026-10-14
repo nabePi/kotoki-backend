@@ -1557,10 +1557,24 @@ CREATE TRIGGER trg_admin_audit_logs_append_only BEFORE DELETE OR UPDATE ON publi
 
 
 --
+-- Name: admin_audit_logs trg_admin_audit_logs_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_admin_audit_logs_no_truncate BEFORE TRUNCATE ON public.admin_audit_logs FOR EACH STATEMENT EXECUTE FUNCTION public.reject_mutation();
+
+
+--
 -- Name: balance_ledger trg_balance_ledger_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER trg_balance_ledger_append_only BEFORE DELETE OR UPDATE ON public.balance_ledger FOR EACH ROW EXECUTE FUNCTION public.reject_mutation();
+
+
+--
+-- Name: balance_ledger trg_balance_ledger_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_balance_ledger_no_truncate BEFORE TRUNCATE ON public.balance_ledger FOR EACH STATEMENT EXECUTE FUNCTION public.reject_mutation();
 
 
 --

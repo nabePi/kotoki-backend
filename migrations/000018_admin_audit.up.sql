@@ -29,6 +29,11 @@ CREATE TRIGGER trg_admin_audit_logs_append_only
     BEFORE UPDATE OR DELETE ON admin_audit_logs
     FOR EACH ROW EXECUTE FUNCTION reject_mutation();
 
+-- TRUNCATE tidak memicu trigger baris; blokir juga di level statement.
+CREATE TRIGGER trg_admin_audit_logs_no_truncate
+    BEFORE TRUNCATE ON admin_audit_logs
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_mutation();
+
 -- Append-only juga di level privilege (D-032): hanya dijalankan bila role aplikasi ada (lokal: dilewati).
 DO $$
 DECLARE r TEXT;

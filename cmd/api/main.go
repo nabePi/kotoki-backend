@@ -103,8 +103,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The ops listener outlives the signal context so /readyz can report "draining"
+	// while the public listener finishes in-flight requests; it stops last.
+	opsCtx, stopOps := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopOps()
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- ops.Serve(ctx, ln) }()
+	go func() { serveErr <- ops.Serve(opsCtx, ln) }()
 
 	router, dispatcher, err := buildAPI(cfg, logger, pool, rdb, reg) //nolint:contextcheck // wiring only; the dispatcher owns its own lifecycle
 	if err != nil {
@@ -143,6 +147,11 @@ func run(ctx context.Context) error {
 		if !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
+	case err := <-serveErr:
+		if err == nil {
+			err = errors.New("ops listener stopped unexpectedly")
+		}
+		return err
 	}
 	ops.SetDraining()
 	shutdownCtx, stopShutdown := context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
@@ -150,6 +159,7 @@ func run(ctx context.Context) error {
 	if err := apiSrv.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
+	stopOps()
 	if err := <-serveErr; err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -161,7 +171,8 @@ func run(ctx context.Context) error {
 // plus the mail dispatcher the caller must close on shutdown.
 func buildAPI(cfg config.API, logger *slog.Logger, pool *pgxpool.Pool, rdb redis.UniversalClient, reg *prometheus.Registry) (http.Handler, *auth.MailDispatcher, error) {
 	ids, clk := idgen.NewV7(), clock.System{}
-	store := postgres.NewStore(pool, postgres.WithIDs(ids), postgres.WithClock(clk))
+	store := postgres.NewStore(pool, postgres.WithIDs(ids), postgres.WithClock(clk),
+		postgres.WithTimeouts(cfg.LockTimeout, cfg.StatementTimeout))
 
 	secret, err := cfg.JWTSecretBytes()
 	if err != nil {
