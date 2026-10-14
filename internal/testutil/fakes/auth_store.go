@@ -375,3 +375,12 @@ func (r *resetRepo) InvalidateOthers(_ context.Context, userID, exceptID uuid.UU
 	}
 	return nil
 }
+
+// MutateUser edits a stored user outside any transaction (test setup, e.g. promote to ADMIN).
+func (s *AuthStore) MutateUser(id uuid.UUID, fn func(*auth.User)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u := s.st.users[id]
+	fn(&u)
+	s.st.users[id] = u
+}

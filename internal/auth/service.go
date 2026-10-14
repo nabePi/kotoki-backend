@@ -322,3 +322,161 @@ func (s *Service) rehash(ctx context.Context, userID uuid.UUID, password string)
 		s.log.WarnContext(ctx, "password rehash failed", "user_id", userID.String(), "error_code", string(errs.CodeOf(err)))
 	}
 }
+
+// decodeToken validates the shape of a client token and returns its SHA-256.
+func decodeToken(raw string) ([]byte, bool) {
+	if len(raw) != 43 {
+		return nil, false
+	}
+	b, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil || len(b) != 32 {
+		return nil, false
+	}
+	sum := sha256.Sum256(b)
+	return sum[:], true
+}
+
+// RefreshInput is the refresh request (cookie value plus client metadata).
+type RefreshInput struct {
+	RefreshToken, UserAgent string
+	IP                      netip.Addr
+}
+
+// RefreshResult is returned by Refresh.
+type RefreshResult struct {
+	AccessToken      string
+	ExpiresIn        time.Duration
+	RefreshToken     string
+	RefreshExpiresAt time.Time
+}
+
+func invalidRefresh() error { return errs.New(errs.CodeRefreshTokenInvalid, "refresh token invalid") }
+
+// Refresh rotates a refresh token (spec 3.8.3). Reuse outside the grace window
+// and status changes revoke the family and still commit before the 401 is returned.
+func (s *Service) Refresh(ctx context.Context, in RefreshInput) (res RefreshResult, err error) {
+	event := "refresh"
+	defer func() {
+		result := "success"
+		if err != nil {
+			result = "failure"
+		}
+		s.events.Record(event, result)
+	}()
+
+	hash, ok := decodeToken(in.RefreshToken)
+	if !ok {
+		return RefreshResult{}, invalidRefresh()
+	}
+	now := s.clk.Now()
+	var (
+		outErr error // returned after the transaction committed
+		raw    string
+		next   RefreshToken
+		user   User
+	)
+	err = s.store.WithinTx(ctx, func(ctx context.Context, tx Tx) error {
+		old, err := tx.RefreshTokens().LockByHash(ctx, hash)
+		if errors.Is(err, ErrRefreshTokenNotFound) {
+			return invalidRefresh()
+		}
+		if err != nil {
+			return err
+		}
+		if old.RevokedAt != nil {
+			if old.RevokeReason != nil && *old.RevokeReason == "ROTATED" && old.ReplacedByID != nil &&
+				!old.RevokedAt.Before(now.Add(-s.cfg.RefreshReuseGrace)) {
+				repl, gerr := tx.RefreshTokens().GetByID(ctx, *old.ReplacedByID)
+				if gerr == nil && repl.RevokedAt == nil {
+					return errs.New(errs.CodeRefreshTokenRotated, "refresh token was just rotated")
+				}
+			}
+			if _, rerr := tx.RefreshTokens().RevokeFamily(ctx, old.FamilyID, "REUSE_DETECTED", now); rerr != nil {
+				return rerr
+			}
+			event = "refresh_reuse"
+			s.log.WarnContext(ctx, "refresh_reuse_detected", "audit", true, "audit_event", "refresh_reuse_detected",
+				"user_id", old.UserID.String(), "family_id", old.FamilyID.String(), "ip", in.IP.String(), "user_agent_hash", uaHash(in.UserAgent))
+			outErr = invalidRefresh()
+			return nil
+		}
+		if !old.ExpiresAt.After(now) {
+			return invalidRefresh()
+		}
+		u, err := tx.Users().GetByID(ctx, old.UserID)
+		if err != nil {
+			return err
+		}
+		if u.Status != UserStatusActive {
+			if _, rerr := tx.RefreshTokens().RevokeFamily(ctx, old.FamilyID, "USER_STATUS_CHANGED", now); rerr != nil {
+				return rerr
+			}
+			outErr = invalidRefresh()
+			return nil
+		}
+		var rerr error
+		raw, rerr = s.rotate(ctx, tx, old, in, now, &next)
+		user = u
+		return rerr
+	})
+	if err != nil {
+		return RefreshResult{}, err
+	}
+	if outErr != nil {
+		return RefreshResult{}, outErr
+	}
+	access, expiresIn, err := s.accessFor(user, next.FamilyID, now)
+	if err != nil {
+		return RefreshResult{}, err
+	}
+	return RefreshResult{AccessToken: access, ExpiresIn: expiresIn, RefreshToken: raw, RefreshExpiresAt: next.ExpiresAt}, nil
+}
+
+func (s *Service) rotate(ctx context.Context, tx Tx, old RefreshToken, in RefreshInput, now time.Time, out *RefreshToken) (string, error) {
+	raw, hash, err := newOpaqueToken(s.cfg.Rand)
+	if err != nil {
+		return "", err
+	}
+	parent := old.ID
+	*out = RefreshToken{ID: s.ids.New(), UserID: old.UserID, FamilyID: old.FamilyID, ParentID: &parent, TokenHash: hash,
+		UserAgent: uaPtr(in.UserAgent), IP: ipPtr(in.IP), CreatedAt: now, ExpiresAt: now.Add(s.cfg.RefreshTTL)}
+	if err := tx.RefreshTokens().Insert(ctx, *out); err != nil {
+		return "", err
+	}
+	if err := tx.RefreshTokens().MarkRotated(ctx, old.ID, out.ID, now); err != nil {
+		return "", err
+	}
+	return raw, nil
+}
+
+// Logout revokes the family of refreshToken. It is idempotent: an unknown or
+// malformed token is not an error (spec 3.8.4).
+func (s *Service) Logout(ctx context.Context, refreshToken string) error {
+	hash, ok := decodeToken(refreshToken)
+	if !ok {
+		return nil
+	}
+	now := s.clk.Now()
+	var revoked *RefreshToken
+	err := s.store.WithinTx(ctx, func(ctx context.Context, tx Tx) error {
+		tk, err := tx.RefreshTokens().LockByHash(ctx, hash)
+		if errors.Is(err, ErrRefreshTokenNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.RefreshTokens().RevokeFamily(ctx, tk.FamilyID, "LOGOUT", now); err != nil {
+			return err
+		}
+		revoked = &tk
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if revoked != nil {
+		s.audit(ctx, "logout", "success", revoked.UserID, netip.Addr{}, "", "family_id", revoked.FamilyID.String())
+	}
+	return nil
+}

@@ -356,3 +356,14 @@ Tanggal: 2026-10-14
 - `internal/platform/metrics/auth.go`: `kotoki_auth_events_total{event,result}`; nilai di luar daftar di-ignore
 ### Test
 - go test ./internal/auth ./internal/platform/metrics -race — PASS
+
+## M2-T10 — auth.Service: Refresh rotation, reuse detection, Logout
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `Refresh` (spec 3.8.3): `LockByHash` → grace 10 s inklusif (`revoked_at >= now − grace`, penggantinya belum revoked → 409 `REFRESH_TOKEN_ROTATED`, rollback) → selain itu reuse: `RevokeFamily(REUSE_DETECTED)` **di-commit** lalu 401 (pola commit-then-error), log WARN `refresh_reuse_detected` tanpa token; expired (`expires_at <= now`) → 401; user non-ACTIVE → revoke `USER_STATUS_CHANGED` di-commit + 401; sukses → token baru (family sama, `ParentID`), role dari DB
+- `Logout`: idempoten, token tak valid → nil; audit `logout`
+- Event metrik: `refresh` success/failure; reuse di luar grace → `refresh_reuse` failure
+- `fakes.AuthStore.MutateUser` untuk setup test
+### Test
+- go test ./internal/auth -race — PASS (12 test refresh/logout termasuk konkurensi 2 goroutine)
