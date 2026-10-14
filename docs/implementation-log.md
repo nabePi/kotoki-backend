@@ -281,3 +281,11 @@ Tanggal: 2026-10-14
 - go test ./internal/auth/... -race -cover — PASS (93%)
 ### Penyimpangan
 - `AccessSubject`/`Claims` dideklarasikan di `auth.go` (bukan `jwt.go`) agar port `TokenIssuer` bisa dikompilasi di Task 1
+
+## M2-T2 — Argon2id hasher
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth/argon2.go`: `Argon2Hasher` (PHC `$argon2id$v=19$m,t,p$salt$hash`, salt 16 B, key 32 B), semaphore `MaxConcurrent` dengan tunggu `MaxWait` lalu `SERVICE_UNAVAILABLE`, `NeedsRehash`; hash dengan parameter berbeda tetap diverifikasi memakai parameter yang tersimpan
+### Test
+- go test ./internal/auth -race -run Argon2 — PASS (4 test)
