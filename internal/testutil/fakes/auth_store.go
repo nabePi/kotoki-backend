@@ -400,3 +400,12 @@ func (s *AuthStore) ResetTokens() []auth.PasswordResetToken {
 	defer s.mu.Unlock()
 	return slices.Collect(maps.Values(s.st.resets))
 }
+
+func (r *resetRepo) DeleteAllForUser(_ context.Context, userID uuid.UUID) error {
+	for id, t := range r.s.st.resets {
+		if t.UserID == userID {
+			delete(r.s.st.resets, id)
+		}
+	}
+	return nil
+}

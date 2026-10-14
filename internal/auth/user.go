@@ -118,4 +118,5 @@ type PasswordResetRepository interface {
 	LockByHash(ctx context.Context, hash []byte) (ResetLookup, error) // FOR UPDATE OF t
 	MarkUsed(ctx context.Context, id uuid.UUID, at time.Time) error
 	InvalidateOthers(ctx context.Context, userID, exceptID uuid.UUID, at time.Time) error
+	DeleteAllForUser(ctx context.Context, userID uuid.UUID) error // account deletion (spec 3.13.3 step 4)
 }

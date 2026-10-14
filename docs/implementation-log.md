@@ -404,3 +404,13 @@ Tanggal: 2026-10-14
 - Fake: `fakes.AdminStore` (tx bersarang di AuthStore → BalanceStore; rollback juga untuk audit & gate), `fakes.SessionGate`, `fakes.CallRecorder` (urutan lock lintas repo); `repotest.AuditRepoSuite`
 ### Test
 - go test ./internal/admin ./internal/testutil/... -race — PASS (audit gagal → saldo & ledger kembali)
+
+## M2-T15 — admin: daftar/detail user, ubah status, DeleteAccount
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `admin.Service`: `ListUsers`/`GetUser` (`UserView`, `UserDetail` dengan sesi terbuka & jumlah refresh token aktif), `ChangeStatus` (ACTIVE↔SUSPENDED, → DELETED final; DELETED→apa pun = `INVALID_USER_STATUS_TRANSITION`; diri sendiri = `CANNOT_MODIFY_SELF`; status sama = 200 tanpa audit; SUSPENDED merevoke refresh `USER_STATUS_CHANGED`; audit `USER_STATUS_CHANGE {from,to,revoked_refresh_tokens}`), `DeleteAccount` (memenuhi `auth.AccountDeleter`; urutan lock account → user → sesi; STARTING/ACTIVE/ENDING → 409 `ACCOUNT_HAS_ACTIVE_SESSION {session_id}` tanpa perubahan; RESERVED dibatalkan lewat `SessionGate`; refresh & reset token dihapus) lewat `deleteAccountTx`
+### Test
+- go test ./internal/admin -race — PASS
+### Penyimpangan
+- `auth.PasswordResetRepository` mendapat method `DeleteAllForUser` (Task 1 tidak memuatnya padahal §3.13.3 langkah 4 menghapus `password_reset_tokens`); fake + `repotest` ditambah

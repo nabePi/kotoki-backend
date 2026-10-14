@@ -67,5 +67,22 @@ func PasswordResetRepoSuite(t *testing.T, newStore func(t *testing.T) auth.Store
 				require.NotNil(t, goth.Token.InvalidatedAt)
 			})
 		}},
+		Case[auth.Store]{Name: "DeleteAllForUser", Run: func(t *testing.T, s auth.Store) {
+			u, other := NewUser("hana@example.com"), NewUser("other@example.com")
+			insertUser(t, s, u)
+			insertUser(t, s, other)
+			inTx(t, s, func(ctx context.Context, tx auth.Tx) {
+				require.NoError(t, tx.PasswordResets().Insert(ctx, resetToken(u.ID, "mine1")))
+				require.NoError(t, tx.PasswordResets().Insert(ctx, resetToken(u.ID, "mine2")))
+				require.NoError(t, tx.PasswordResets().Insert(ctx, resetToken(other.ID, "theirs")))
+				require.NoError(t, tx.PasswordResets().DeleteAllForUser(ctx, u.ID))
+				_, err := tx.PasswordResets().FindByHash(ctx, hashOf("mine1"))
+				require.ErrorIs(t, err, auth.ErrResetTokenNotFound)
+				_, err = tx.PasswordResets().FindByHash(ctx, hashOf("mine2"))
+				require.ErrorIs(t, err, auth.ErrResetTokenNotFound)
+				_, err = tx.PasswordResets().FindByHash(ctx, hashOf("theirs"))
+				require.NoError(t, err)
+			})
+		}},
 	)
 }

@@ -178,3 +178,8 @@ func (s *Service) IsActiveAdmin(ctx context.Context, userID uuid.UUID) (bool, er
 	})
 	return ok, err
 }
+
+func validationError(field, reason string) error {
+	return errs.WithDetails(errs.New(errs.CodeValidationFailed, "invalid "+field),
+		map[string]any{"fields": []map[string]any{{"field": field, "reason": reason}}})
+}
