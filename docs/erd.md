@@ -163,11 +163,13 @@ erDiagram
         text status "ACTIVE DISABLED ARCHIVED"
         int sort_order
         text name
-        text tier "PREMIUM STANDARD"
         text avatar_key
         text persona
         text greeting_hint
-        jsonb voice "suara inline: gender accent speaking_rate providers"
+        text provider_name "ELEVENLABS CARTESIA DEEPGRAM OPENAI; TTS utama"
+        text model_name "nama model TTS, teks bebas"
+        text voice_id "ID suara di vendor, teks bebas"
+        jsonb voice "gender accent speaking_rate fallback opsional"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -205,7 +207,6 @@ erDiagram
         uuid character_id FK
         uuid prompt_version_id FK "key CONVERSATION"
         uuid opening_prompt_version_id FK "key OPENING; nullable"
-        text provider_profile "PREMIUM STANDARD"
         jsonb config_snapshot
         jsonb adaptive_difficulty
         bigint runtime_fence
