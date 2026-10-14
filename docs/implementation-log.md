@@ -271,3 +271,13 @@ Tanggal: 2026-10-14
 - `make vuln` → "No vulnerabilities found" (menutup GO-2026-6629 x/text dan temuan stdlib net/http)
 ### Test
 - make lint 0 issue, make test, make test-integration (podman, -p 1), make test-cover, arch/sqlc/migrations/modelname/tidy check — PASS
+## M2-T1 — Auth domain, port, normalisasi input, password policy
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth`: `user.go` (User, Role, status, repo port), `auth.go` (Principal, port hasher/token/mailer/ticket/opener/deleter, `AccessSubject`, `Claims`), `tx.go`, `errors.go`, `normalize.go`, `password.go`
+- `common_passwords.txt`: 10.000 password umum dari danielmiessler/SecLists `Passwords/Common-Credentials/10k-most-common.txt` (MIT), lowercase + dedupe, di-embed
+### Test
+- go test ./internal/auth/... -race -cover — PASS (93%)
+### Penyimpangan
+- `AccessSubject`/`Claims` dideklarasikan di `auth.go` (bukan `jwt.go`) agar port `TokenIssuer` bisa dikompilasi di Task 1
