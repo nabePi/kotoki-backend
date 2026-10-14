@@ -307,3 +307,13 @@ Tanggal: 2026-10-14
 ### Test
 - go test ./internal/mailer/... -race (+ `-tags integration`: `TestSMTPRequiresSTARTTLS` dengan server SMTP loopback tanpa STARTTLS, body tidak terkirim) — PASS
 - Pengiriman SMTP nyata tidak diuji otomatis
+
+## M2-T5 — Mail dispatcher & template reset password
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth/dispatcher.go`: `MailDispatcher` (buffer 1000, 4 worker, timeout kirim 10 s, retry 3× 1 s/5 s/15 s, `Enqueue` tidak pernah memblok; buffer penuh → ERROR `mail.queue_full`; gagal permanen → ERROR `mail.dropped` dengan email di-mask), `Close(ctx)` menguras antrean, `RenderPasswordReset` + `templates/password_reset.txt` (go:embed)
+### Test
+- go test ./internal/auth -race — PASS (dispatcher: deliver, retry, timeout, buffer penuh; render)
+### Penyimpangan
+- `TestDispatcherBufferFull`: pesan 1 diambil worker, pesan 2 masuk buffer, pesan 3 ditolak (brief menyebut "kedua"; urutan ini deterministik)
