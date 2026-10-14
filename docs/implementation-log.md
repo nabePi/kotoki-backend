@@ -722,3 +722,11 @@ Tanggal: 2026-10-14
 - `internal/prompt/{tokens,budget,learner_context,data,text}.go`: `EstimateTokens` (aritmetika integer `(77·cjk + 20·other)/70` dibulatkan ke atas, bebas drift float), `ItemOverheadTokens`, `Budget`/`DefaultBudget` (total 6.450), `LearnerContext`, `VocabHint`, `PromptData`/`OpeningPromptData` (tanpa style/ekspresi/identitas user), `NormalizeSpeakable` (diekspor di `prompt`, dipakai M5)
 ### Test
 - `tokens_test.go`, `budget_test.go`, `data_test.go` — PASS (race); aturan impor `prompt` (tanpa paket fitur) lulus
+
+## M4-T21 — `prompt.Render`, `Template`, `Params`, FuncMap, registry fixture
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/prompt/{render,funcs,fixtures}.go`: `Template`/`Rendered`/`Render` (`text/template`, `missingkey=error`, struct bertipe; galat menyebut template dan placeholder, bukan nilai data), `Params` (+`TemperatureOr`/`MaxOutputTokensOr`; nilai DB menang), FuncMap tetap `join`/`bullets`/`quote`/`vocab`, registry fixture (`RegisterFixtures` ganda → panic menyebut key)
+### Test
+- `render_test.go`, `funcs_test.go` — PASS (race)
