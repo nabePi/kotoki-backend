@@ -108,3 +108,29 @@ func TestAuthConfigIsAPIOnly(t *testing.T) {
 	_, err = loadWorker(env)
 	require.NoError(t, err, "worker does not need auth settings")
 }
+
+func TestContentConfigDefaultsAndBounds(t *testing.T) {
+	env := authEnv(nil)
+	a, err := loadAPI(env)
+	require.NoError(t, err)
+	require.Equal(t, 30, a.ContentCacheTTLSeconds)
+	require.Equal(t, 30*time.Second, a.CacheTTL())
+	require.Equal(t, 180, a.RetentionTranscriptDays)
+
+	for name, bad := range map[string]map[string]string{
+		"ttl zero":       {"CONTENT_CACHE_TTL_SECONDS": "0"},
+		"ttl too big":    {"CONTENT_CACHE_TTL_SECONDS": "7200"},
+		"retention zero": {"RETENTION_TRANSCRIPT_DAYS": "0"},
+	} {
+		e := authEnv(bad)
+		_, err := loadAPI(e)
+		require.Error(t, err, name)
+		for k := range bad {
+			require.Contains(t, err.Error(), k, name)
+		}
+	}
+	a, err = loadAPI(authEnv(map[string]string{"CONTENT_CACHE_TTL_SECONDS": "5", "RETENTION_TRANSCRIPT_DAYS": "90"}))
+	require.NoError(t, err)
+	require.Equal(t, 5*time.Second, a.CacheTTL())
+	require.Equal(t, 90, a.RetentionTranscriptDays)
+}

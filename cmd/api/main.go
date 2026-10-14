@@ -1,5 +1,6 @@
-// Command kotoki-api is the M1 skeleton: it wires config, logging, tracing, metrics,
-// Postgres and Redis behind the ops listener. Feature handlers arrive in later milestones.
+// Command kotoki-api serves the public REST API: it wires config, logging, tracing, metrics,
+// Postgres and Redis behind the ops listener and mounts the auth, balance, admin, content and
+// session handlers (the realtime and worker features live in their own binaries).
 package main
 
 import (
@@ -21,6 +22,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/admin"
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/balance"
+	"github.com/nabePi/kotoki-backend/internal/content"
 	"github.com/nabePi/kotoki-backend/internal/httpapi"
 	"github.com/nabePi/kotoki-backend/internal/mailer"
 	"github.com/nabePi/kotoki-backend/internal/platform/buildinfo"
@@ -34,6 +36,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
 	"github.com/nabePi/kotoki-backend/internal/postgres"
 	"github.com/nabePi/kotoki-backend/internal/redisstore"
+	"github.com/nabePi/kotoki-backend/internal/session"
 )
 
 const service = "kotoki-api"
@@ -110,7 +113,7 @@ func run(ctx context.Context) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- ops.Serve(opsCtx, ln) }()
 
-	router, dispatcher, err := buildAPI(cfg, logger, pool, rdb, reg) //nolint:contextcheck // wiring only; the dispatcher owns its own lifecycle
+	router, dispatcher, err := buildAPI(ctx, cfg, logger, pool, rdb, reg)
 	if err != nil {
 		return err
 	}
@@ -167,9 +170,9 @@ func run(ctx context.Context) error {
 	return nil
 }
 
-// buildAPI wires the M2 components by hand (D-004) and returns the public router
-// plus the mail dispatcher the caller must close on shutdown.
-func buildAPI(cfg config.API, logger *slog.Logger, pool *pgxpool.Pool, rdb redis.UniversalClient, reg *prometheus.Registry) (http.Handler, *auth.MailDispatcher, error) {
+// buildAPI wires the components by hand (D-004) and returns the public router plus the mail
+// dispatcher the caller must close on shutdown.
+func buildAPI(ctx context.Context, cfg config.API, logger *slog.Logger, pool *pgxpool.Pool, rdb redis.UniversalClient, reg *prometheus.Registry) (http.Handler, *auth.MailDispatcher, error) {
 	ids, clk := idgen.NewV7(), clock.System{}
 	store := postgres.NewStore(pool, postgres.WithIDs(ids), postgres.WithClock(clk),
 		postgres.WithTimeouts(cfg.LockTimeout, cfg.StatementTimeout))
@@ -199,11 +202,11 @@ func buildAPI(cfg config.API, logger *slog.Logger, pool *pgxpool.Pool, rdb redis
 	if err != nil {
 		return nil, nil, err
 	}
-	dispatcher := auth.NewMailDispatcher(sender, logger, auth.DispatcherOptions{})
+	dispatcher := auth.NewMailDispatcher(sender, logger, auth.DispatcherOptions{}) //nolint:contextcheck // the dispatcher owns its own lifecycle
 
 	balanceSvc := balance.NewService(store.BalanceStore(), clk, ids)
 	adminSvc := admin.NewService(store.AdminStore(), balanceSvc, clk, ids, logger)
-	authSvc, err := auth.NewService(store.AuthStore(), hasher, tokens, dispatcher, clk, ids, logger, metrics.NewAuth(reg), auth.Config{
+	authSvc, err := auth.NewService(store.AuthStore(), hasher, tokens, dispatcher, clk, ids, logger, metrics.NewAuth(reg), auth.Config{ //nolint:contextcheck // wiring only: the dispatcher owns its own lifecycle
 		TermsVersion: cfg.PrivacyPolicyVersion, InitialBalanceSeconds: cfg.InitialBalanceSeconds, AccessTTL: cfg.AccessTokenTTL,
 		RefreshTTL: cfg.RefreshTokenTTL, RefreshReuseGrace: cfg.RefreshReuseGrace, ResetTTL: cfg.PasswordResetTTL,
 		ResetURLBase: cfg.PasswordResetURLBase,
@@ -214,6 +217,22 @@ func buildAPI(cfg config.API, logger *slog.Logger, pool *pgxpool.Pool, rdb redis
 	// admin.Service doubles as the AccountDeleter behind DELETE /me (spec 3.2).
 	userSvc := auth.NewUserService(store.AuthStore(), hasher, adminSvc, clk, logger, cfg.PrivacyPolicyVersion)
 
+	contentSvcs, err := buildContent(ctx, cfg, logger, pool, store, reg, ids, clk)
+	if err != nil {
+		return nil, nil, err
+	}
+	sessionSvc := session.NewService(session.Deps{
+		Store: store.SessionStore(), Reader: postgres.NewSessionRepo(pool), Balance: balanceSvc, Resolver: contentSvcs.resolver,
+		Adaptive: session.NeutralAdaptiveProvider{}, Users: userGate{users: userSvc}, OpeningPrompts: openingPromptSource{repo: contentSvcs.cached},
+		Control: redisstore.NewSessionControl(rdb), Clock: clk, IDs: ids, Log: logger, TermsVersion: userSvc.CurrentTermsVersion(),
+		Metrics: metrics.NewSession(reg), ServiceName: "api",
+	})
+	// the admin account-deletion path cancels a RESERVED session through the session service
+	store.SetSessionCanceller(sessionSvc)
+	sessionQuery := session.NewQueryService(postgres.NewSessionViewRepo(pool), postgres.NewTurnRepo(pool), clk, cfg.RetentionTranscriptDays)
+	tickets := auth.NewTicketService(store.AuthStore(), postgres.NewTicketSessionReader(pool), redisstore.NewTicketStore(rdb, clk), clk,
+		auth.TicketConfig{TTL: cfg.WSTicketTTL, RealtimeURL: cfg.RealtimePublicURL})
+
 	router := httpapi.NewRouter(httpapi.Deps{
 		Log: logger, Clock: clk, Tokens: tokens, Metrics: metrics.NewHTTP(reg, service),
 		Limiter: redisstore.NewRateLimiter(rdb, ratelimit.NewLocal(clk, 100000), clk, logger, metrics.NewRateLimit(reg)),
@@ -222,6 +241,39 @@ func buildAPI(cfg config.API, logger *slog.Logger, pool *pgxpool.Pool, rdb redis
 			Cookie: httpapi.CookieConfig{Secure: cfg.RefreshCookieSecure, Domain: cfg.RefreshCookieDomain, MaxAge: cfg.RefreshTokenTTL},
 		},
 		Auth: authSvc, Users: userSvc, Balance: balanceSvc, Admin: adminSvc, AdminGate: adminSvc,
+		Content: contentSvcs.catalog, ContentAdmin: contentSvcs.admin,
+		Session: sessionSvc, SessionQuery: sessionQuery, Tickets: tickets,
 	})
 	return router, dispatcher, nil
+}
+
+// contentServices are the content components the api binary mounts.
+type contentServices struct {
+	cached   content.Repository
+	resolver content.Resolver
+	catalog  *content.CatalogService
+	admin    *content.AdminService
+}
+
+// buildContent wires the content side: the in-process cache over Postgres (30 s for live reads, spec
+// 6.5), the resolver, the catalog and the admin lifecycle, and validates the whole catalog once.
+// Broken content never stops the process: it only hides the entity (spec 6.10.3).
+func buildContent(ctx context.Context, cfg config.API, logger *slog.Logger, pool *pgxpool.Pool, store *postgres.Store, reg *prometheus.Registry,
+	ids idgen.Generator, clk clock.Clock) (contentServices, error) {
+	rc, err := loadProviderSettings()
+	if err != nil {
+		return contentServices{}, fmt.Errorf("provider settings: %w", err)
+	}
+	cache := content.NewCachedRepository(postgres.NewContentRepo(pool), cfg.CacheTTL(), clk)
+	observer := metrics.NewContent(reg)
+	vcfg := validatorConfig(rc)
+	content.ReportCatalog(ctx, content.NewValidator(cache, vcfg), observer, logger)
+	return contentServices{
+		cached:   cache,
+		resolver: content.NewResolver(cache, resolverConfig(rc), observer),
+		catalog:  content.NewCatalogService(cache, resolverConfig(rc)),
+		admin: content.NewAdminService(content.AdminDeps{
+			Store: store.ContentStore(), Validator: vcfg, Clock: clk, IDs: ids, Invalidator: cache.(content.Invalidator), RequestID: httpapi.RequestIDFrom,
+		}),
+	}, nil
 }
