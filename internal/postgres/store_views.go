@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nabePi/kotoki-backend/internal/admin"
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/balance"
 )
@@ -38,3 +39,15 @@ func (s *Store) AuthStore() auth.Store { return authStoreView{s: s} }
 func (v authStoreView) WithinTx(ctx context.Context, fn func(ctx context.Context, tx auth.Tx) error) error {
 	return v.s.WithinTx(ctx, func(ctx context.Context, tx *Tx) error { return fn(ctx, tx) })
 }
+
+// adminStoreView adapts Store to admin.Store: *Tx combines auth, balance, audit and the session gate.
+type adminStoreView struct{ s *Store }
+
+// AdminStore returns the admin.Store view of s.
+func (s *Store) AdminStore() admin.Store { return adminStoreView{s: s} }
+
+func (v adminStoreView) WithinTx(ctx context.Context, fn func(ctx context.Context, tx admin.Tx) error) error {
+	return v.s.WithinTx(ctx, func(ctx context.Context, tx *Tx) error { return fn(ctx, tx) })
+}
+
+var _ admin.Tx = (*Tx)(nil)

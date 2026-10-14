@@ -433,3 +433,13 @@ Tanggal: 2026-10-14
 - `db/queries/{users,refresh_tokens,password_resets}.sql` + sqlc; `internal/postgres/{user_repo,refresh_token_repo,password_reset_repo}.go` (`ux_users_email`/`ux_users_phone` → `ErrEmailTaken`/`ErrPhoneTaken`, `ErrNoRows` → sentinel, `FOR UPDATE` untuk `LockByID`/`LockByHash`, waktu selalu dari parameter, filter list memakai `starts_with(lower(email), …)`); `(*Tx).Accounts()` menjembatani ke `balance.OpenAccount`; `(*Store).AuthStore()`
 ### Test
 - go test -tags integration ./internal/postgres -run 'PGUser|PGRefresh|PGPassword|PGRegister|PGCount' (Podman) — PASS: ketiga suite `repotest` di PostgreSQL, DELETE satu statement untuk rantai self-FK, register atomik (rollback user+account+ledger), reuse refresh di PG commit revoke, `CountActive` batas `expires_at == now`
+
+## M2-T18 — postgres: audit repo, SessionGate, TicketSessionReader, AdminStore
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `db/queries/{admin_audit,session_gate}.sql`; `internal/postgres/{admin_audit_repo,session_gate}.go`: `(*Tx).Audit()` (details JSONB), `(*Tx).SessionGate()` (`OpenSessions` = sesi RESERVED/STARTING/ACTIVE/ENDING; **`CancelReserved` stub** → `INTERNAL_ERROR "session cancel not wired before M3"`), `postgres.NewTicketSessionReader` (JOIN sessions × balance_reservations), `(*Store).AdminStore()`; `*Tx` memenuhi `admin.Tx`
+### Test
+- go test -tags integration ./internal/postgres -run 'PGAudit|PGAdmin|PGSessionGate|PGTicket' (Podman) — PASS: suite audit, append-only (23001), grant + audit atomik (audit ditolak DB → saldo kembali), alur hapus akun (status DELETED, token terhapus, account & ledger utuh, reconcile kosong), gate tanpa sesi, stub CancelReserved, reader `ErrSessionNotFound`
+### Sisa (M3)
+- Task M3 wajib mengganti isi `CancelReserved` dengan `session.Service.CancelInTx` dan membalik `TestPGSessionGateCancelReservedNotWired`
