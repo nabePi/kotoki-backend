@@ -554,3 +554,12 @@ Tanggal: 2026-10-14
 - `errors_test.go` (tabel taksonomi, 404, local_concurrency, kuota, KindOf, status HTTP, string, potong 512, Unwrap) dan `importrules_test.go` (aturan impor provider/fake/prompt) — PASS
 ### Penyimpangan
 - `NewCircuitOpen` diekspor (test di paket eksternal)
+
+## M4-T2 — `NormalizeJA` dan util PCM
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/text.go`: `NormalizeJA` (komposisi kana + dakuten/handakuten tanpa `x/text`, spasi antar rune non-ASCII dibuang, trim)
+- `internal/provider/pcm.go`: `EncodeWAV`/`DecodeWAV`/`WAVDurationMs`, `ResamplePCM16` (linear), `RMSdBFS`, `pcmRing` (posisi logis absolut)
+### Test
+- `text_test.go`, `pcm_test.go`, `pcm_internal_test.go` — PASS (race)
