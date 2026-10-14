@@ -4,9 +4,9 @@
 
 **Goal:** Membangun backend Kotoki (latihan percakapan bahasa Jepang realtime dengan AI: STT → LLM → TTS streaming, balance server-authoritative, evaluasi/memory/learner pasca-sesi) sampai siap produksi untuk 1.000 sesi bersamaan.
 
-**Architecture:** Monolit modular Go dengan layout per-fitur (spec §2.2): paket fitur berisi domain + service + port; adapter (`postgres`, `redisstore`, `amqp`, `objectstore`, `mailer`, `provider/<vendor>`) mengimplementasikan port; handler (`httpapi`, `wsgateway`) tipis; wiring manual di `cmd/*/main.go`. Tiga binary (`api`, `realtime`, `worker`) + `kotoki-cli`. PostgreSQL = sumber kebenaran, Redis = state runtime, RabbitMQ = pengiriman async via transactional outbox.
+**Architecture:** Monolit modular Go dengan layout per-fitur (spec §2.2): paket fitur berisi domain + service + port; adapter (`postgres`, `redisstore`, `amqp`, `mailer`, `provider/<vendor>`) mengimplementasikan port; handler (`httpapi`, `wsgateway`) tipis; wiring manual di `cmd/*/main.go`. Tiga binary (`api`, `realtime`, `worker`) + `kotoki-cli`. PostgreSQL = sumber kebenaran, Redis = state runtime, RabbitMQ = pengiriman async via transactional outbox.
 
-**Tech Stack:** Go 1.25, chi, pgx + sqlc, golang-migrate, coder/websocket, go-redis v9, amqp091, aws-sdk-go-v2 (S3/MinIO), golang-jwt, argon2id, hraban/opus (cgo), go-webrtcvad (cgo), OpenTelemetry (trace) + Prometheus client (metrik), caarlos0/env, testify, testcontainers. Daftar lengkap & versi: spec D-003 (allowlist; library di luar daftar = ubah register dulu).
+**Tech Stack:** Go 1.25, chi, pgx + sqlc, golang-migrate, coder/websocket, go-redis v9, amqp091, golang-jwt, argon2id, hraban/opus (cgo), go-webrtcvad (cgo), OpenTelemetry (trace) + Prometheus client (metrik), caarlos0/env, testify, testcontainers. Daftar lengkap & versi: spec D-003 (allowlist; library di luar daftar = ubah register dulu).
 
 **Spec (sumber kebenaran, wajib dibaca bersama rencana ini):** `docs/superpowers/specs/2026-10-12-kotoki-backend-design.md`. Rencana mengacu ke bab/§ spec (nomor § stabil; nomor baris tidak). Jika rencana dan spec berbeda, **spec menang**; catat di `docs/implementation-deviations.md`.
 
@@ -29,7 +29,7 @@ Berlaku untuk setiap task di semua milestone (nilai disalin dari spec):
 - Provider: adapter tanpa SDK vendor (`net/http` + `coder/websocket`); mode `PROVIDER_MODE=fake` first-class (D-007); nama vendor/kapabilitas UPPERCASE (R-6).
 - Definition of Done per task: spec §14.9.2 (build, vet, lint 0 issue, `make test` race hijau, integration/e2e bila relevan, coverage §14.8, entri `docs/implementation-log.md`, penyimpangan di `docs/implementation-deviations.md`).
 - Setiap task = TDD (test gagal dulu → implementasi minimal → hijau → commit). Satu commit per task, pesan `feat|test|chore|docs(<area>): <ringkas>`. Jangan commit secret atau file generated yang tidak terkait.
-- Tag image/versi yang di spec ditulis `<PIN>` (mis. `grafana/otel-lgtm`, MinIO): pin ke rilis terbaru saat bootstrap dan catat di `docs/implementation-log.md`.
+- Tag image/versi yang di spec ditulis `<PIN>` (mis. `grafana/otel-lgtm`): pin ke rilis terbaru saat bootstrap dan catat di `docs/implementation-log.md`.
 
 ## Review Focus
 
@@ -55,14 +55,14 @@ Urutan eksekusi yang aman: **M1 → M2 → M4 → M3 → M5 → M6 → M7 → M8
 | # | Plan | Deliverable (bisa diuji sendiri) | Bab spec | Bergantung pada |
 |---|---|---|---|---|
 | **M1** | Foundation & Schema | Repo bootstrap, `platform/*` (config, log, otel, errs, clock, idgen, health, metrics), lint `depguard`, CI, docker-compose, **seluruh 18 migration (24 tabel)** + sqlc + `postgres.Store` + test migration | §2, §13.2, §14, §15 | — |
-| **M2** | Identity, Auth & Admin | Register/login/refresh/logout/reset password, JWT, ticket WS, rate limit, consent, hapus akun, `balance_accounts`, endpoint admin (grant/adjust, audit) | Bab 3, §4 (grant/adjust), §5.8 | M1 |
+| **M2** | Identity, Auth & Admin | Register/login/refresh/logout/reset password, JWT, ticket WS, rate limit, persetujuan terms, hapus akun, `balance_accounts`, endpoint admin (grant/adjust, audit) | Bab 3, §4 (grant/adjust), §5.8 | M1 |
 | **M3** | Content, Balance & Session lifecycle | Konten (scenario/prompt berversi, karakter tanpa versi dengan suara inline) + seed 4 karakter + resolver (menghasilkan `config_snapshot`) + katalog REST + `PATCH` karakter admin; reservasi/ledger/settlement; `POST /sessions`, cancel, state machine, `RuntimeService`, transcript/query, sweeper rules (tanpa runtime) | Bab 4, 5, 6 | M2, **M4** (paket `prompt` + `provider` ports) |
-| **M4** | Provider layer, Prompt & Fakes | Port provider, router satu-vendor-aktif per kapabilitas (dari flag env) + breaker per (vendor,kapabilitas) + fallback TTS opsional per karakter, `prompt` (Render, tokens, parser kalimat), fake STT/LLM/TTS/Evaluation/Embedding/Pronunciation, cost metering | Bab 8, §6.8 | M1 |
+| **M4** | Provider layer, Prompt & Fakes | Port provider, router satu-vendor-aktif per kapabilitas (dari flag env) + breaker per (vendor,kapabilitas) + fallback TTS opsional per karakter, `prompt` (Render, tokens, parser kalimat), fake STT/LLM/TTS/Evaluation/Embedding, cost metering | Bab 8, §6.8 | M1 |
 | **M5** | Realtime core (**demo pertama**) | `conversation` (turn engine, VAD, barge-in, context builder), protokol WS, `wsgateway`, Redis state, reconnect/takeover, drain, `kotokiclient` + `kotoki-cli`, e2e dengan fake provider | Bab 7 | M3, M4 |
 | **M6** | Async backbone & jobs | Outbox + publisher, topologi RabbitMQ, consumer framework (retry/DLQ/idempotency), `jobs` scheduler + semua job terjadwal (sweeper, cleanup, partition, reconcile, purge) | Bab 9 | M3 (M5 untuk e2e penutup) |
-| **M7** | Evaluation & Summary | Worker evaluasi (rubric, JSON schema, pronunciation), `GET /sessions/{id}/evaluation`, summary worker | Bab 10, §9.9.6 | M6, M4 |
+| **M7** | Evaluation & Summary | Worker evaluasi (rubric, JSON schema), `GET /sessions/{id}/evaluation`, summary worker | Bab 10, §9.9.6 | M6, M4 |
 | **M8** | Memory & Learner | Ekstraksi/dedup/retrieval memory, learner worker (proficiency), adaptive difficulty terhubung ke `POST /sessions` & prompt, endpoint profile/memory | Bab 11, 12 | M7, M5 |
-| **M9** | Real providers & benchmark | Adapter ElevenLabs (STT+TTS), Cartesia (STT+TTS), OpenAI (LLM/Evaluation/Embedding/STT), DeepSeek (LLM), Azure (pronunciation); contract test `-tags live`; `kotoki-cli provider-bench`; penetapan model & voice ID per karakter (`characters.provider_name/model_name/voice_id`) | Bab 8 §8.4, §8.10 | M5, M7 |
+| **M9** | Real providers & benchmark | Adapter ElevenLabs (STT+TTS), Cartesia (STT+TTS), OpenAI (LLM/Evaluation/Embedding/STT), DeepSeek (LLM); contract test `-tags live`; `kotoki-cli provider-bench`; penetapan model & voice ID per karakter (`characters.provider_name/model_name/voice_id`) | Bab 8 §8.4, §8.10 | M5, M7 |
 | **M10** | Hardening & operasi | Manifest k8s, dashboard/alert, load test gate G1–G4, failure injection, checklist produksi | Bab 13 | M8, M9 |
 
 Paralel yang diizinkan: **M4 paralel dengan M2** (hanya butuh M1; **M4 harus selesai sebelum M3** karena M3 memakai `prompt.Render/Template`); **M6 paralel dengan M5** setelah M3; **M9 paralel dengan M7–M8** setelah M5. Selain itu berurutan.

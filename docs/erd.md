@@ -20,8 +20,6 @@ erDiagram
         timestamptz last_login_at
         text terms_version
         timestamptz terms_accepted_at
-        boolean audio_consent
-        timestamptz audio_consent_updated_at
         timestamptz created_at
         timestamptz updated_at
         timestamptz deleted_at
@@ -250,7 +248,6 @@ erDiagram
         int stt_final_ms
         int llm_first_token_ms
         int tts_first_audio_ms
-        text user_audio_object_key
         int input_tokens
         int output_tokens
         int tts_characters
@@ -288,7 +285,7 @@ erDiagram
     learner_skill_states {
         uuid id PK
         uuid user_id FK, UK "UK komposit dengan skill"
-        text skill UK "7 skill"
+        text skill UK "6 skill"
         numeric_3_2 prior_level
         numeric_4_3 prior_confidence
         numeric_3_2 estimated_level
@@ -331,15 +328,11 @@ erDiagram
         smallint fluency_score
         smallint naturalness_score
         smallint task_achievement_score
-        smallint pronunciation_score
         numeric_5_2 overall_score
         smallint listening_response_signal
         smallint interaction_complexity_signal
         jsonb dimension_confidence
         jsonb dimension_comments
-        text pronunciation_status "ASSESSED UNAVAILABLE SKIPPED"
-        text pronunciation_unavailable_reason
-        int pronunciation_utterance_count
         text summary_feedback
         jsonb strengths
         jsonb focus_areas
@@ -355,7 +348,6 @@ erDiagram
         smallint llm_call_count
         int input_tokens
         int output_tokens
-        text pronunciation_provider
         int attempt_count
         text failure_code
         text last_error
@@ -374,7 +366,7 @@ erDiagram
         uuid session_turn_id "logis ke session_turns tanpa FK"
         int turn_sequence_number
         smallint ordinal UK
-        text dimension "GRAMMAR VOCABULARY FLUENCY NATURALNESS TASK_ACHIEVEMENT PRONUNCIATION"
+        text dimension "GRAMMAR VOCABULARY FLUENCY NATURALNESS TASK_ACHIEVEMENT"
         text finding_type
         text severity "INFO MINOR MAJOR"
         text original_text
@@ -382,7 +374,7 @@ erDiagram
         text explanation
         text pattern_key
         numeric_3_2 confidence
-        text source "LLM PRONUNCIATION_PROVIDER"
+        text source "LLM"
         timestamptz created_at
     }
     memories {
@@ -684,7 +676,7 @@ erDiagram
     learner_skill_states {
         uuid id PK
         uuid user_id FK, UK "UK komposit dengan skill"
-        text skill UK "7 skill"
+        text skill UK "6 skill"
         uuid last_evaluation_id FK "ditambah di migration 000016; nullable"
     }
     proficiency_estimates {

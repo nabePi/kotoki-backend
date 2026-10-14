@@ -24,7 +24,7 @@ Platform latihan **kaiwa (percakapan) bahasa Jepang** dengan AI secara real-time
 ### 1.1 Goals
 1. Percakapan suara terasa natural: latensi rendah, turn detection yang paham pola bicara Jepang, barge-in responsif.
 2. Balance (menit) server-authoritative, tidak bisa dicurangi, setiap perubahan teraudit di ledger.
-3. Evaluasi pasca-sesi yang berguna (grammar, vocabulary, fluency, naturalness, pronunciation, task achievement) + profil kemampuan per skill yang berkembang.
+3. Evaluasi pasca-sesi yang berguna (grammar, vocabulary, fluency, naturalness, task achievement) + profil kemampuan per skill yang berkembang.
 4. Memory jangka panjang per user (fakta, preferensi, pola kesalahan, episodik) dipakai dalam percakapan berikutnya.
 5. Provider-agnostic: STT/LLM/TTS/Evaluation dapat diganti tanpa mengubah domain; vendor STT/LLM dipilih manual lewat env (D-017), TTS per karakter.
 6. Production-grade untuk **1.000 concurrent sessions**: observability, idempotency, failure recovery, load test.
@@ -34,6 +34,7 @@ Platform latihan **kaiwa (percakapan) bahasa Jepang** dengan AI secara real-time
 - Pembayaran / payment gateway. Balance diberikan admin (D-031).
 - Admin UI / CMS konten. Konten di-seed lewat migration/seed SQL dan endpoint admin minimal.
 - Mobile native app, multi-bahasa selain Jepang, video.
+- Pronunciation assessment (audio user, vendor assessment) ditunda ke pasca-v1.
 - Evaluasi yang mengganggu selama percakapan (koreksi real-time). Evaluasi hanya post-session.
 
 ### 1.3 Anti-goals (gagal walaupun "jalan")
@@ -42,7 +43,7 @@ Platform latihan **kaiwa (percakapan) bahasa Jepang** dengan AI secara real-time
 - Balance bisa minus, terpakai ganda, atau hilang saat crash.
 - Satu user bisa melihat/menempel ke sesi/memory user lain.
 - Evaluasi/memory extraction memperlambat turn realtime.
-- Transcript/audio disimpan lebih lama dari kebijakan retensi.
+- Transcript disimpan lebih lama dari kebijakan retensi (user audio tidak pernah disimpan).
 
 ---
 
@@ -54,10 +55,10 @@ Platform latihan **kaiwa (percakapan) bahasa Jepang** dengan AI secara real-time
 |---|---|
 | D-001 | Repo ini **hanya backend**. Go module di root repo (tidak ada subfolder `backend/`). Module path `github.com/nabePi/kotoki-backend`. [builder call] |
 | D-002 | Go **1.25**. Satu `go.mod`. Tiga binary: `cmd/api`, `cmd/realtime`, `cmd/worker`, plus tool `cmd/kotoki-cli` (test client). Tidak ada `cmd/migrate`: migration dijalankan dengan CLI `migrate` dari golang-migrate (target Makefile `migrate-up`/`migrate-down`, Job migration di Kubernetes). [builder call] |
-| D-003 | Library baseline (allowlist; library di luar daftar ini butuh perubahan register) [builder call]: HTTP router `github.com/go-chi/chi/v5`; PostgreSQL `github.com/jackc/pgx/v5` (pgxpool) + **sqlc** untuk query type-safe; pgvector `github.com/pgvector/pgvector-go`; YAML `gopkg.in/yaml.v3` (hanya `prices.yaml`); Unicode normalisasi `golang.org/x/text/unicode/norm` (NFC/NFKC password & nickname); JSON Schema validator `github.com/santhosh-tekuri/jsonschema/v6` (validasi `output_schema` prompt & output LLM); migration **golang-migrate** (file `migrations/000001_name.up.sql` / `.down.sql`, 6 digit; library-nya boleh dipakai di test); WebSocket `github.com/coder/websocket`; Redis `github.com/redis/go-redis/v9`; RabbitMQ `github.com/rabbitmq/amqp091-go`; object storage `github.com/aws/aws-sdk-go-v2/service/s3` (MinIO lokal); JWT `github.com/golang-jwt/jwt/v5`; password hash **argon2id** (`golang.org/x/crypto/argon2`); concurrency helper `golang.org/x/sync` (errgroup, semaphore); UUID `github.com/google/uuid` (**UUIDv7** untuk semua ID baru); logging `log/slog` (JSON); **metrik** `github.com/prometheus/client_golang` (endpoint `/metrics`); **trace** OpenTelemetry SDK + exporter OTLP + `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` (OTel hanya untuk trace, bukan metrik); config dari environment variable (`github.com/caarlos0/env/v11`); test `testing` + `github.com/stretchr/testify` + `github.com/testcontainers/testcontainers-go` beserta modul `postgres`, `redis`, `rabbitmq`, `minio`. Opus codec `gopkg.in/hraban/opus.v2` (cgo, libopus). VAD `github.com/maxhawkins/go-webrtcvad` (cgo, WebRTC VAD). Adapter provider (STT/LLM/TTS/evaluation/embedding/pronunciation) memakai `net/http` + `coder/websocket` langsung, **tanpa SDK vendor**. |
+| D-003 | Library baseline (allowlist; library di luar daftar ini butuh perubahan register) [builder call]: HTTP router `github.com/go-chi/chi/v5`; PostgreSQL `github.com/jackc/pgx/v5` (pgxpool) + **sqlc** untuk query type-safe; pgvector `github.com/pgvector/pgvector-go`; YAML `gopkg.in/yaml.v3` (hanya `prices.yaml`); Unicode normalisasi `golang.org/x/text/unicode/norm` (NFC/NFKC password & nickname); JSON Schema validator `github.com/santhosh-tekuri/jsonschema/v6` (validasi `output_schema` prompt & output LLM); migration **golang-migrate** (file `migrations/000001_name.up.sql` / `.down.sql`, 6 digit; library-nya boleh dipakai di test); WebSocket `github.com/coder/websocket`; Redis `github.com/redis/go-redis/v9`; RabbitMQ `github.com/rabbitmq/amqp091-go`; JWT `github.com/golang-jwt/jwt/v5`; password hash **argon2id** (`golang.org/x/crypto/argon2`); concurrency helper `golang.org/x/sync` (errgroup, semaphore); UUID `github.com/google/uuid` (**UUIDv7** untuk semua ID baru); logging `log/slog` (JSON); **metrik** `github.com/prometheus/client_golang` (endpoint `/metrics`); **trace** OpenTelemetry SDK + exporter OTLP + `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` (OTel hanya untuk trace, bukan metrik); config dari environment variable (`github.com/caarlos0/env/v11`); test `testing` + `github.com/stretchr/testify` + `github.com/testcontainers/testcontainers-go` beserta modul `postgres`, `redis`, `rabbitmq`. Opus codec `gopkg.in/hraban/opus.v2` (cgo, libopus). VAD `github.com/maxhawkins/go-webrtcvad` (cgo, WebRTC VAD). Adapter provider (STT/LLM/TTS/evaluation/embedding) memakai `net/http` + `coder/websocket` langsung, **tanpa SDK vendor**. |
 | D-004 | Dependency injection: **manual wiring** di `cmd/*/main.go` (tanpa framework DI). Tanpa ORM. |
-| D-005 | **Layout per fitur (package by feature) dengan pemisahan handler / service / repository** (detail §2.2). Paket fitur (`auth`, `balance`, `session`, `content`, `conversation`, `prompt`, `provider`, `evaluation`, `memory`, `learner`, `summary`, `admin`, `events`) berisi tipe domain, aturan bisnis (`Service`), dan **interface port yang didefinisikan di sisi pemakai** (mis. `session.Repository`). Paket fitur MUST NOT mengimpor paket adapter (`postgres`, `redisstore`, `amqp`, `objectstore`, `httpapi`, `wsgateway`, `jobs`, `mailer`, vendor adapter `provider/<vendor>`) maupun library infrastruktur (`chi`, `pgx`, `go-redis`, `amqp091`, `coder/websocket`, `aws-sdk`). Adapter mengimplementasikan port; handler (`httpapi`, `wsgateway`) hanya decode → panggil `Service` → encode. Ditegakkan `depguard` di `golangci-lint` (Bab 14). [builder call] |
-| D-006 | Local dev: `docker-compose.yml` berisi `pgvector/pgvector:pg17`, `redis:7.4`, `rabbitmq:4-management`, `minio/minio`, profil `observability`: `otel/opentelemetry-collector-contrib` + `grafana/otel-lgtm` (Grafana + Tempo + Loki + Prometheus, stack sama dengan produksi; Grafana di `localhost:3000`) — tanpa Jaeger. `Makefile` target: `up`, `down`, `migrate-up`, `migrate-down`, `sqlc`, `test`, `test-integration`, `lint`, `run-api`, `run-realtime`, `run-worker`. |
+| D-005 | **Layout per fitur (package by feature) dengan pemisahan handler / service / repository** (detail §2.2). Paket fitur (`auth`, `balance`, `session`, `content`, `conversation`, `prompt`, `provider`, `evaluation`, `memory`, `learner`, `summary`, `admin`, `events`) berisi tipe domain, aturan bisnis (`Service`), dan **interface port yang didefinisikan di sisi pemakai** (mis. `session.Repository`). Paket fitur MUST NOT mengimpor paket adapter (`postgres`, `redisstore`, `amqp`, `httpapi`, `wsgateway`, `jobs`, `mailer`, vendor adapter `provider/<vendor>`) maupun library infrastruktur (`chi`, `pgx`, `go-redis`, `amqp091`, `coder/websocket`). Adapter mengimplementasikan port; handler (`httpapi`, `wsgateway`) hanya decode → panggil `Service` → encode. Ditegakkan `depguard` di `golangci-lint` (Bab 14). [builder call] |
+| D-006 | Local dev: `docker-compose.yml` berisi `pgvector/pgvector:pg17`, `redis:7.4`, `rabbitmq:4-management`, profil `observability`: `otel/opentelemetry-collector-contrib` + `grafana/otel-lgtm` (Grafana + Tempo + Loki + Prometheus, stack sama dengan produksi; Grafana di `localhost:3000`) — tanpa Jaeger. `Makefile` target: `up`, `down`, `migrate-up`, `migrate-down`, `sqlc`, `test`, `test-integration`, `lint`, `run-api`, `run-realtime`, `run-worker`. |
 | D-007 | Semua provider punya adapter **fake** deterministik (`internal/provider/fake`) yang dapat dipakai di local dev dan load test lewat `PROVIDER_MODE=fake`. Ini first-class, bukan hanya untuk unit test. Mode `real` memakai vendor di D-040/D-017. |
 | D-008 | **Domain & hostname** (`kotoki.id`) [dari pemilik produk]: frontend `app.kotoki.id`, REST API `api.kotoki.id`, WebSocket realtime `realtime.kotoki.id`; email sistem dikirim dari `no-reply@kotoki.id` (`MAIL_FROM=Kotoki <no-reply@kotoki.id>`). Staging memakai `*.staging.kotoki.id` (`app.staging.kotoki.id`, `api.staging.kotoki.id`, `realtime.staging.kotoki.id`) [builder call]. Semua host berada di bawah registrable domain yang sama sehingga cookie refresh `SameSite=Strict` (D-021) terkirim. Nilai produksi config: Bab 13 §13.2.17. Nama teknis (prefix metrik, key Redis, exchange, cookie, issuer JWT, biner, namespace) memakai `kotoki` (bukan `kaiwa`); "kaiwa" hanya dipakai sebagai kata untuk fitur percakapan. |
 
@@ -83,13 +84,13 @@ kotoki-backend/
 │   │   ├── protocol/       # pesan WS & binary frame (dipakai juga kotokiclient)
 │   │   └── rtstate/        # port & tipe state realtime Redis (redisstore tidak mengimpor conversation)
 │   ├── prompt/             # Render, RegisterFixtures, EstimateTokens, SentenceParser (tanpa tag)
-│   ├── provider/           # port STT/LLM/TTS/Evaluation/Embedding/Pronunciation, router, breaker, health
+│   ├── provider/           # port STT/LLM/TTS/Evaluation/Embedding, router, breaker, health
 │   │   ├── pricing/        # prices.yaml (embed)
 │   │   ├── httpx/          # helper HTTP/SSE/WS bersama untuk adapter vendor (retry body, decode stream)
 │   │   ├── providertest/   # contract test bersama untuk semua adapter (dijalankan ke fake & vendor live)
-│   │   ├── elevenlabs/  cartesia/  openai/  deepseek/  azure/   # adapter vendor (elevenlabs: STT+TTS; cartesia: STT+TTS; openai: LLM/Evaluation/Embedding/STT; deepseek: LLM(+Evaluation); azure: pronunciation; D-017) (net/http + coder/websocket)
+│   │   ├── elevenlabs/  cartesia/  openai/  deepseek/   # adapter vendor (elevenlabs: STT+TTS; cartesia: STT+TTS; openai: LLM/Evaluation/Embedding/STT; deepseek: LLM(+Evaluation); D-017) (net/http + coder/websocket)
 │   │   └── fake/           # provider fake deterministik (D-007), fixtures/ (go:embed)
-│   ├── evaluation/         # consumer evaluasi, rubric, pronunciation, EvaluationPromptData
+│   ├── evaluation/         # consumer evaluasi, rubric, EvaluationPromptData
 │   ├── memory/             # extraction, dedup, RetrievalService, MemoryExtractionPromptData
 │   ├── learner/            # profil, proficiency, adaptive difficulty; mengisi prompt.LearnerContext
 │   ├── summary/            # summary worker, SummaryPromptData
@@ -100,7 +101,6 @@ kotoki-backend/
 │   │   └── sqlcgen/        # kode hasil sqlc (jangan diedit manual)
 │   ├── redisstore/         # state runtime, ticket WS, rate limit, lock, memctx
 │   ├── amqp/               # outbox publisher, topologi RabbitMQ, consumer framework, retry/DLQ
-│   ├── objectstore/        # S3/MinIO (audio sementara)
 │   ├── mailer/             # adapter Mailer: smtp, log, fake
 │   │   ── PAKET HANDLER / ENTRYPOINT ──
 │   ├── httpapi/            # router & 4 grup route, middleware, per fitur: *_routes.go, *_handler.go, *_dto.go; Handle[B,R] bertipe; WriteError
@@ -158,7 +158,7 @@ kotoki-backend/
 | D-014 | **Penyederhanaan model konten.** Tabel 32 → **24**: dihapus `conversation_styles`, `conversation_style_versions`, `expression_profiles`, `expression_profile_versions`, `character_versions`, `voice_profiles`, `voice_provider_configs`, `character_voice_profiles`. `characters` satu tabel tanpa versi dengan `persona` dan `voice` JSONB inline (gender, accent, `speaking_rate` 0.80–1.20; TTS vendor/model/voice per karakter, D-015). Formalitas = `scenario_versions.formality`. Gaya bicara umum = konstanta `content.DefaultStyle` + Bab 12. **Ekspresi suara dihapus total** (tanpa `<e:NAME>`, tanpa field `expression` di event WS, tanpa `session_turns.expressions`). Sesi menyimpan `sessions.config_snapshot` JSONB. Migration 21 → **18**. REST 53 → 50 baris, total kode error 70 → **67** (dihapus `CONVERSATION_STYLE_NOT_AVAILABLE`, `EXPRESSION_PROFILE_NOT_AVAILABLE`, `CONTENT_IN_USE_AS_DEFAULT`). |
 | D-015 | **TTS per karakter; `sessions.provider_profile` dihapus.** `characters` mendapat `provider_name` (`ELEVENLABS`/`CARTESIA`, UPPERCASE, CHECK, D-017; input huruf kecil dinormalisasi), `model_name`, `voice_id` (TEXT NOT NULL, ≤ 200) = TTS utama karakter. `voice` JSONB hanya atribut non-vendor (`gender`, `accent`, `speaking_rate`) + opsional `voice.fallback` `{provider_name, model_name, voice_id}` (vendor berbeda). Router TTS membaca `config_snapshot.character`. Env `PROVIDER_PROFILE_*_TTS_*` dan `PROVIDER_TTS_FALLBACK` dihapus; `CARTESIA_API_KEY`, `CARTESIA_BASE_URL`, `CARTESIA_VERSION` ditambahkan. Fallback TTS hanya opsional per karakter (`voice.fallback` = vendor TTS lain yang enabled). Adapter baru `internal/provider/cartesia` (detail API: verifikasi di task adapter). Mode fake mengabaikan voice; seed memakai `PLACEHOLDER_*` sampai benchmark. Jumlah tabel/migration tetap (24/18). |
 | D-016 | **Tier karakter dihapus (keputusan pemilik produk, penyederhanaan).** Tidak ada `characters.tier`, `config_snapshot.character.tier`, field `tier` di `GET /characters`, tipe Go `Tier`/`ProfileName`/`TierConfig`/`LLMTiers`, maupun label metrik/atribut span `tier`/`character_tier`. Satu konfigurasi provider global (bukan DB): nama model per vendor/kapabilitas (D-017: `OPENAI_LLM_MODEL`, `OPENAI_STT_MODEL`, `OPENAI_EMBEDDING_MODEL`, dst); nilai awal = nilai PREMIUM lama (placeholder, dikonfirmasi benchmark). Rolling summary: `ROLLING_SUMMARY_LLM_MODEL` default = model LLM vendor aktif. TTS tetap per karakter (D-015). Benchmark memilih satu model LLM: kualitas tertinggi yang lolos gate dengan biaya per menit ≤ batas pemilik produk. Seed 4 karakter tanpa tier. Jumlah tabel/migration tetap (24/18). |
-| D-017 | **Vendor provider & cara memilihnya (keputusan pemilik produk).** TTS: `ELEVENLABS` dan `CARTESIA`, **keduanya enabled**, vendor dipilih per karakter (`characters.provider_name`, CHECK hanya dua nilai itu). STT: `OPENAI` (default), `ELEVENLABS`, `CARTESIA` — **tepat satu enabled** via `OPENAI_STT_ENABLED` (default `true`), `ELEVENLABS_STT_ENABLED`/`CARTESIA_STT_ENABLED` (default `false`). LLM (percakapan, rolling summary, evaluasi, summary, ekstraksi memory): `OPENAI` (default) atau `DEEPSEEK` — tepat satu enabled via `OPENAI_LLM_ENABLED` (default `true`)/`DEEPSEEK_LLM_ENABLED` (default `false`). TTS: `ELEVENLABS_TTS_ENABLED`/`CARTESIA_TTS_ENABLED` (default `true`, minimal satu); karakter dengan `provider_name` yang tidak enabled ditolak (`CONTENT_MISCONFIGURED`/`CHARACTER_NOT_AVAILABLE`). Embedding `OPENAI`; pronunciation `AZURE`. **Dihapus**: Deepgram, Gemini, OpenAI TTS. Validasi startup: STT/LLM tepat satu `true` (pesan menyebut nama variabel) atau proses gagal start. **Tidak ada fallback vendor otomatis untuk STT/LLM**: "backup" = vendor lain dipilih **manual** (ubah env + restart, runbook). Dihapus: `RouterConfig` primary/fallback STT/LLM, `RESET` event LLM fallback, `PROVIDER_SWITCHED`, STT replay buffer fallback, `StartWith`/sticky STT (`rt.stt_vendor`), evaluasi percobaan ke-3 vendor fallback, `CompleteText` fallback. Dipertahankan: circuit breaker per (vendor, kapabilitas), timeout/retry budget, rotasi koneksi vendor yang sama, retry evaluasi/embedding, repair JSON (maks 2 panggilan LLM per delivery). Kegagalan STT/LLM → generation/turn `FAILED` + APOLOGY. Env model: `OPENAI_STT_MODEL`, `ELEVENLABS_STT_MODEL`, `CARTESIA_STT_MODEL`, `OPENAI_LLM_MODEL`, `DEEPSEEK_LLM_MODEL`, `OPENAI_EVALUATION_MODEL`/`DEEPSEEK_EVALUATION_MODEL`, `OPENAI_EMBEDDING_MODEL`; API key per vendor wajib bila ada kapabilitas vendor itu enabled; `PROVIDER_MODE=fake|real` tetap. Benchmark membandingkan 3 STT, 2 LLM, 2 TTS per karakter; keputusan akhir manual pemilik produk. Tabel/migration tidak berubah selain CHECK `characters.provider_name`. |
+| D-017 | **Vendor provider & cara memilihnya (keputusan pemilik produk).** TTS: `ELEVENLABS` dan `CARTESIA`, **keduanya enabled**, vendor dipilih per karakter (`characters.provider_name`, CHECK hanya dua nilai itu). STT: `OPENAI` (default), `ELEVENLABS`, `CARTESIA` — **tepat satu enabled** via `OPENAI_STT_ENABLED` (default `true`), `ELEVENLABS_STT_ENABLED`/`CARTESIA_STT_ENABLED` (default `false`). LLM (percakapan, rolling summary, evaluasi, summary, ekstraksi memory): `OPENAI` (default) atau `DEEPSEEK` — tepat satu enabled via `OPENAI_LLM_ENABLED` (default `true`)/`DEEPSEEK_LLM_ENABLED` (default `false`). TTS: `ELEVENLABS_TTS_ENABLED`/`CARTESIA_TTS_ENABLED` (default `true`, minimal satu); karakter dengan `provider_name` yang tidak enabled ditolak (`CONTENT_MISCONFIGURED`/`CHARACTER_NOT_AVAILABLE`). Embedding `OPENAI`. **Dihapus**: Deepgram, Gemini, OpenAI TTS. Validasi startup: STT/LLM tepat satu `true` (pesan menyebut nama variabel) atau proses gagal start. **Tidak ada fallback vendor otomatis untuk STT/LLM**: "backup" = vendor lain dipilih **manual** (ubah env + restart, runbook). Dihapus: `RouterConfig` primary/fallback STT/LLM, `RESET` event LLM fallback, `PROVIDER_SWITCHED`, STT replay buffer fallback, `StartWith`/sticky STT (`rt.stt_vendor`), evaluasi percobaan ke-3 vendor fallback, `CompleteText` fallback. Dipertahankan: circuit breaker per (vendor, kapabilitas), timeout/retry budget, rotasi koneksi vendor yang sama, retry evaluasi/embedding, repair JSON (maks 2 panggilan LLM per delivery). Kegagalan STT/LLM → generation/turn `FAILED` + APOLOGY. Env model: `OPENAI_STT_MODEL`, `ELEVENLABS_STT_MODEL`, `CARTESIA_STT_MODEL`, `OPENAI_LLM_MODEL`, `DEEPSEEK_LLM_MODEL`, `OPENAI_EVALUATION_MODEL`/`DEEPSEEK_EVALUATION_MODEL`, `OPENAI_EMBEDDING_MODEL`; API key per vendor wajib bila ada kapabilitas vendor itu enabled; `PROVIDER_MODE=fake|real` tetap. Benchmark membandingkan 3 STT, 2 LLM, 2 TTS per karakter; keputusan akhir manual pemilik produk. Tabel/migration tidak berubah selain CHECK `characters.provider_name`. |
 
 ### 2.4 Auth
 
@@ -228,7 +228,7 @@ kotoki-backend/
 
 | ID | Keputusan |
 |---|---|
-| D-040 | Vendor (D-017): TTS `ELEVENLABS` dan `CARTESIA` (keduanya enabled, **dipilih per karakter**, D-015; fallback TTS opsional per karakter via `voice.fallback`). STT: `OPENAI` (default), `ELEVENLABS` (Scribe realtime), `CARTESIA` (Ink, verifikasi di task adapter) — tepat satu enabled. LLM (percakapan, rolling summary, evaluasi, summary, memory): `OPENAI` (default) atau `DEEPSEEK` — tepat satu enabled. Embedding **OpenAI `text-embedding-3-small` (1536 dim)**. Pronunciation: interface + adapter **Azure Speech Pronunciation Assessment (ja-JP)** [builder call — lihat Open Decisions]. Deepgram, Gemini, dan OpenAI TTS dihapus. Identifier provider **UPPERCASE di semua tempat** (DB, nilai const Go, JSON, label metrik, suffix env): `ELEVENLABS`, `CARTESIA`, `OPENAI`, `DEEPSEEK`, `AZURE`, `FAKE_PRIMARY`, `FAKE_FALLBACK`; kapabilitas: `STT`, `LLM`, `TTS`, `EVALUATION`, `EMBEDDING`, `PRONUNCIATION`. |
+| D-040 | Vendor (D-017): TTS `ELEVENLABS` dan `CARTESIA` (keduanya enabled, **dipilih per karakter**, D-015; fallback TTS opsional per karakter via `voice.fallback`). STT: `OPENAI` (default), `ELEVENLABS` (Scribe realtime), `CARTESIA` (Ink, verifikasi di task adapter) — tepat satu enabled. LLM (percakapan, rolling summary, evaluasi, summary, memory): `OPENAI` (default) atau `DEEPSEEK` — tepat satu enabled. Embedding **OpenAI `text-embedding-3-small` (1536 dim)**. Deepgram, Gemini, dan OpenAI TTS dihapus. Identifier provider **UPPERCASE di semua tempat** (DB, nilai const Go, JSON, label metrik, suffix env): `ELEVENLABS`, `CARTESIA`, `OPENAI`, `DEEPSEEK`, `FAKE_PRIMARY`, `FAKE_FALLBACK`; kapabilitas: `STT`, `LLM`, `TTS`, `EVALUATION`, `EMBEDDING`. |
 | D-041 | Nama model per vendor/kapabilitas = **config** (`OPENAI_LLM_MODEL`, `DEEPSEEK_LLM_MODEL`, `OPENAI_STT_MODEL`, `ELEVENLABS_STT_MODEL`, `CARTESIA_STT_MODEL`, `OPENAI_EVALUATION_MODEL`/`DEEPSEEK_EVALUATION_MODEL`, `OPENAI_EMBEDDING_MODEL`; satu konfigurasi tanpa tier, D-016; sakelar vendor D-017), bukan hardcode; model TTS = data karakter (`characters.model_name`, D-015); nilai awal ditetapkan oleh task benchmark provider dengan kriteria terukur (latensi first token/first audio P95, kualitas Jepang pada golden set, biaya per menit). |
 | D-042 | **Tidak ada fallback vendor otomatis untuk STT/LLM/Evaluation/Embedding (D-017)**: vendor lain dipilih manual lewat env + restart. STT/LLM gagal → generation/turn `FAILED`, AI mengucapkan pesan maaf pendek dari audio pre-rendered/teks fallback (APOLOGY). Fallback TTS **opsional per karakter**: hanya sebelum chunk audio pertama generasi tersebut terkirim, memakai `characters.voice.fallback` (`provider_name`, `model_name`, `voice_id`; vendor TTS lain yang enabled, berbeda dari utama); bila tidak ada, generation gagal → APOLOGY. Setelah audio terkirim, kegagalan = generation `FAILED`. |
 | D-043 | Timeout budget awal (config): STT connect 3 s; STT final setelah turn end 1,5 s; LLM first token 2 s, total 15 s; TTS first audio 1,5 s; Evaluation 60 s; Embedding 5 s. Circuit breaker **per (vendor, kapabilitas) per proses** (in-memory, tidak dibagi antar pod; fail-fast + metrik, tanpa pindah vendor otomatis untuk STT/LLM): open setelah 5 kegagalan dalam 30 s, half-open setelah 20 s. |
@@ -243,10 +243,10 @@ kotoki-backend/
 | D-093 | Consumer idempotency: tabel `processed_events(consumer, event_id)` PK gabungan; consumer menulis baris ini di transaksi yang sama dengan efek bisnisnya. |
 | D-094 | Worker: satu binary `cmd/worker` dengan flag `--handlers=outbox,evaluation,memory,learner,summary,sweeper,cleanup`. Di Kubernetes dideploy sebagai beberapa Deployment dari image yang sama (outbox+sweeper+cleanup, evaluation, memory, learner+summary). Semua job terjadwal (nama, flag, interval, advisory lock ID, timeout) didefinisikan di **satu tabel: Bab 9 §9.9.1**; bab lain merujuknya dan tidak menulis lock ID/interval sendiri. |
 | D-095 | Learner worker mengonsumsi `evaluation.completed` (bukan `session.completed`). Memory worker mengonsumsi `session.completed` dan membaca transcript; ia tidak bergantung pada evaluation. |
-| D-096 | Evaluation: skor 0–100 per dimensi `GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `TASK_ACHIEVEMENT`, `PRONUNCIATION`. `pronunciation_score` nullable. `overall_score` = rata-rata dimensi yang non-null. Evaluasi `COMPLETED` boleh dengan `pronunciation_status = UNAVAILABLE`. Severity finding: `INFO`, `MINOR`, `MAJOR`. |
-| D-097 | Skala proficiency skill 0.0–5.0 (≈ JLPT N5=1 … N1=5). Skill: `GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `PRONUNCIATION`, `LISTENING_RESPONSE`, `INTERACTION_COMPLEXITY`. Trend: `INSUFFICIENT_DATA` (default), `IMPROVING`, `STABLE`, `DECLINING`. Algoritma update didefinisikan di bab Learning (EMA berbobot confidence). |
+| D-096 | Evaluation: skor 0–100 per 5 dimensi: `GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `TASK_ACHIEVEMENT`. `overall_score` = rata-rata 5 dimensi. Severity finding: `INFO`, `MINOR`, `MAJOR`. |
+| D-097 | Skala proficiency skill 0.0–5.0 (≈ JLPT N5=1 … N1=5). Skill: `GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `LISTENING_RESPONSE`, `INTERACTION_COMPLEXITY`. Trend: `INSUFFICIENT_DATA` (default), `IMPROVING`, `STABLE`, `DECLINING`. Algoritma update didefinisikan di bab Learning (EMA berbobot confidence). |
 | D-098 | Memory: kategori `PROFILE_FACT`, `PREFERENCE`, `LEARNING_PATTERN`, `EPISODIC`. Retrieval: memory non-episodik prioritas tinggi selalu dimasukkan (≤ 600 token); episodik via pgvector cosine similarity (top 3, threshold 0.75) memakai embedding ringkasan turn terakhir. |
-| D-099 | Audio: user audio **tidak disimpan** kecuali untuk pronunciation assessment **dan** user memberi `users.audio_consent = true` — segmen utterance PCM disimpan sementara di object storage (`audio/tmp/{session_id}/{turn_id}.wav`), dihapus setelah evaluasi `COMPLETED`; batas keras 24 jam dijamin job `audio_tmp_cleanup` per jam (lifecycle rule 1 hari = jaring pengaman; audio evaluasi `FAILED` dibiarkan sampai batas 24 jam). Utterance > 30 s tidak dinilai pronunciation (`TOO_LONG`). Retensi data (dihitung dari `sessions.ended_at`): baris `session_turns` dihapus, `sessions.summary_text` di-NULL, dan teks feedback evaluasi (findings, komentar) dipurge setelah **180 hari**; `session_events` dihapus setelah **365 hari**; skor evaluasi, memory (retensi per kategori Bab 11), dan profil learner disimpan selama akun ada; outbox `PUBLISHED` 7 hari, outbox `FAILED` & `processed_events` 30 hari. Job `transcript_retention` (Bab 9 §9.9.1) menangani turns/summary/findings dan `session_events` di partisi batas; job `partition_maintenance` men-drop partisi `session_turns`/`session_events` yang seluruh isinya lewat retensi (S-6, D-NEW-5-24). [builder call untuk angka retensi] |
+| D-099 | Audio: user audio **tidak pernah disimpan** di v1 (tidak ada capture/upload audio utterance, tidak ada penyimpanan audio sementara). Retensi data (dihitung dari `sessions.ended_at`): baris `session_turns` dihapus, `sessions.summary_text` di-NULL, dan teks feedback evaluasi (findings, komentar) dipurge setelah **180 hari**; `session_events` dihapus setelah **365 hari**; skor evaluasi, memory (retensi per kategori Bab 11), dan profil learner disimpan selama akun ada; outbox `PUBLISHED` 7 hari, outbox `FAILED` & `processed_events` 30 hari. Job `transcript_retention` (Bab 9 §9.9.1) menangani turns/summary/findings dan `session_events` di partisi batas; job `partition_maintenance` men-drop partisi `session_turns`/`session_events` yang seluruh isinya lewat retensi (S-6, D-NEW-5-24). [builder call untuk angka retensi] |
 
 ### 2.11 Target non-fungsional (angka tunggal)
 
@@ -262,10 +262,10 @@ kotoki-backend/
 Ringkasan satu baris untuk keputusan bab yang berdampak lintas bab. Detail, angka lengkap, dan alasan ada di sub-bab yang dirujuk; jika ringkasan ini berbeda dengan sub-bab rujukan, sub-bab yang benar (register §2.1–§2.11 tetap menang atas keduanya).
 
 **Identity, akun & privasi**
-- D-NEW-3-1, D-NEW-13-1: Registrasi = `email`, `password`, `full_name`, `terms_version` (wajib, = `PRIVACY_POLICY_VERSION`), `phone_number` & `audio_consent` (opsional); `users` punya `terms_version`, `terms_accepted_at`, `audio_consent`, `audio_consent_updated_at`, `deleted_at`, `purged_at` — §3.3.1, §3.8.1, §13.9.1.
+- D-NEW-3-1, D-NEW-13-1: Registrasi = `email`, `password`, `full_name`, `terms_version` (wajib, = `PRIVACY_POLICY_VERSION`), `phone_number` (opsional); `users` punya `terms_version`, `terms_accepted_at`, `deleted_at`, `purged_at` — §3.3.1, §3.8.1, §13.9.1.
 - D-NEW-3-6: JWT HS256 dengan claims `iss`/`aud`/`sub`/`role`/`fam`/`jti`, `kid` dari secret, rotasi via `AUTH_JWT_SECRET` + `AUTH_JWT_PREVIOUS_SECRET` — §3.6, §13.2.7.
 - D-NEW-3-4, D-NEW-3-5: Refresh token SHA-256 + family + grace 10 s (`409 REFRESH_TOKEN_ROTATED`); cookie `kotoki_refresh` `SameSite=Strict` ⇒ frontend & API wajib same-site — §3.8.3, §3.8.5.
-- D-NEW-3-14, D-NEW-13-2: `GET /auth/terms` (publik), `GET /me`, `PUT /me/consents`; `POST /sessions` ditolak `403 TERMS_NOT_ACCEPTED` bila terms usang; audio hanya di-capture jika `audio_consent = true` — §3.13, §13.9.1, §7.5.5.
+- D-NEW-3-14, D-NEW-13-2: `GET /auth/terms` (publik), `GET /me`, `PUT /me/consents`; `POST /sessions` ditolak `403 TERMS_NOT_ACCEPTED` bila terms usang — §3.13, §13.9.1.
 - D-NEW-3-15, D-NEW-13-3: `DELETE /me` (re-auth password, `409 ACCOUNT_HAS_ACTIVE_SESSION`) → status `DELETED` → purge asinkron job `account_purge`; ledger & baris `sessions` dipertahankan; consumer async melewati user `DELETED` — §3.13, §13.9.3.
 - D-NEW-13-7: Rate limit = token bucket Lua `kotoki:ratelimit:{policy}:{subject}`, nama & angka policy kanonik di §13.4.3; Redis down → limiter lokal per pod — §3.10, §13.4.3.
 - D-NEW-13-5: Katalog env var §13.2 kanonik (prefix grup, tanpa prefix aplikasi) — §13.2.
@@ -308,13 +308,13 @@ Ringkasan satu baris untuk keputusan bab yang berdampak lintas bab. Detail, angk
 - D-NEW-7-18, D-NEW-12-4: Budget konteks LLM total milik §7.8 (disesuaikan S-15/S-18: blok learner + `<conversation_difficulty>` 700 token); `MaxAISentencesPerTurn` = batas keras parser kalimat; speaking rate TTS 0.80–1.05 dari `clamp(voice.speaking_rate × adaptiveRate)` (§6.6.3) — §7.8, §6.6.3, §8.2.4.
 - D-NEW-8-3: Error taxonomy provider ter-normalisasi (`ErrorKind`) dengan tabel retryable/fallback/breaker — §8.3.
 - D-NEW-8-8, D-NEW-8-9: Tanpa fallback STT/LLM otomatis (D-017); vendor TTS dipin per generation — §8.5.
-- D-NEW-8-11: Batas konkurensi provider per pod (STT 125 (S-14, ≥ hard max 120 sesi), LLM 60, TTS 80, evaluation 8, embedding 16, pronunciation 8) — §8.5.
+- D-NEW-8-11: Batas konkurensi provider per pod (STT 125 (S-14, ≥ hard max 120 sesi), LLM 60, TTS 80, evaluation 8, embedding 16) — §8.5.
 
 **Async, evaluasi, memory, learner**
 - D-NEW-9-2, D-NEW-9-4: Outbox `PENDING/PUBLISHED/FAILED` (maks 10 attempt) dengan `traceparent`/`tracestate`; retry via `kotoki.retry`/`kotoki.requeue`, DLQ `kotoki.dlx` — §9.2, §9.6.
 - D-NEW-9-12: `sessions.summary_text` berbahasa Jepang ≤ 300 karakter, prompt `SUMMARY`, model `ROLLING_SUMMARY_LLM_MODEL` (default = model LLM vendor aktif, D-016/D-017) — §9.9.6.
 - D-NEW-10-1, D-NEW-10-2: Skor dimensi integer 0–100, `overall_score` NUMERIC(5,2); status evaluasi `PENDING/RUNNING/COMPLETED/FAILED`; konversi ke proficiency hanya lewat algoritma §12.5 — §10.1, §10.3.
-- D-NEW-10-3: Sinyal internal `listening_response_signal`, `interaction_complexity_signal`, `dimension_confidence`, `pronunciation_utterance_count` untuk skill D-097 — §10.2, §12.4.
+- D-NEW-10-3: Sinyal internal `listening_response_signal`, `interaction_complexity_signal`, `dimension_confidence` untuk skill D-097 — §10.2, §12.4.
 - D-NEW-10-13: `GET /sessions/{id}/evaluation`: belum terminal → `409 SESSION_NOT_ENDED`; tidak pernah `ACTIVE` → `404 EVALUATION_NOT_AVAILABLE`; belum ada hasil → `200 PENDING` — §10.11, §5.9.6.
 - D-NEW-11-1, D-NEW-11-4: `memories.content` Jepang, `display_text` Indonesia; pencarian vektor exact scan per user (tanpa HNSW) — §11.3, §11.7.
 - D-NEW-11-5, D-NEW-11-6: Semua memory punya `expires_at` per kategori; hapus oleh user = hard delete + tombstone 90 hari — §11.8, §11.9.
@@ -329,9 +329,9 @@ Ringkasan satu baris untuk keputusan bab yang berdampak lintas bab. Detail, angk
 - D-NEW-5-29: Port `idgen.Generator` (UUIDv7) di samping `clock.Clock`; paket fitur dilarang `uuid.New*()`/`time.Now()` langsung — §2.2 butir 7.
 
 **Infra & testing**
-- D-NEW-13-23: Tracing di setiap layer — handler (otelhttp/WS/consumer/job), **setiap method publik service** (`{fitur}.{Method}` via `platform/otel.Start/End`), repository (pgx tracer + `db.tx`), Redis (hook go-redis sendiri), S3, provider; error internal → span status Error + stack + atribut `code.file.path`/`code.line.number` lokasi asal dari `errs.New/Wrap`; error bisnis 4xx bukan Error — §13.7.2.1–13.7.2.2.
+- D-NEW-13-23: Tracing di setiap layer — handler (otelhttp/WS/consumer/job), **setiap method publik service** (`{fitur}.{Method}` via `platform/otel.Start/End`), repository (pgx tracer + `db.tx`), Redis (hook go-redis sendiri), provider; error internal → span status Error + stack + atribut `code.file.path`/`code.line.number` lokasi asal dari `errs.New/Wrap`; error bisnis 4xx bukan Error — §13.7.2.1–13.7.2.2.
 - D-NEW-13-11, D-NEW-13-12: Partitioning hanya `session_turns`/`session_events` (S-6; tabel lain tidak) & tanpa PgBouncer; pool DB api 10 / realtime 6 / worker 4 — §13.3.
-- D-NEW-13-18: Tanpa presigned URL; akses object storage per binary (realtime put-only, worker get/delete/list) — §13.6.
+- D-NEW-13-18: Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 - D-NEW-14-4, D-NEW-14-6: Build tag `integration`/`e2e`/`live`, `-race` wajib; hanya `cmd/realtime` memakai cgo, `api`/`worker` dibangun `CGO_ENABLED=0` — §14.8, §14.10.
 - D-NEW-14-9: Migration `000001`–`000018` boleh diedit sampai tag `v0.1.0`, setelahnya immutable (dicek CI) — §14.7.
 
@@ -340,15 +340,15 @@ Ringkasan satu baris untuk keputusan bab yang berdampak lintas bab. Detail, angk
 
 ## 3. Identity, Auth & Admin
 
-Bab ini mendefinisikan identitas user, autentikasi (password, JWT, refresh token), reset password, persetujuan terms & consent audio, hapus akun, WebSocket ticket (D-022), rate limit auth, role `ADMIN`, serta endpoint admin beserta audit log. Kontrak request/response HTTP lengkap untuk semua endpoint ada di **§5.9 REST API Contract**; bab ini berisi aturan, algoritma, DDL, dan port.
+Bab ini mendefinisikan identitas user, autentikasi (password, JWT, refresh token), reset password, persetujuan terms, hapus akun, WebSocket ticket (D-022), rate limit auth, role `ADMIN`, serta endpoint admin beserta audit log. Kontrak request/response HTTP lengkap untuk semua endpoint ada di **§5.9 REST API Contract**; bab ini berisi aturan, algoritma, DDL, dan port.
 
 ### 3.1 Ringkasan keputusan
 
 | Area | Keputusan |
 |---|---|
 | Identifier login | `email` + `password` (D-020). `phone_number` opsional, unik, format E.164, tidak dipakai login. |
-| Field registrasi | `email` (wajib), `password` (wajib), `full_name` (wajib, 1–100 karakter), `terms_version` (wajib, MUST = `PRIVACY_POLICY_VERSION`), `phone_number` (opsional), `audio_consent` (opsional, default `false`). [builder call] |
-| Consent | `users.terms_version` + `terms_accepted_at`; `audio_consent` terpisah (izin simpan audio ≤ 24 jam untuk pronunciation). Terms usang → `POST /sessions` ditolak `403 TERMS_NOT_ACCEPTED` (§3.13, Bab 13 §13.9.1). |
+| Field registrasi | `email` (wajib), `password` (wajib), `full_name` (wajib, 1–100 karakter), `terms_version` (wajib, MUST = `PRIVACY_POLICY_VERSION`), `phone_number` (opsional). [builder call] |
+| Consent | `users.terms_version` + `terms_accepted_at`. Terms usang → `POST /sessions` ditolak `403 TERMS_NOT_ACCEPTED` (§3.13, Bab 13 §13.9.1). |
 | Hapus akun | `DELETE /api/v1/me` (re-auth password) → status `DELETED`, purge asinkron oleh job `account_purge` (§3.13, Bab 13 §13.9.3). |
 | Verifikasi email/phone | Tidak ada di versi ini. Email dipakai untuk reset password. |
 | Password hash | argon2id, PHC string (§3.4). |
@@ -465,8 +465,6 @@ CREATE TABLE users (
 
     terms_version            TEXT NOT NULL,                   -- versi terms+privacy yang disetujui (= PRIVACY_POLICY_VERSION saat itu)
     terms_accepted_at        TIMESTAMPTZ NOT NULL,
-    audio_consent            BOOLEAN NOT NULL DEFAULT false,  -- izin simpan sementara audio utterance untuk pronunciation
-    audio_consent_updated_at TIMESTAMPTZ NULL,                -- diisi saat registrasi dan setiap PUT /me/consents
 
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -679,13 +677,12 @@ Origin check untuk endpoint ber-cookie (`/auth/refresh`, `/auth/logout`): jika h
    terms_version WAJIB dan MUST sama persis dengan config PRIVACY_POLICY_VERSION:
      tidak ada → 400 VALIDATION_FAILED {"fields":[{"field":"terms_version","reason":"required"}]}
      beda      → 400 VALIDATION_FAILED {"fields":[{"field":"terms_version","reason":"not_current"}]}
-   audio_consent opsional (boolean; null/tidak ada → false; tipe lain → VALIDATION_FAILED).
 3. hash := PasswordHasher.Hash(password)              -- di luar transaksi
 4. BEGIN
    a. INSERT INTO users (id, email, phone_number, full_name, password_hash, role, status,
-                         terms_version, terms_accepted_at, audio_consent, audio_consent_updated_at, ...)
+                         terms_version, terms_accepted_at, ...)
         VALUES ($id, $email, $phone, $name, $hash, 'USER', 'ACTIVE',
-                $terms_version, $now, $audio_consent, $now, ...)
+                $terms_version, $now, ...)
       unique violation ux_users_email  → ROLLBACK, 409 EMAIL_ALREADY_REGISTERED
       unique violation ux_users_phone  → ROLLBACK, 409 PHONE_ALREADY_REGISTERED
    b. INSERT INTO balance_accounts (id, user_id, available_seconds, reserved_seconds) VALUES ($acc, $id, 0, 0)
@@ -942,19 +939,16 @@ Tanpa auth, rate limit `api_ip_default`. Response `200 {"terms_version": PRIVACY
 #### 3.13.2 Consent — `PUT /api/v1/me/consents`
 
 ```text
-1. Authn; rate limit api_user_default. Body {"terms_version": string, "audio_consent": bool} — keduanya wajib.
+1. Authn; rate limit api_user_default. Body {"terms_version": string} — wajib.
 2. terms_version ≠ PRIVACY_POLICY_VERSION → 400 VALIDATION_FAILED (field terms_version, reason not_current).
 3. UPDATE users
       SET terms_accepted_at = CASE WHEN terms_version <> $tv THEN $now ELSE terms_accepted_at END,
           terms_version = $tv,
-          audio_consent_updated_at = CASE WHEN audio_consent <> $ac THEN $now ELSE audio_consent_updated_at END,
-          audio_consent = $ac, updated_at = $now
+          updated_at = $now
     WHERE id = $principal AND status = 'ACTIVE'
     RETURNING *;                         -- 0 baris → 403 ACCOUNT_SUSPENDED
 4. Log audit consent_updated (Bab 13 §13.8). 200 objek Me (§5.9.2).
 ```
-
-`audio_consent` dibaca runtime realtime saat membangun runtime sesi (Bab 7): `false` → tidak ada capture/upload audio utterance dan pronunciation evaluasi `UNAVAILABLE` (Bab 10). Perubahan berlaku mulai sesi berikutnya yang dimulai (`session.start`), bukan sesi yang sedang berjalan.
 
 #### 3.13.3 Hapus akun — `DELETE /api/v1/me`
 
@@ -1006,12 +1000,12 @@ Nama env kanonik = katalog Bab 13 §13.2 (tabel ini hanya ringkasan; default yan
 
 - Unit: `ValidatePassword` (semua reason), normalisasi email/phone, PHC encode/decode, JWT parse (alg none ditolak, kid tidak dikenal, kid secret lama diterima selama `AUTH_JWT_PREVIOUS_SECRET` diset, expired, leeway).
 - Integration (testcontainers Postgres + Redis): register→login→refresh→refresh (rotasi), reuse token lama setelah 11 detik → family revoked dan token terbaru juga ditolak; reuse dalam 10 detik → 409 dan token terbaru tetap valid; logout lalu refresh → 401; forgot (FakeMailer) → reset → refresh lama → 401; reset token dipakai dua kali → 400; forgot untuk email tak terdaftar → 202 identik dan FakeMailer kosong; ticket: issue → GETDEL sukses sekali, kedua kali gagal, TTL 30 s; admin endpoint dengan user role USER → 403; audit log tertulis untuk grant/adjust/status.
-- Terms & consent: register tanpa `terms_version` / dengan versi lama → 400 `VALIDATION_FAILED` (field `terms_version`); setelah `PRIVACY_POLICY_VERSION` dinaikkan, `POST /sessions` → 403 `TERMS_NOT_ACCEPTED`, `GET /sessions` tetap 200, `PUT /me/consents` versi baru → `POST /sessions` sukses; `audio_consent_updated_at` hanya berubah bila nilainya berubah.
+- Terms & consent: register tanpa `terms_version` / dengan versi lama → 400 `VALIDATION_FAILED` (field `terms_version`); setelah `PRIVACY_POLICY_VERSION` dinaikkan, `POST /sessions` → 403 `TERMS_NOT_ACCEPTED`, `GET /sessions` tetap 200, `PUT /me/consents` versi baru → `POST /sessions` sukses; `terms_accepted_at` hanya berubah bila versinya berubah.
 - Hapus akun: password salah → 401; ada sesi `ACTIVE` → 409 `ACCOUNT_HAS_ACTIVE_SESSION`; ada sesi `RESERVED` → sesi `CANCELLED` + ledger `RELEASE`, status `DELETED`, refresh token terhapus, login → 401; admin `PATCH` ke `DELETED` menjalankan rutin yang sama; rekonsiliasi §4.8 bersih.
 
 ### Keputusan bab ini
 
-- D-NEW-3-1: Registrasi memakai `email`, `password`, `full_name`, `terms_version` (wajib) dan `phone_number` (opsional, E.164, unik), `audio_consent` (opsional, default `false`). User `DELETED` memegang email-nya sampai purge; purge menganonimkan email/phone/nama.
+- D-NEW-3-1: Registrasi memakai `email`, `password`, `full_name`, `terms_version` (wajib) dan `phone_number` (opsional, E.164, unik). User `DELETED` memegang email-nya sampai purge; purge menganonimkan email/phone/nama.
 - D-NEW-3-2: Password policy: 12–128 code point (NFC), tidak blank, tidak sama dengan email/local-part, tidak ada di daftar 10.000 password umum; tanpa aturan komposisi. Kode error `PASSWORD_TOO_WEAK` + `details.reason`.
 - D-NEW-3-3: Argon2id m=19456 KiB, t=2, p=1, salt 16 B, key 32 B, maksimal 8 hash bersamaan per pod; rehash saat login jika parameter berubah; dummy verify untuk email tidak dikenal.
 - D-NEW-3-4: Refresh token disimpan sebagai SHA-256 (BYTEA); TTL sliding 30 hari per token; tabel bernama `refresh_tokens` dengan `family_id`; grace 10 detik untuk refresh paralel (`409 REFRESH_TOKEN_ROTATED`) sebelum dianggap reuse.
@@ -1024,7 +1018,7 @@ Nama env kanonik = katalog Bab 13 §13.2 (tabel ini hanya ringkasan; default yan
 - D-NEW-3-11: Status user `ACTIVE/SUSPENDED/DELETED`; suspend via `PATCH /admin/users/{id}` merevoke refresh token, sesi aktif tidak dihentikan paksa; transisi ke `DELETED` (admin atau `DELETE /me`) memakai rutin `DeleteAccount` yang sama.
 - D-NEW-3-12: Admin melihat transcript diaudit (`SESSION_TRANSCRIPT_VIEW`). `admin_audit_logs` append-only via trigger `reject_mutation()`; action konten mengikuti Bab 6 (`CONTENT_VERSION_*`, `CONTENT_STATUS_CHANGED`).
 - D-NEW-3-13: Ticket WS boleh diterbitkan untuk sesi `RESERVED` (sebelum `start_deadline_at`), `STARTING`, `ACTIVE`; response menyertakan `realtime_url`; terms usang tidak memblokir ticket.
-- D-NEW-3-14: `GET /auth/terms` publik; `PUT /me/consents` memperbarui `terms_version`/`audio_consent` (timestamp hanya berubah bila nilai berubah); `POST /sessions` → `403 TERMS_NOT_ACCEPTED` bila `users.terms_version ≠ PRIVACY_POLICY_VERSION`.
+- D-NEW-3-14: `GET /auth/terms` publik; `PUT /me/consents` memperbarui `terms_version` (timestamp hanya berubah bila versi berubah); `POST /sessions` → `403 TERMS_NOT_ACCEPTED` bila `users.terms_version ≠ PRIVACY_POLICY_VERSION`.
 - D-NEW-3-15: `DELETE /me` = re-auth password, `409 ACCOUNT_HAS_ACTIVE_SESSION` bila ada sesi `STARTING/ACTIVE/ENDING`, sesi `RESERVED` di-cancel, status `DELETED`, token dihapus, `202`; purge asinkron Bab 13 §13.9.3.
 - D-NEW-3-16: Retensi refresh/reset token berjalan sebagai langkah job `transcript_retention` (Bab 9 §9.9.1), `RETENTION_EXPIRED_TOKENS_DAYS` = 7.
 - D-NEW-3-17 [builder call]: Karena `auth` tidak mengimpor paket fitur lain (§2.2 butir 3), ticket membaca sesi lewat port `auth.TicketSessionReader`, registrasi membuka account + grant awal lewat `auth.Tx.Accounts()` (`AccountOpener` → `balance.OpenAccount`), dan langkah 2–4 hapus akun dijalankan `admin.Service.DeleteAccount` lewat port `auth.AccountDeleter` (rutin yang sama dengan admin → `DELETED`).
@@ -1901,7 +1895,7 @@ type CreateSessionResult struct {
 
 | Method Bab 7 | Implementasi Bab 5 | Transisi / efek |
 |---|---|---|
-| `GetForAttach(id)` | query read-only `sessions` JOIN `users` | `SessionRecord` berisi status, `user_id`, mode, `started_at`, `expires_at`, `scenario_version_id`, `prompt_version_id`, `config_snapshot`, `adaptive_difficulty`, `opening_prompt_version_id`, `runtime_fence`, dan `users.audio_consent` (dibaca sekali per runtime; R-19: `false` → tidak capture audio) |
+| `GetForAttach(id)` | query read-only `sessions` | `SessionRecord` berisi status, `user_id`, mode, `started_at`, `expires_at`, `scenario_version_id`, `prompt_version_id`, `config_snapshot`, `adaptive_difficulty`, `opening_prompt_version_id`, dan `runtime_fence` |
 | `ClaimRuntime(id, allowed)` | `session.Service.ClaimRuntime` | `UPDATE sessions SET runtime_fence = runtime_fence + 1, handoff_at = NULL WHERE id=$1 AND status = ANY($2) RETURNING …` (SQL Bab 7 §7.9.3; `handoff_at = NULL` = attach berikutnya mengakhiri handoff, S-10 [builder call]); tidak menaikkan `version`; 0 baris → `ErrInvalidTransition` |
 | `MarkStarting(id, fence)` | `BeginStart(id, fence)` | T2. Session yang dikembalikan membawa `opening_prompt_version_id` (bisa NULL); runtime MUST memakai nilai ini dan MUST NOT meng-query version OPENING sendiri (S-2) |
 | `MarkHandoff(id, fence)` | `MarkHandoff(id, fence)` | non-transisi saat `DRAIN_RELEASE` (Bab 7 §7.12): `UPDATE sessions SET handoff_at = $now, updated_at = $now WHERE id=$1 AND status='ACTIVE' AND runtime_fence=$fence`; tidak menaikkan `version`/`runtime_fence`; 0 baris → `ErrFenceLost`/`ErrInvalidTransition` (runtime tetap melanjutkan close 4100). Signature dicantumkan Bab 7 §7.13.1 (S-10) |
@@ -2063,7 +2057,6 @@ CREATE TABLE session_turns (
     stt_final_ms                INTEGER NULL,
     llm_first_token_ms          INTEGER NULL,
     tts_first_audio_ms          INTEGER NULL,
-    user_audio_object_key       TEXT NULL,               -- audio/tmp/{session_id}/{turn_id}.wav (D-099); hanya jika users.audio_consent
     input_tokens                INTEGER NULL,
     output_tokens               INTEGER NULL,
     tts_characters              INTEGER NULL,
@@ -2093,7 +2086,6 @@ CREATE TABLE session_turns (
 -- Index pada tabel partitioned = index lokal per partisi (dibuat otomatis di partisi baru).
 -- Lookup per sesi memakai ux_session_turns_seq (prefix session_id, sequence_number).
 CREATE INDEX idx_session_turns_open ON session_turns (session_id) WHERE status IS NULL;
-CREATE INDEX idx_session_turns_audio ON session_turns (created_at) WHERE user_audio_object_key IS NOT NULL;
 CREATE INDEX idx_session_turns_created ON session_turns (created_at);   -- job transcript_retention (partisi batas)
 
 -- Partisi awal: bulan berjalan + 3 bulan ke depan (UTC). Nama: session_turns_pYYYYMM.
@@ -2123,7 +2115,7 @@ Aturan tulis turn (kontrak untuk Bab 7):
 - Pada satu sesi, maksimal satu turn dengan `status IS NULL` pada satu waktu (dijaga runtime; turn baru hanya dibuat setelah turn sebelumnya selesai/di-interrupt). `TurnRepository.FailInProgress` (takeover) mengubah semua turn `status IS NULL` sesi itu menjadi `FAILED`.
 - `sequence_number`: AI_FIRST mulai dari 0 (opening), USER_FIRST mulai dari 1; naik 1 per turn tanpa celah.
 - `tts_voice_id` diisi dari voice ID vendor yang benar-benar dipakai generation turn ini (setelah fallback TTS bila terjadi).
-- `user_audio_object_key` hanya diisi bila `users.audio_consent = true` saat runtime dibangun dan `PRONUNCIATION_AUDIO_CAPTURE=true` (Bab 13); selain itu NULL dan pronunciation evaluasi `UNAVAILABLE` (Bab 10).
+- User audio tidak pernah disimpan (D-099): `session_turns` tidak punya kolom referensi audio.
 - Retensi (D-099): job `transcript_retention` (Bab 9 §9.9.4) **menghapus** baris `session_turns` 180 hari setelah `sessions.ended_at` (baris di partisi batas), me-NULL-kan `sessions.summary_text`, dan mengisi `sessions.transcript_purged_at`; partisi yang seluruhnya kedaluwarsa di-drop `partition_maintenance` (catatan partitioning di atas). **Tidak ada FK yang menunjuk ke `session_turns`** (S-6) [builder call]: `session_events.turn_id` dan `evaluation_findings.session_turn_id` (Bab 10) adalah kolom UUID biasa; integritas dijaga aplikasi (ditulis hanya dengan ID turn yang ada; pembaca MUST mentoleransi ID yang turn-nya sudah dihapus retensi → diperlakukan sebagai `null`).
 
 #### 5.3.3 `000011_session_events`
@@ -2233,7 +2225,7 @@ Semua transisi lain (mis. `RESERVED→ACTIVE`, `COMPLETED→*`, `ENDING→ACTIVE
 
 1. Client membuat sesi (`RESERVED`), minta ticket, connect WS, kirim `session.start` (Bab 7).
 2. Runtime memanggil `ClaimRuntime([RESERVED])` lalu `MarkStarting` (T2; `BeginStart` memilih `opening_prompt_version_id` untuk `AI_FIRST` dan mengembalikannya). Runtime memakai nilai dari session hasil `MarkStarting`: non-NULL → generate opening dengan prompt itu; NULL → TTS `scenario_versions.opening_line` apa adanya sebagai turn 0 + metrik `kotoki_content_opening_fallback_total` (S-2) [builder call]. Gagal `ErrStartDeadlinePassed` → kirim error WS `SESSION_START_DEADLINE_PASSED`, close.
-3. Runtime membaca `GetForAttach` (termasuk `adaptive_difficulty` dan `users.audio_consent`) dan membuka provider (STT stream, warm-up LLM/TTS) dengan timeout total 10 detik.
+3. Runtime membaca `GetForAttach` (termasuk `adaptive_difficulty`) dan membuka provider (STT stream, warm-up LLM/TTS) dengan timeout total 10 detik.
 4. Siap → `Activate` (T3). Gagal/timeout → `FailStart(PROVIDER_FAILURE)` (T4).
 5. Jika client terputus saat `STARTING`, runtime tetap melanjutkan; detik terputus setelah `started_at` dicatat lewat `AddDisconnected` saat client attach atau sesi berakhir (Bab 7 §7.10).
 
@@ -2333,12 +2325,11 @@ Ditulis via `OutboxWriter.Enqueue(ctx, tx, …)` (Bab 9) dalam transaksi termina
   "active_seconds": 588,
   "charged_seconds": 588,
   "turn_count": 23,
-  "user_turn_count": 21,
-  "has_user_audio": true
+  "user_turn_count": 21
 }
 ```
 
-Dihitung di transaksi terminal setelah langkah 7 §4.6.3 (turn menggantung sudah `FAILED`): `active_seconds = floor(active_ms / 1000)` (§4.5); `turn_count` = turn dengan `status <> 'DISCARDED'`; `user_turn_count` = di antaranya dengan `user_text` non-kosong; `has_user_audio` = ada `user_audio_object_key IS NOT NULL`. Consumer (D-091): evaluation, memory, summary — semuanya memproses `final_status` `COMPLETED` maupun `FAILED`.
+Dihitung di transaksi terminal setelah langkah 7 §4.6.3 (turn menggantung sudah `FAILED`): `active_seconds = floor(active_ms / 1000)` (§4.5); `turn_count` = turn dengan `status <> 'DISCARDED'`; `user_turn_count` = di antaranya dengan `user_text` non-kosong. Consumer (D-091): evaluation, memory, summary — semuanya memproses `final_status` `COMPLETED` maupun `FAILED`.
 
 ### 5.8 Konvensi REST
 
@@ -2574,8 +2565,7 @@ Aturan: handler MUST NOT memanggil `json.NewEncoder`, `w.WriteHeader`, atau menu
   "password": "correct horse battery",
   "full_name": "Hana Tanaka",
   "phone_number": "+628123456789",
-  "terms_version": "2026-10-01",
-  "audio_consent": true
+  "terms_version": "2026-10-01"
 }
 // 201 response (+ Set-Cookie: kotoki_refresh=…)
 {
@@ -2586,9 +2576,9 @@ Aturan: handler MUST NOT memanggil `json.NewEncoder`, `w.WriteHeader`, atau menu
 }
 ```
 
-Field: `email`, `password`, `full_name`, `terms_version` wajib; `phone_number` (string|null) dan `audio_consent` (boolean, default `false`) opsional. `terms_version` MUST = `PRIVACY_POLICY_VERSION` (§3.8.1).
+Field: `email`, `password`, `full_name`, `terms_version` wajib; `phone_number` (string|null) opsional. `terms_version` MUST = `PRIVACY_POLICY_VERSION` (§3.8.1).
 
-Error: `400 VALIDATION_FAILED` (email/full_name/phone/`terms_version` dengan `reason` `required`|`not_current`/`audio_consent`), `400 PASSWORD_TOO_WEAK`, `409 EMAIL_ALREADY_REGISTERED`, `409 PHONE_ALREADY_REGISTERED`.
+Error: `400 VALIDATION_FAILED` (email/full_name/phone/`terms_version` dengan `reason` `required`|`not_current`), `400 PASSWORD_TOO_WEAK`, `409 EMAIL_ALREADY_REGISTERED`, `409 PHONE_ALREADY_REGISTERED`.
 
 **`POST /auth/login`**
 
@@ -2656,8 +2646,6 @@ Objek `Me`:
   "terms_version": "2026-10-01",
   "terms_current_version": "2026-10-01",
   "terms_accepted_at": "2026-10-12T08:00:00.000Z",
-  "audio_consent": true,
-  "audio_consent_updated_at": "2026-10-12T08:00:00.000Z",
   "created_at": "2026-10-12T08:00:00.000Z",
   "last_login_at": "2026-10-12T08:00:00.000Z"
 }
@@ -2670,12 +2658,12 @@ Objek `Me`:
 **`PUT /me/consents`** — alur §3.13.2.
 
 ```json
-// request (kedua field wajib)
-{"terms_version": "2026-10-01", "audio_consent": false}
+// request (field wajib)
+{"terms_version": "2026-10-01"}
 // 200 response: objek Me dengan nilai baru
 ```
 
-Error: `400 VALIDATION_FAILED` (`terms_version` `required`/`not_current`; `audio_consent` `required`/`invalid_type`), `403 ACCOUNT_SUSPENDED`.
+Error: `400 VALIDATION_FAILED` (`terms_version` `required`/`not_current`), `403 ACCOUNT_SUSPENDED`.
 
 **`DELETE /me`** — alur §3.13.3.
 
@@ -2854,10 +2842,10 @@ Error: `404 SESSION_NOT_FOUND`, `410 TRANSCRIPT_EXPIRED` (`sessions.transcript_p
 | Sesi terminal yang tidak pernah `ACTIVE` (`CANCELLED`, `ABANDONED`, `FAILED` dengan `started_at IS NULL`) | `404 EVALUATION_NOT_AVAILABLE` |
 | Sesi terminal pernah `ACTIVE` (`COMPLETED` atau `FAILED` dengan `started_at`), belum ada baris `evaluations` | `200 {"status":"PENDING", …}` (disintesis; field hasil null) + `Retry-After: 3` |
 | Baris ada, `PENDING`/`RUNNING` | `200` dengan status tersebut + `Retry-After: 3` |
-| Baris `COMPLETED` | `200` lengkap (`dimensions`, `pronunciation`, `findings`, …; `details_purged=true` setelah 180 hari) |
+| Baris `COMPLETED` | `200` lengkap (`dimensions`, `findings`, …; `details_purged=true` setelah 180 hari) |
 | Baris `FAILED` | `200 {"status":"FAILED","failure_message":"…"}` |
 
-Ringkas bentuk `200` (lengkap di Bab 10 §10.11): `session_id`, `evaluation_id|null`, `status` ∈ `PENDING|RUNNING|COMPLETED|FAILED`, `insufficient_evidence`, `details_purged`, `rubric_version`, `overall_score` (0–100, ≤ 2 desimal | null), `dimensions[6]` (`dimension`, `score`, `comment`), `pronunciation` (`status`, `reason`), `summary`, `strengths[]`, `focus_areas[]`, `recommendations[]`, `findings[]` (`id`, `dimension`, `finding_type`, `severity`, `turn_id`, `turn_seq`, `original`, `corrected`, `explanation`), `failure_message`, `created_at`, `completed_at`.
+Ringkas bentuk `200` (lengkap di Bab 10 §10.11): `session_id`, `evaluation_id|null`, `status` ∈ `PENDING|RUNNING|COMPLETED|FAILED`, `insufficient_evidence`, `details_purged`, `rubric_version`, `overall_score` (0–100, ≤ 2 desimal | null), `dimensions[5]` (`dimension`, `score`, `comment`), `summary`, `strengths[]`, `focus_areas[]`, `recommendations[]`, `findings[]` (`id`, `dimension`, `finding_type`, `severity`, `turn_id`, `turn_seq`, `original`, `corrected`, `explanation`), `failure_message`, `created_at`, `completed_at`.
 
 #### 5.9.7 Profile, skill & memory (perilaku: Bab 11 & Bab 12)
 
@@ -2892,7 +2880,7 @@ Semua endpoint di bawah: Bearer, rate `api_user_default`, hanya data `user_id` d
 
 - `nickname` = `learner_profiles.nickname` (string 1–30 karakter | null; S-4) [builder call]: nama panggilan yang dipakai AI (`PromptData.Learner.DisplayName`, Bab 6 §6.8 / Bab 12 §12.8.4); `null` → AI tidak menyapa dengan nama. `users.full_name` MUST NOT dikirim ke provider LLM mana pun.
 - Enum: `self_declared_level` ∈ `BEGINNER|N5|N4|N3|N2|N1|null`; `target_level` ∈ `N5..N1|null`; `learning_goal` ∈ `DAILY_CONVERSATION|JOB_INTERVIEW|BUSINESS|TRAVEL|EXAM_PREP|LIVING_IN_JAPAN|OTHER|null`; `learning_goal_note` ≤ 300 karakter | null; `speech_speed` ∈ `SLOWER|NORMAL|FASTER`; `formality` ∈ `AUTO|CASUAL|POLITE`; `dialect` ∈ `STANDARD_ONLY|ALLOW_DIALECT`.
-- `overall_level` = rata-rata `estimated_level` 7 skill berbobot `max(0.05, EffectiveConfidence)` (Bab 12 §12.9.1), 2 desimal; `overall_level_label` per tabel label Bab 12 §12.9.3.
+- `overall_level` = rata-rata `estimated_level` 6 skill berbobot `max(0.05, EffectiveConfidence)` (Bab 12 §12.9.1), 2 desimal; `overall_level_label` per tabel label Bab 12 §12.9.3.
 - `completed_session_count` = jumlah sesi `COMPLETED`; `total_practice_seconds` = `sum(charged_seconds)` sesi `COMPLETED`+`FAILED`; `last_session_at` = `max(ended_at)` sesi tsb (null jika tidak ada).
 
 **`PATCH /profile`** — semua field opsional; `null` menghapus field nullable; field tak dikenal → `400 VALIDATION_FAILED`.
@@ -2926,7 +2914,7 @@ Aturan: `self_declared_level` di-set saat **semua** skill `evidence_count = 0` �
 }
 ```
 
-`skills` selalu 7 item urut D-097; skill tanpa evidence: nilai prior, `confidence_label` sesuai, `trend: "INSUFFICIENT_DATA"`, `evidence_count: 0`, `is_provisional: true`, `last_assessed_at: null`. Aturan label/`is_provisional`/`focus_skills`/`share` di Bab 12 §12.9.3. Objek komposit (bukan list), sehingga tidak memakai envelope `data`.
+`skills` selalu 6 item urut D-097; skill tanpa evidence: nilai prior, `confidence_label` sesuai, `trend: "INSUFFICIENT_DATA"`, `evidence_count: 0`, `is_provisional: true`, `last_assessed_at: null`. Aturan label/`is_provisional`/`focus_skills`/`share` di Bab 12 §12.9.3. Objek komposit (bukan list), sehingga tidak memakai envelope `data`.
 
 **`GET /profile/skills/{skill}/history`** — query `limit` (default 20, max 100), `cursor` (key `[assessed_at, id]`). Urut `assessed_at DESC, id DESC`. Sumber `proficiency_estimates`.
 
@@ -2982,7 +2970,7 @@ Semua: `Authn` + `RequireAdmin` (§3.12). Objek `AdminUser`:
 {
   "id": "…", "email": "hana@example.com", "full_name": "Hana Tanaka", "phone_number": null,
   "role": "USER", "status": "ACTIVE", "created_at": "…", "last_login_at": "…",
-  "terms_version": "2026-10-01", "terms_accepted_at": "…", "audio_consent": false,
+  "terms_version": "2026-10-01", "terms_accepted_at": "…",
   "deleted_at": null, "purged_at": null,
   "balance": {"available_seconds": 1200, "reserved_seconds": 0}
 }
@@ -3053,7 +3041,7 @@ Sensor: `config_snapshot.character.provider_name`, `model_name`, `voice_id`, dan
 
 Error: `404 SESSION_NOT_FOUND`.
 
-**`GET /admin/sessions/{session_id}/turns`** — seperti user turns tetapi menyertakan semua kolom `session_turns` (provider, model, `tts_voice_id`, `used_fallback`, latensi, token, `user_audio_object_key`, `error_code`, `generation`) dan turn `DISCARDED`/yang sedang berjalan. Menulis audit `SESSION_TRANSCRIPT_VIEW` (§3.12). Error: `404 SESSION_NOT_FOUND`, `410 TRANSCRIPT_EXPIRED`.
+**`GET /admin/sessions/{session_id}/turns`** — seperti user turns tetapi menyertakan semua kolom `session_turns` (provider, model, `tts_voice_id`, `used_fallback`, latensi, token, `error_code`, `generation`) dan turn `DISCARDED`/yang sedang berjalan. Menulis audit `SESSION_TRANSCRIPT_VIEW` (§3.12). Error: `404 SESSION_NOT_FOUND`, `410 TRANSCRIPT_EXPIRED`.
 
 **`GET /admin/sessions/{session_id}/events`** — urut `(created_at, id) ASC`, `limit` (default 100, max 100), `cursor` (key = `[created_at, id]` terakhir; query `WHERE session_id = $sid AND (created_at, id) > ($c_created_at, $c_id)` — tanpa subquery by `id` agar partition pruning bekerja, S-6).
 
@@ -3290,7 +3278,7 @@ Field version (semua dipakai prompt kecuali yang ditandai *UI*):
 | `constraints` | JSONB array string, 0–8 item, tiap ≤ 200 | ya (boleh `[]`) | prompt | Aturan realisme, mis. "Ask one question at a time". |
 | `grammar_targets` | JSONB array string, 0–8 item, tiap ≤ 100 | ya (boleh `[]`) | prompt, Bab 10 | Pola tata bahasa yang diharapkan muncul, mis. `〜たことがあります`. |
 | `vocab_hints` | JSONB array objek, 0–20 item | ya (boleh `[]`) | prompt, UI | `{"term_ja":"経験","reading":"けいけん","meaning":"experience"}`. |
-| `evaluation_focus` | `TEXT[]`, 0–3 item | ya (boleh `{}`) | Bab 10 (prompt evaluasi), Bab 12 (`AdaptiveInput.ScenarioFocus`, FocusSkills §12.7) | Nama skill D-097 (`GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `PRONUNCIATION`, `LISTENING_RESPONSE`, `INTERACTION_COMPLEXITY`), unik. Skill yang paling dilatih scenario ini, mis. wawancara teknis → `{VOCABULARY,FLUENCY,INTERACTION_COMPLEXITY}`. Maks 3 item [builder call] agar "fokus" tetap selektif. |
+| `evaluation_focus` | `TEXT[]`, 0–3 item | ya (boleh `{}`) | Bab 10 (prompt evaluasi), Bab 12 (`AdaptiveInput.ScenarioFocus`, FocusSkills §12.7) | Nama skill D-097 (`GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `LISTENING_RESPONSE`, `INTERACTION_COMPLEXITY`), unik. Skill yang paling dilatih scenario ini, mis. wawancara teknis → `{VOCABULARY,FLUENCY,INTERACTION_COMPLEXITY}`. Maks 3 item [builder call] agar "fokus" tetap selektif. |
 | `formality` | TEXT `CASUAL`/`POLITE`/`KEIGO`, NOT NULL DEFAULT `POLITE` | ya | prompt, Bab 10, Bab 12 (`AdaptiveInput.ScenarioFormality`), UI | Register bahasa AI untuk scenario ini (mis. wawancara → `KEIGO`). Satu-satunya sumber formalitas konten (D-014); dasar formalitas sesi yang lalu disesuaikan preferensi learner oleh Bab 12 (§6.3.7). |
 | `opening_line` | TEXT 1–200, wajib mengandung karakter Jepang | ya | prompt `OPENING`, fallback | Kalimat pembuka referensi untuk `AI_FIRST`. LLM mengadaptasinya (prompt `OPENING`); runtime men-TTS teks ini apa adanya sebagai turn 0 jika (a) generasi opening gagal (Bab 7), atau (b) tidak ada version `OPENING` `PUBLISHED` saat `BeginStart` sehingga `sessions.opening_prompt_version_id = NULL` (§6.3.8) [builder call]. Karena bisa diucapkan statis, teks ini MUST berdiri sendiri (tanpa nama learner/placeholder). |
 | `visual_prompt` | JSONB objek | ya | UI (`USER_FIRST`) | Petunjuk visual yang ditampilkan client saat user harus memulai: `{"headline": str ≤ 80, "body": str ≤ 400, "starter_phrases_ja": [str ≤ 60, 0–3 item], "image_key": str ≤ 100 \| null}`. Tidak dikirim ke LLM. |
@@ -3583,7 +3571,7 @@ CREATE TABLE scenario_versions (
     CONSTRAINT chk_scenario_versions_vocab     CHECK (jsonb_typeof(vocab_hints) = 'array' AND jsonb_array_length(vocab_hints) <= 20),
     CONSTRAINT chk_scenario_versions_evalfocus CHECK (
         cardinality(evaluation_focus) <= 3
-        AND evaluation_focus <@ ARRAY['GRAMMAR','VOCABULARY','FLUENCY','NATURALNESS','PRONUNCIATION',
+        AND evaluation_focus <@ ARRAY['GRAMMAR','VOCABULARY','FLUENCY','NATURALNESS',
                                       'LISTENING_RESPONSE','INTERACTION_COMPLEXITY']::TEXT[]),
     CONSTRAINT chk_scenario_versions_formality CHECK (formality IN ('CASUAL','POLITE','KEIGO')),
     CONSTRAINT chk_scenario_versions_opening   CHECK (char_length(opening_line) BETWEEN 1 AND 200),
@@ -4776,7 +4764,7 @@ internal/conversation/               # PAKET FITUR — runtime realtime (tanpa l
   japanese.go                        # aturan teks Jepang (filler/penanda selesai)
   generation.go                      # pipeline generation: LLM → parser → TTS → encoder → pacer
   pacer.go                           # pacing audio downstream (§7.5.4)
-  persister.go                       # goroutine persistensi berurutan (session_turns, session_events, upload WAV)
+  persister.go                       # goroutine persistensi berurutan (session_turns, session_events)
   redissync.go                       # goroutine sinkronisasi state lewat port RuntimeStore (owner, hb, rt, turn, replay, summary)
   summarizer.go                      # rolling summary async (§7.8.5)
   context_builder.go                 # context builder + PromptBuilder (kontrak §7.8.3): input prompt dari cache runtime
@@ -4784,10 +4772,10 @@ internal/conversation/               # PAKET FITUR — runtime realtime (tanpa l
   adaptive.go                        # penyesuaian adaptive difficulty in-session (§7.8.6), fungsi murni
   config_loader.go                   # ConfigLoader: adapter di atas content.SessionConfigLoader + cache LRU per version ID
   ports.go                           # port yang dikonsumsi runtime (§7.13.1): SessionRuntime, TurnRepository,
-                                     # SessionEventWriter, RuntimeStore, ConfigLoader, LearnerContextProvider, AudioStore
+                                     # SessionEventWriter, RuntimeStore, ConfigLoader, LearnerContextProvider
   protocol/                          # envelope, tipe pesan, codec JSON, binary frame, error code, close code (dipakai juga kotokiclient)
   audio/                             # (cgo) opus decode/encode, VAD (wrapper go-webrtcvad + sliding window), framer,
-                                     # utterance capture, WAV writer, aset apology
+                                     # aset apology
 internal/prompt/                     # tanpa impor paket fitur lain (§2.2 aturan 3)
   sentence_parser.go                 # SentenceParser streaming (pemotong kalimat, D-014, §7.7.3)
   tokens.go                          # EstimateTokens (§7.8.1)
@@ -4850,7 +4838,6 @@ Semua angka di bab ini berasal dari tabel berikut (dibaca dengan `caarlos0/env`)
 | `ROLLING_SUMMARY_TIMEOUT` | `10s` | §7.8.5 |
 | `ROLLING_SUMMARY_LLM_MODEL` | default = model LLM vendor aktif (`OPENAI_LLM_MODEL` atau `DEEPSEEK_LLM_MODEL`, Bab 8 §8.5.1) | §7.8.5 |
 | `MAX_CONSECUTIVE_FAILED_TURNS` | `3` | lalu sesi berakhir `PROVIDER_FAILURE` [builder call] |
-| `PRONUNCIATION_CAPTURE_ENABLED` | `true` | D-099: simpan WAV utterance; per sesi hanya bila juga `users.audio_consent = true` (R-19, §7.5.5) |
 | `DRAIN_SAFEPOINT_TIMEOUT` / `DRAIN_FLUSH_TIMEOUT` | `20s` / `5s` | §7.12 |
 
 ### 7.3 Handshake & attach
@@ -4880,7 +4867,7 @@ Langkah 1–6 dijalankan `wsgateway` (satu-satunya pemakai `coder/websocket`); s
 
 Setiap close setelah upgrade **didahului** event `error` dengan `code` yang sama (best effort, lihat katalog §7.4.8), kecuali `1000`. Langkah 1–3 menolak dengan respons HTTP biasa (tanpa upgrade, ticket tidak tersentuh); langkah 5 dst. menolak dengan close code.
 
-Langkah 7 juga membaca `users.audio_consent` (untuk §7.5.5), `sessions.adaptive_difficulty` (R-3, untuk §7.7.3/§7.8) dan `sessions.opening_prompt_version_id` (R-4) dalam satu query `GetForAttach` (join `users`).
+Langkah 7 juga membaca `sessions.adaptive_difficulty` (R-3, untuk §7.7.3/§7.8) dan `sessions.opening_prompt_version_id` (R-4) dalam satu query `GetForAttach`.
 
 #### 7.3.2 Status sesi yang boleh attach
 
@@ -5309,7 +5296,6 @@ client Opus 48k/20ms ─► reader ─► audioIn chan (cap 50) ─► audioPipe
    ├─ seq check (dup/gap/PLC)
    ├─ opus.Decoder(16000,1).Decode → []int16 len 320  (D-074; libopus decode langsung ke 16 kHz)
    ├─ audio.VAD.Process(16000, 640 byte) → voiced bool
-   ├─ utterance capture (bila turn user aktif & captureEnabled, §7.5.5)
    ├─ stt.SendAudio(pcm 640 byte)   (selalu, termasuk saat AI_SPEAKING; D-080; rotation buffer 15 s untuk rotasi koneksi vendor yang sama ada di router Bab 8 §8.5.8)
    └─ frameEvent{audioMs, voiced} ─► Runtime.loop (detector)
 
@@ -5391,10 +5377,9 @@ Efek: 400 ms pertama dikirim secepat TTS menghasilkan (burst), selanjutnya tepat
 
 **Rekomendasi client (kontrak UX, bukan diverifikasi server):** jitter buffer per generation; mulai memutar setelah ≥ 60 ms (3 frame) terkumpul atau 100 ms sejak frame pertama; saat underrun sisipkan silence dan lanjut ketika ≥ 60 ms tersedia; frame `generation` lama dibuang; setelah frame terakhir generation selesai diputar, kirim `client.playback_finished`.
 
-#### 7.5.5 Buffer rotasi STT & utterance capture
+#### 7.5.5 Buffer rotasi STT
 
 - **Buffer rotasi STT** (D-080, D-017): ring buffer PCM 15 s per sesi dimiliki `RoutedSTTSession` router Bab 8 §8.5.8 (bukan runtime) dan hanya dipakai untuk **rotasi koneksi ke vendor STT yang sama** (mis. batas durasi sesi vendor). Runtime hanya memanggil `stt.SendAudio(pcm)` untuk setiap frame; rotasi dan pengiriman ulang audio dilakukan router secara transparan (tidak ada event ke runtime). Tidak ada pindah vendor STT (STT = satu vendor aktif dari env, Bab 8 §8.5.1).
-- **Utterance capture** (R-19): `captureEnabled = PRONUNCIATION_CAPTURE_ENABLED && users.audio_consent`, dihitung **sekali** saat runtime dibangun (start atau takeover) dari nilai `users.audio_consent` yang dibaca `GetForAttach`; perubahan consent berlaku mulai sesi berikutnya (Bab 13 §13.9.1). Jika `captureEnabled = false`: tidak ada buffer capture, tidak ada upload, `user_audio_object_key` tetap `NULL` → pronunciation turn itu `UNAVAILABLE` (Bab 10); metrik `audio_capture_skipped_total{reason="no_consent"|"disabled"}` naik sekali per sesi. Jika `true`: buffer PCM per turn user dari onset sampai turn end, maks 45 s (1,44 MB). Saat turn final (bukan `DISCARDED`), `persister` menulis WAV PCM16 16 kHz mono ke object storage `audio/tmp/{session_id}/{turn_id}.wav` (D-099, Bab 13 §13.6) lalu `UPDATE session_turns SET user_audio_object_key=...`. Gagal upload → kolom tetap `NULL`, metrik, tidak ada retry setelah 3 percobaan.
 
 ### 7.6 Turn engine
 
@@ -5410,7 +5395,7 @@ Definisi istilah:
 
 | # | State | Event | Guard | Aksi | State berikut |
 |---|---|---|---|---|---|
-| 1 | `LISTENING` | `SPEECH_CONFIRMED` (detector) | `acceptingTurns` | `beginUserTurn(onset)`: `turn_seq = nextTurnSeq++`, `turn_id = uuidv7`, INSERT turn (async), tandai `sttMark`, mulai utterance capture; emit `speech.started`, `turn.started{initiator:USER}` | `USER_SPEAKING` |
+| 1 | `LISTENING` | `SPEECH_CONFIRMED` (detector) | `acceptingTurns` | `beginUserTurn(onset)`: `turn_seq = nextTurnSeq++`, `turn_id = uuidv7`, INSERT turn (async), tandai `sttMark`; emit `speech.started`, `turn.started{initiator:USER}` | `USER_SPEAKING` |
 | 2 | `LISTENING` | `SPEECH_CONFIRMED` | `!acceptingTurns` | abaikan | `LISTENING` |
 | 3 | `USER_SPEAKING` | `SILENCE_REACHED(threshold)` | – | `endUserTurn(SILENCE)`: catat `user_ended_at`, `stt.Finalize()` (commit `TURN_END`, S-8 (a)), timer `STT_FINAL_TIMEOUT` | `PROCESSING` |
 | 4 | `USER_SPEAKING` | `MAX_UTTERANCE` (45 s sejak onset) | – | `endUserTurn(MAX_UTTERANCE)`; set `turn.noMerge=true` | `PROCESSING` |
@@ -5637,7 +5622,6 @@ Semua tulis lewat `persister` (berurutan, async, fenced — §7.9.3). Isi kolom 
 | `tts_voice_id` | final | (R-5) voice ID vendor yang benar-benar dipakai TTS untuk generation REPLY/OPENING terakhir turn ini = `config_snapshot.character.voice_id` (bila `tts_provider` = `character.provider_name`) atau `config_snapshot.character.voice.fallback.voice_id` (bila TTS pindah ke `voice.fallback`); satu generation selalu satu voice, §7.7.6). `NULL` bila tidak ada audio AI (turn `DISCARDED`, user-only, atau gagal sebelum TTS). APOLOGY (aset) tidak mengubah kolom ini. |
 | `turn_end_to_first_audio_ms`, `llm_first_token_ms`, `tts_first_audio_ms` | final | definisi di §7.14 |
 | `input_tokens`, `output_tokens`, `tts_characters` | final | usage provider (jumlah semua percobaan) |
-| `user_audio_object_key` | setelah upload WAV | §7.5.5 |
 | `status`, `completed_at` | final | `COMPLETED` / `INTERRUPTED` / `FAILED` / `DISCARDED` |
 
 Untuk konteks LLM berikutnya, turn `INTERRUPTED` direpresentasikan sebagai `assistant_spoken_text + "（ユーザーが割り込みました）"` (D-078). Teks APOLOGY tidak disimpan ke `assistant_text` (turn `FAILED` menyimpan teks REPLY parsial, bila ada).
@@ -5680,7 +5664,7 @@ Untuk konteks LLM berikutnya, turn `INTERRUPTED` direpresentasikan sebagai `assi
                   │ emit JSON   │ startGeneration                       │ jobs
                   ▼             ▼                                       ▼
           Outbound.control   gen.llm ─► sentences(8) ─► gen.tts ─► frames(250) ─► gen.pacer ─► Outbound.audio
-                                                                                    persister goroutine (DB, storage)
+                                                                                    persister goroutine (DB)
    sttReceiver goroutine: STTStream.Events() ─► sttEvents                           redisSync goroutine (Redis)
    heartbeat goroutine: conn.Ping tiap 15 s                                         summarizer goroutine (on demand)
 ```
@@ -5690,11 +5674,11 @@ Untuk konteks LLM berikutnya, turn `INTERRUPTED` direpresentasikan sebagai `assi
 | `reader` | per koneksi | decoder JSON, rate limiter input | `cmdCh`, `audioIn` | read error / ctx koneksi |
 | `writer` | per koneksi | `conversation.Conn` (write; adapter `wsgateway`) | socket | ctx koneksi / write error |
 | `heartbeat` | per koneksi | timer ping | `conn.Ping` (library menserialisasi control frame) | ctx koneksi |
-| `audioPipeline` | per koneksi | opus decoder, VAD, `expected` seq | `stt` (RoutedSTTSession), capture, `frameEvents` | `audioIn` ditutup |
+| `audioPipeline` | per koneksi | opus decoder, VAD, `expected` seq | `stt` (RoutedSTTSession), `frameEvents` | `audioIn` ditutup |
 | `sttReceiver` | per STT stream | – | `sttEvents` | stream ditutup |
 | `Runtime.loop` | per sesi (melewati reconnect) | **semua** state sesi/turn/generation/detector/timer | `Outbound` (JSON), job ke persister/redisSync | sesi selesai / fence lost / drain |
 | `gen.llm`, `gen.tts`, `gen.pacer` | per generation | parser, encoder, pacer clock | `sentences`, `frames`, `Outbound.audio`, `genEvents` | `gen.ctx` dibatalkan / selesai |
-| `persister` | per sesi | antrean job DB (cap 64) | Postgres, object storage, `persistAcks` | job `Close` diproses |
+| `persister` | per sesi | antrean job DB (cap 64) | Postgres, `persistAcks` | job `Close` diproses |
 | `redisSync` | per sesi | snapshot state terakhir | Redis | sesi selesai (setelah flush) |
 | `summarizer` | per job | – | `genEvents` (hasil summary) | selesai / timeout 10 s |
 
@@ -6164,7 +6148,7 @@ persister: session_events SESSION_DISCONNECTED{at: disconnectedFrom}
    recent turns (12 dari Postgres), MaxSeqAndGeneration; buka STT ke vendor STT aktif dari env
 8. generation   = max(rt.generation, maxGen) + 1        // membatalkan apa pun milik pemilik lama
    nextTurnSeq  = maxSeq + 1
-   r.adaptive   = rt.adaptive ?: sessions.adaptive_difficulty   (§7.8.6); captureEnabled dari users.audio_consent (§7.5.5)
+   r.adaptive   = rt.adaptive ?: sessions.adaptive_difficulty   (§7.8.6)
    server_seq   = max(rt.last_server_seq, seq ujung stream) + 1   (tanpa data: 1)
    timers dari sessions.expires_at; warning yang sudah lewat tidak dikirim ulang
 9. AddDisconnected(floor((now − disconnectedFrom)/1000))
@@ -6305,7 +6289,7 @@ Angka kanonik (R-22); Bab 13 §13.10 menyelaraskan autoscaling (KEDA target 70 s
 - `activeSessions ≥ REALTIME_READY_MAX_SESSIONS (95)` → `/readyz` 503 (LB berhenti mengirim koneksi baru; koneksi lama tidak terpengaruh).
 - `activeSessions ≥ REALTIME_MAX_SESSIONS (100)` → `session.start` untuk sesi baru ditolak `4503 SERVER_AT_CAPACITY` (sesi tetap `RESERVED`).
 - Resume/takeover diterima sampai `REALTIME_HARD_MAX_SESSIONS (120)`; pada ≥ 120 (atau draining) upgrade ditolak HTTP 503 **sebelum** ticket dikonsumsi (§7.3.1 langkah 3).
-- Estimasi memori per sesi ≈ 3 MB (ring buffer STT router Bab 8 480 KB, capture ≤ 1,44 MB, buffer frame, goroutine). Request awal pod: 2 vCPU, 1 GiB; divalidasi load test (Bab 13).
+- Estimasi memori per sesi ≈ 1,5 MB (ring buffer STT router Bab 8 480 KB, buffer frame, goroutine). Request awal pod: 2 vCPU, 1 GiB; divalidasi load test (Bab 13).
 
 #### 7.12.3 Backpressure
 
@@ -6330,7 +6314,7 @@ Fasad ber-fence `*session.RuntimeService` (`internal/session/runtime.go`; mengga
 package session // internal/session/runtime.go — tipe yang dikembalikan RuntimeService
 
 // RuntimeRecord memuat kolom sessions yang dibutuhkan runtime (termasuk adaptive_difficulty R-3,
-// opening_prompt_version_id R-4, runtime_fence R-2) + users.audio_consent (R-19, via JOIN users).
+// opening_prompt_version_id R-4, runtime_fence R-2).
 type RuntimeRecord struct { /* kolom di atas; field persis milik Bab 5 */ }
 
 type Settlement struct { ChargedSeconds, DisconnectedSeconds int; StartedAt, EndedAt time.Time; EndReason EndReason }
@@ -6400,10 +6384,6 @@ type LearnerContextProvider interface { // Bab 12; implementasi: paket learner
 //   RefreshEpisodic(ctx, userID, sessionID uuid.UUID, recent []memory.TurnText) ([]memory.ContextItem, error) // pasca-turn
 //   ReloadCoreIfChanged(ctx, mc *memory.MemoryContext) (changed bool, err error)                 // pasca-turn (memver)
 // Redis kotoki:session:{id}:memctx & kotoki:user:{id}:memver milik Bab 11; runtime hanya MEMBACA memctx saat takeover (via RuntimeStore).
-
-type AudioStore interface { // Bab 13; implementasi: objectstore (put-only)
-    PutTempWAV(ctx context.Context, key string, pcm16k []int16) error
-}
 ```
 
 ```go
@@ -6515,7 +6495,6 @@ Tabel ini **kanonik** untuk metrik realtime; dashboard, alert, KEDA, dan kriteri
 | `audio_frames_in_total` | counter | `result` (`ok`,`gap`,`dup`,`invalid`,`overflow`) | |
 | `audio_frames_out_total` | counter | `result` (`written`,`dropped_stale`) | |
 | `frame_processing_seconds` | histogram `[0.0001,0.0002,0.0005,0.001,0.002,0.005,0.01,0.02]` | `stage` (`opus_decode`, `vad`, `opus_encode`) | biaya CPU per frame (diverifikasi load test Bab 13) |
-| `audio_capture_skipped_total` | counter | `reason` (`no_consent`,`disabled`) | sekali per sesi (§7.5.5, R-19) |
 | `outbound_queue_depth` | histogram | `queue` (`control`,`audio`) | sampel tiap 1 s |
 | `slow_consumer_total` | counter | – | koneksi diputus karena outbound penuh (D-082) |
 | `protocol_violations_total` | counter | `kind` (`frame_size`,`header`,`rate`,`version`,`session_id`,`invalid_burst`,`audio_format`) | sebelum close 1008 |
@@ -6692,7 +6671,7 @@ sequenceDiagram
 6. **Expiry**: `session.ending` WARNING pada T-60 & T-10; tidak ada turn baru setelah `expires_at`; sesi `COMPLETED` ≤ `expires_at + 10 s + 5 s`; `charged_seconds ≤ reserved_seconds`.
 7. **Drain & kapasitas** (R-22): sesi `LISTENING` dipindah tanpa turn `FAILED`; close 4100; resume di pod lain sukses; upgrade ke pod draining atau ber-120 runtime → HTTP 503 dan ticket **masih** bisa dipakai di pod lain; `session.start` pada 100 runtime → 4503; `/readyz` 503 pada 95.
 7b. **Batas kalimat & adaptive** (R-17): fake LLM menghasilkan 6 kalimat dengan `MaxAISentencesPerTurn=2` → tepat 2 `ai.sentence`, stream LLM dibatalkan, turn `COMPLETED`, `assistant_text` = 2 kalimat; 2 dari 6 user turn terakhir berisi `もう一度` setelah ≥ 4 turn → `DIFFICULTY_ADJUSTED` sekali, `SpeechSpeed` turun 1, generation berikutnya memakai `MaxSentences`/`SpeakingRate` baru; `sessions.adaptive_difficulty` tidak berubah.
-7c. **Consent audio** (R-19): `users.audio_consent=false` → tidak ada objek `audio/tmp/...` dan `user_audio_object_key` NULL untuk semua turn; `true` → satu WAV per turn final non-`DISCARDED`.
+7c. Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 7d. **Commit STT di batas turn** (S-8, fake STT): `Finalize` dipanggil tepat 3× per turn REPLY normal (turn end, masuk `AI_SPEAKING`, kembali `LISTENING`); teks FINAL commit `DISCARD` (mis. gema/noise selama `AI_SPEAKING`) tidak muncul di `user_text` turn berikutnya; barge-in tidak terkonfirmasi oleh partial yang berasal dari audio sebelum commit (b).
 7e. **Deadline & content filter** (S-7, S-9): fake LLM yang macet setelah kalimat pertama ter-audio → router `DONE{TRUNCATED}`, kalimat itu diputar, turn `COMPLETED`, `llm_finished=false`, `consecutiveFailedTurns` = 0; 3 turn berturut-turut `CONTENT_FILTERED` → 3 APOLOGY, turn `FAILED`, sesi **tidak** berakhir `PROVIDER_FAILURE`, `kotoki_llm_content_filtered_total` = 3.
 7f. **Opening & start** (S-2, S-14): `AI_FIRST` tanpa `OPENING` `PUBLISHED` → sesi `ACTIVE`, turn 0 berisi `opening_line` di-TTS tanpa panggilan LLM, `kotoki_content_opening_fallback_total` +1; runtime tidak pernah meng-query version OPENING; `session.start` setelah `start_deadline_at` → `error{SESSION_START_DEADLINE_PASSED}` + close 4010, sesi `ABANDONED`.
@@ -6727,7 +6706,7 @@ sequenceDiagram
 - D-NEW-7-21: Set key Redis (heartbeat `kotoki:session:{id}:hb`, R-7), TTL, skrip Lua owner, dan kebijakan Redis down (§7.9). Pengaman sweeper terhadap kehilangan heartbeat mengikuti R-9 / Bab 13 §13.4.4 (tidak ada aturan "uptime Redis" tambahan).
 - D-NEW-7-22: `session_events.event_type` yang ditulis runtime memakai katalog Bab 5 §5.7.1: `OWNER_CHANGED` (`START`/`TAKEOVER`/`DRAIN_RELEASE`), `SESSION_DISCONNECTED`, `SESSION_RECONNECTED`, `BARGE_IN`, `TURN_FAILED`, `PROVIDER_FALLBACK` (hanya TTS), `PROTOCOL_VIOLATION`, dan `DIFFICULTY_ADJUSTED` (semuanya ada di CHECK Bab 5 §5.3).
 - D-NEW-7-23: Format nilai ticket Redis `{"user_id","session_id","issued_at"}` ditulis API dengan `SET … EX 30 NX`.
-- D-NEW-7-24: Capture WAV utterance per turn (≤ 45 s) untuk pronunciation, upload async oleh persister, hanya bila `PRONUNCIATION_CAPTURE_ENABLED` **dan** `users.audio_consent = true` (R-19; dibaca sekali per runtime).
+- D-NEW-7-24: Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 - D-NEW-7-25: Replay stream memakai `XADD … MAXLEN ~ 500` (trimming approximate, menyimpan ≥ 500 entry, D-083) demi performa Redis; deteksi gap tetap eksak lewat `prev_seq`.
 - D-NEW-7-26: Opening `AI_FIRST` (S-2): `MarkStarting` = Bab 5 `BeginStart` yang memilih version `OPENING` `PUBLISHED` dan mengisi `sessions.opening_prompt_version_id`; runtime memakai nilai dari record yang dikembalikan (tidak meng-query sendiri); takeover memakai nilai kolom. NULL → turn 0 = TTS statis `scenario_versions.opening_line` (tanpa LLM), log WARN + `kotoki_content_opening_fallback_total` [builder call].
 - D-NEW-7-27: Batas keras `MaxAISentencesPerTurn` di parser (tepat N kalimat, lalu cancel stream LLM, turn `COMPLETED`) dan penyesuaian in-session Bab 12 §12.8.5 di context builder, disimpan di memori + Redis `rt.adaptive`, dicatat `DIFFICULTY_ADJUSTED` (R-17).
@@ -6767,7 +6746,7 @@ Prinsip yang berlaku di seluruh bab:
 internal/provider/            # paket fitur (D-005): SEMUA port kapabilitas + router dalam satu paket `provider`
 ├── provider.go          # tipe umum: Name, Capability, Usage, Message
 ├── errors.go            # *provider.Error, ErrorKind, helper klasifikasi, ClassifyHTTPStatus (kode status → Kind, tanpa net/http)
-├── stt.go llm.go tts.go evaluation.go embedding.go pronunciation.go   # port per kapabilitas
+├── stt.go llm.go tts.go evaluation.go embedding.go   # port per kapabilitas
 ├── router.go            # interface RealtimeRouter & AsyncRouter (8.2.8) + implementasi Router, NewRouter, RouterConfig, RouterDeps (8.5)
 ├── generation.go        # router: generation LLM/TTS, fallback TTS per karakter, TRUNCATED (8.5.7)
 ├── stt_session.go       # router: sesi STT dengan rotasi koneksi vendor yang sama + rotation buffer (8.5.8)
@@ -6783,7 +6762,6 @@ internal/provider/            # paket fitur (D-005): SEMUA port kapabilitas + ro
 ├── cartesia/            # adapter Cartesia: STT Ink (8.4.6) + TTS Sonic streaming (8.4.14, D-015)
 ├── openai/              # adapter OpenAI: STT transcription (8.4.2) + LLM (8.4.3) + Evaluation (8.4.8) + Embedding (8.4.10)
 ├── deepseek/            # adapter DeepSeek: LLM (8.4.4) + Evaluation (8.4.9); API kompatibel Chat Completions
-├── azure/               # adapter Azure Speech: Pronunciation (8.4.11)
 ├── fake/                # fake deterministik untuk semua port (8.9), fixtures/ ter-embed
 └── providertest/        # port conformance suite (8.11), hanya diimpor file _test.go
 ```
@@ -6791,8 +6769,8 @@ internal/provider/            # paket fitur (D-005): SEMUA port kapabilitas + ro
 Aturan (bagian dari §2.2, ditegakkan `depguard` Bab 14 §14.9):
 
 1. **Paket `internal/provider`** (port + router) adalah paket fitur (D-005) dan hanya mengimpor stdlib, `github.com/google/uuid`, `golang.org/x/sync/semaphore`, `github.com/prometheus/client_golang`, dan `internal/platform/clock`. Paket ini MUST NOT mengimpor `net/http`, `github.com/coder/websocket`, library infrastruktur lain (D-005), paket fitur lain (§2.2 butir 3 — termasuk `content` dan `prompt`), maupun sub-paketnya sendiri (`pricing`, `httpx`, adapter vendor, `fake`). Arah impor selalu sub-paket → `provider`, tidak pernah sebaliknya; penyatuan hanya di `cmd/*` (D-004). Kebutuhan data dari luar diekspresikan sebagai port kecil di sisi pemakai (§2.2 butir 2): `PriceTable` (8.7.2); voice TTS per karakter masuk lewat `VoiceSelection` (8.2.4), bukan port.
-2. **Adapter vendor `internal/provider/<vendor>`** (`elevenlabs`, `cartesia`, `openai`, `deepseek`, `azure`): satu paket per vendor berisi **semua** kapabilitas vendor itu. Boleh mengimpor `net/http`, `github.com/coder/websocket`, `encoding/json`, `otelhttp`, `provider` (tipe port), dan `provider/httpx`. **Tidak memakai SDK vendor** (D-003) — protokolnya sederhana (WebSocket/SSE/HTTP chunked), dan SDK menambah dependensi besar serta menyembunyikan kontrol timeout/cancel. Adapter MUST NOT mengimpor adapter vendor lain (`deepseek` tidak mengimpor `openai`: kemiripan format Chat Completions dibagi lewat helper `httpx`/kode yang diduplikasi kecil), `fake`, `pricing`, maupun paket fitur selain `provider`. Paket fitur (`conversation`, `evaluation`, `memory`, `summary`, …) MUST NOT mengimpor adapter vendor (D-005). Metrik memakai `github.com/prometheus/client_golang` (OTel hanya untuk trace).
-3. Setiap paket vendor mengekspor satu `Config` dan satu konstruktor per kapabilitas, `New<Cap>(cfg Config, hc *http.Client, log *slog.Logger) (*<Cap>, error)` — `elevenlabs.NewSTT`/`NewTTS`, `cartesia.NewSTT`/`NewTTS`, `openai.NewSTT`/`NewLLM`/`NewEvaluation`/`NewEmbedding`, `deepseek.NewLLM`/`NewEvaluation`, `azure.NewPronunciation`; tipe hasilnya mengimplementasikan port `provider.<Cap>Provider`. `cmd/*/main.go` hanya membangun (manual wiring, D-004) adapter untuk kapabilitas yang **enabled** di env (flag `*_ENABLED`, 8.5.1) — mis. dengan `OPENAI_STT_ENABLED=true` hanya `openai.NewSTT` yang dibangun untuk STT.
+2. **Adapter vendor `internal/provider/<vendor>`** (`elevenlabs`, `cartesia`, `openai`, `deepseek`): satu paket per vendor berisi **semua** kapabilitas vendor itu. Boleh mengimpor `net/http`, `github.com/coder/websocket`, `encoding/json`, `otelhttp`, `provider` (tipe port), dan `provider/httpx`. **Tidak memakai SDK vendor** (D-003) — protokolnya sederhana (WebSocket/SSE/HTTP chunked), dan SDK menambah dependensi besar serta menyembunyikan kontrol timeout/cancel. Adapter MUST NOT mengimpor adapter vendor lain (`deepseek` tidak mengimpor `openai`: kemiripan format Chat Completions dibagi lewat helper `httpx`/kode yang diduplikasi kecil), `fake`, `pricing`, maupun paket fitur selain `provider`. Paket fitur (`conversation`, `evaluation`, `memory`, `summary`, …) MUST NOT mengimpor adapter vendor (D-005). Metrik memakai `github.com/prometheus/client_golang` (OTel hanya untuk trace).
+3. Setiap paket vendor mengekspor satu `Config` dan satu konstruktor per kapabilitas, `New<Cap>(cfg Config, hc *http.Client, log *slog.Logger) (*<Cap>, error)` — `elevenlabs.NewSTT`/`NewTTS`, `cartesia.NewSTT`/`NewTTS`, `openai.NewSTT`/`NewLLM`/`NewEvaluation`/`NewEmbedding`, `deepseek.NewLLM`/`NewEvaluation`; tipe hasilnya mengimplementasikan port `provider.<Cap>Provider`. `cmd/*/main.go` hanya membangun (manual wiring, D-004) adapter untuk kapabilitas yang **enabled** di env (flag `*_ENABLED`, 8.5.1) — mis. dengan `OPENAI_STT_ENABLED=true` hanya `openai.NewSTT` yang dibangun untuk STT.
 4. **Router** ada di paket `provider` (`provider.NewRouter`, 8.5.2). `*provider.Router` mengimplementasikan `provider.RealtimeRouter` (dipakai `cmd/realtime` → `conversation`) dan `provider.AsyncRouter` (dipakai `cmd/worker` → `evaluation`, `memory`, `summary`). Adapter vendor/fake dan `*pricing.Table` di-inject lewat `RouterDeps` oleh `cmd/*`; paket `provider` tidak tahu adapter mana yang ada.
 5. `pricing`, `httpx`, dan `fake` mengimpor `provider`; `fake` tidak mengimpor go-redis (8.9.6) maupun `httpx`.
 
@@ -6817,7 +6795,6 @@ const (
 	Cartesia     Name = "CARTESIA"
 	OpenAI       Name = "OPENAI"
 	DeepSeek     Name = "DEEPSEEK"
-	Azure        Name = "AZURE"
 	FakePrimary  Name = "FAKE_PRIMARY"  // fake untuk semua kapabilitas (mode fake, 8.9)
 	FakeFallback Name = "FAKE_FALLBACK" // HANYA slot TTS fallback (voice.fallback) di mode fake
 )
@@ -6831,7 +6808,6 @@ const (
 	CapTTS           Capability = "TTS"
 	CapEvaluation    Capability = "EVALUATION"
 	CapEmbedding     Capability = "EMBEDDING"
-	CapPronunciation Capability = "PRONUNCIATION"
 )
 
 type Role string
@@ -6860,7 +6836,6 @@ type TokenUsage struct {
 const (
 	STTSampleRate = 16000 // PCM16LE mono, input ke STT
 	TTSSampleRate = 24000 // PCM16LE mono, output dari TTS
-	PronunciationSampleRate = 16000 // WAV PCM16 mono
 )
 ```
 
@@ -7174,69 +7149,9 @@ type EmbeddingProvider interface {
 }
 ```
 
-#### 8.2.7 Pronunciation
+#### 8.2.7 (dihapus dari v1)
 
-```go
-package provider
-
-type PronunciationRequest struct {
-	AudioWAV      []byte // WAV RIFF PCM16 mono 16 kHz (dari object storage, D-099)
-	ReferenceText string // transcript user (session_turns.user_text)
-	Locale        string // selalu "ja-JP"
-	RequestID     string // turn_id
-}
-
-type PronunciationStatus string
-
-const (
-	PronunciationOK       PronunciationStatus = "OK"
-	PronunciationNoMatch  PronunciationStatus = "NO_MATCH"  // vendor tidak mengenali ucapan
-	PronunciationTooLong  PronunciationStatus = "TOO_LONG"  // audio > 30 s, tidak dikirim
-	PronunciationTooShort PronunciationStatus = "TOO_SHORT" // audio < 500 ms, tidak dikirim
-)
-
-type PronunciationResult struct {
-	Status            PronunciationStatus
-	AccuracyScore     float64  // 0..100
-	FluencyScore      float64  // 0..100
-	CompletenessScore float64  // 0..100
-	ProsodyScore      *float64 // 0..100; nil bila tidak tersedia
-	PronScore         float64  // 0..100 (skor agregat vendor)
-	Words             []PronunciationWord
-	AudioMs           int64
-	Provider          Name
-}
-
-type PronunciationErrorType string
-
-const (
-	PronErrNone             PronunciationErrorType = "NONE"
-	PronErrOmission         PronunciationErrorType = "OMISSION"
-	PronErrInsertion        PronunciationErrorType = "INSERTION"
-	PronErrMispronunciation PronunciationErrorType = "MISPRONUNCIATION"
-)
-
-type PronunciationWord struct {
-	Text          string
-	AccuracyScore float64
-	ErrorType     PronunciationErrorType
-	StartMs       int64
-	EndMs         int64
-}
-
-type PronunciationProvider interface {
-	Name() Name
-	Assess(ctx context.Context, req PronunciationRequest) (PronunciationResult, error)
-}
-
-// ErrPronunciationDisabled dikembalikan AsyncRouter.AssessPronunciation bila
-// AZURE_PRONUNCIATION_ENABLED=false (Bab 10: UNAVAILABLE / PROVIDER_DISABLED).
-var ErrPronunciationDisabled = errors.New("provider: pronunciation disabled")
-```
-
-Aturan durasi (berlaku untuk semua adapter termasuk fake; dihitung dari header WAV sebelum request): `< 500 ms` → `TOO_SHORT`, `> 30.000 ms` → `TOO_LONG` (tidak dikirim ke vendor, bukan error). Utterance bisa sampai 45 s (D-076), tetapi utterance > 30 s **tidak dinilai** pronunciation — tidak dipotong, karena memotong merusak keselarasan dengan reference text. Bab 10 MUST memilih kandidat berdurasi ≤ 30 s; hasil `TOO_LONG`/`TOO_SHORT`/`NO_MATCH` dihitung sebagai "tidak sukses" untuk kandidat itu.
-
-**Pemetaan untuk Bab 10 §10.8.2:** Bab 10 memanggil `AsyncRouter.AssessPronunciation` (bukan adapter langsung) agar breaker, semaphore, timeout, dan retry 8.6.2 berlaku. Field `SampleRateHz` tidak ada (selalu `PronunciationSampleRate` = 16 kHz); per kata `{Word, AccuracyScore, ErrorType}` = `PronunciationWord{Text, AccuracyScore, ErrorType}`; `PronScore`, `AccuracyScore`, `FluencyScore`, `ProsodyScore` (nullable) sama nama.
+Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 
 #### 8.2.8 Interface router (dipakai runtime & worker)
 
@@ -7327,8 +7242,6 @@ type AsyncRouter interface {
 	// CompleteText: summary sesi Bab 9 (model = `<VENDOR>_LLM_MODEL` vendor aktif). Lihat TextRequest di atas.
 	CompleteText(ctx context.Context, req TextRequest) (TextResult, error)
 	Embed(ctx context.Context, req EmbeddingRequest) (EmbeddingResult, error)
-	// AssessPronunciation: ErrPronunciationDisabled bila AZURE_PRONUNCIATION_ENABLED=false.
-	AssessPronunciation(ctx context.Context, req PronunciationRequest) (PronunciationResult, error)
 }
 ```
 
@@ -7628,15 +7541,14 @@ Mapping event:
 
 #### 8.4.7 Matriks vendor × kapabilitas
 
-| Vendor | STT | LLM | Evaluation | Embedding | TTS | Pronunciation | Flag env |
-|---|---|---|---|---|---|---|---|
-| `OPENAI` | ya (8.4.2, **default**) | ya (8.4.3, **default**) | ya (8.4.8; mengikuti vendor LLM) | ya (8.4.10) | – | – | `OPENAI_STT_ENABLED`, `OPENAI_LLM_ENABLED` |
-| `DEEPSEEK` | – | ya (8.4.4, backup manual) | ya (8.4.9; mengikuti vendor LLM) | – | – | – | `DEEPSEEK_LLM_ENABLED` |
-| `ELEVENLABS` | ya (8.4.1, backup manual) | – | – | – | ya (8.4.5, per karakter) | – | `ELEVENLABS_STT_ENABLED`, `ELEVENLABS_TTS_ENABLED` |
-| `CARTESIA` | ya (8.4.6, backup manual) | – | – | – | ya (8.4.14, per karakter) | – | `CARTESIA_STT_ENABLED`, `CARTESIA_TTS_ENABLED` |
-| `AZURE` | – | – | – | – | – | ya (8.4.11) | `AZURE_PRONUNCIATION_ENABLED` |
+| Vendor | STT | LLM | Evaluation | Embedding | TTS | Flag env |
+|---|---|---|---|---|---|
+| `OPENAI` | ya (8.4.2, **default**) | ya (8.4.3, **default**) | ya (8.4.8; mengikuti vendor LLM) | ya (8.4.10) | – | `OPENAI_STT_ENABLED`, `OPENAI_LLM_ENABLED` |
+| `DEEPSEEK` | – | ya (8.4.4, backup manual) | ya (8.4.9; mengikuti vendor LLM) | – | – | `DEEPSEEK_LLM_ENABLED` |
+| `ELEVENLABS` | ya (8.4.1, backup manual) | – | – | – | ya (8.4.5, per karakter) | `ELEVENLABS_STT_ENABLED`, `ELEVENLABS_TTS_ENABLED` |
+| `CARTESIA` | ya (8.4.6, backup manual) | – | – | – | ya (8.4.14, per karakter) | `CARTESIA_STT_ENABLED`, `CARTESIA_TTS_ENABLED` |
 
-Total 11 kombinasi (vendor, kapabilitas) adapter nyata; breaker, semaphore, dan metrik per kombinasi (8.5.4–8.5.6). Pada satu waktu produksi hanya: 1 STT, 1 LLM (+ Evaluation vendor sama), Embedding OpenAI, 1–2 TTS, Pronunciation Azure.
+Total 10 kombinasi (vendor, kapabilitas) adapter nyata; breaker, semaphore, dan metrik per kombinasi (8.5.4–8.5.6). Pada satu waktu produksi hanya: 1 STT, 1 LLM (+ Evaluation vendor sama), Embedding OpenAI, 1–2 TTS.
 
 #### 8.4.8 OpenAI — Evaluation (structured output; default)
 
@@ -7672,25 +7584,9 @@ Karena skema tidak ditegakkan vendor, **validasi skema ketat di sisi kode wajib*
 
 Embedding hanya OpenAI (D-017; DeepSeek tidak dipakai): vektor dari model lain tidak sebanding di ruang yang sama, sehingga `OPENAI_API_KEY` tetap wajib walau LLM/STT memakai vendor lain.
 
-#### 8.4.11 Azure Speech — Pronunciation Assessment (ja-JP)
+#### 8.4.11 (dihapus dari v1)
 
-Terverifikasi: `ja-JP` termasuk 33 locale yang didukung pronunciation assessment (https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=pronunciation-assessment).
-
-| Item | Nilai |
-|---|---|
-| Protokol | HTTP POST (REST speech-to-text short audio), body WAV, chunked transfer |
-| Endpoint | `POST {AZURE_SPEECH_ENDPOINT}/stt/speech/recognition/conversation/cognitiveservices/v1?language=ja-JP&format=detailed` dengan `AZURE_SPEECH_ENDPOINT=https://<resource>.cognitiveservices.azure.com` |
-| Header | `Ocp-Apim-Subscription-Key: $AZURE_SPEECH_KEY`, `Content-Type: audio/wav; codecs=audio/pcm; samplerate=16000`, `Accept: application/json`, `Pronunciation-Assessment: base64(JSON)` |
-| JSON assessment | `{"ReferenceText":R,"GradingSystem":"HundredMark","Granularity":"Word","Dimension":"Comprehensive","EnableMiscue":"True","EnableProsodyAssessment":"True"}` |
-| Batas | audio ≤ **30 s** untuk pronunciation assessment; format WAV PCM 16 kHz mono |
-| Respons | `RecognitionStatus`; `NBest[0].AccuracyScore`, `FluencyScore`, `CompletenessScore`, `ProsodyScore`, `PronScore`, `Words[]{Word, AccuracyScore, ErrorType, Offset, Duration}` (Offset/Duration satuan 100 ns) |
-| Dok | https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-speech-to-text-short , https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-pronunciation-assessment |
-
-Aturan adapter:
-- Durasi audio dihitung dari header WAV sebelum request: < 500 ms → `TOO_SHORT`, > 30.000 ms → `TOO_LONG` (tanpa request; bukan error).
-- `RecognitionStatus` = `Success` → `OK`; `NoMatch`, `InitialSilenceTimeout`, `BabbleTimeout` → `NO_MATCH` (bukan error); `Error` → `*Error{Kind: UNAVAILABLE}`.
-- `ErrorType` `None|Omission|Insertion|Mispronunciation` → enum normalized. `Offset/Duration` / 10.000 → ms.
-- `ProsodyScore` nullable (dukungan prosody untuk ja-JP → **verifikasi di task adapter**). Laporan komunitas menyebut level fonem Jepang bisa kosong; karena itu kita memakai `Granularity=Word`.
+Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 
 #### 8.4.12 Voice, model & tempo (data Bab 6)
 
@@ -7739,7 +7635,6 @@ Unit test `internal/provider/generation_test.go`: voice kosong/vendor tak terdaf
 | `text-embedding-3-small` 1536 dim, 8.192 token | Terverifikasi | guides/embeddings |
 | Cartesia TTS WebSocket `wss://api.cartesia.ai/tts/websocket`, pesan `chunk`/`done`/`error`, `output_format` raw `pcm_s16le` 24000, `generation_config.speed` 0,6–1,5, cancel per `context_id` | Terverifikasi (docs, 2026-10-14) | api-reference/tts/websocket |
 | Cartesia TTS auth (header `X-API-Key` vs `Authorization: Bearer`), pemasangan versi API di WS, daftar kode error, limit konkurensi plan, satuan biaya (karakter vs detik), ID model (`sonic-3.6` vs `sonic3.6`) | **Verifikasi di task adapter** | docs.cartesia.ai (8.4.14) |
-| Azure pronunciation `ja-JP`, REST short audio ≤ 30 s, header & respons | Terverifikasi | language-support, rest-speech-to-text-short |
 
 
 #### 8.4.14 Cartesia — TTS (Sonic, dipilih per karakter) (D-015)
@@ -7777,7 +7672,7 @@ Mode:
 | Env | Default | Keterangan |
 |---|---|---|
 | `PROVIDER_MODE` | `real` | `real` atau `fake` (D-007) |
-| `PROVIDER_MODE_STT`, `_LLM`, `_TTS`, `_EVALUATION`, `_EMBEDDING`, `_PRONUNCIATION` | (kosong = ikut `PROVIDER_MODE`) | override per kapabilitas, mis. benchmark LLM nyata dengan STT/TTS fake [builder call]. `_LLM` berlaku juga untuk EVALUATION bila `_EVALUATION` kosong |
+| `PROVIDER_MODE_STT`, `_LLM`, `_TTS`, `_EVALUATION`, `_EMBEDDING` | (kosong = ikut `PROVIDER_MODE`) | override per kapabilitas, mis. benchmark LLM nyata dengan STT/TTS fake [builder call]. `_LLM` berlaku juga untuk EVALUATION bila `_EVALUATION` kosong |
 
 Sakelar vendor (D-017; boolean, nilai `true`/`false`):
 
@@ -7791,7 +7686,6 @@ Sakelar vendor (D-017; boolean, nilai `true`/`false`):
 | TTS | `ELEVENLABS_TTS_ENABLED` | `true` | **minimal satu** `true`; vendor TTS enabled = vendor yang boleh dipakai karakter |
 | TTS | `CARTESIA_TTS_ENABLED` | `true` | |
 | Embedding | `OPENAI_EMBEDDING_ENABLED` | `true` | harus `true` (satu-satunya vendor embedding; DeepSeek tidak dipakai) |
-| Pronunciation | `AZURE_PRONUNCIATION_ENABLED` | `true` | `false` = pronunciation dimatikan (`ErrPronunciationDisabled`; `AZURE_SPEECH_*` tidak wajib) |
 
 Validasi startup menolak (exit code 1, pesan menyebut nama variabel): nol atau lebih dari satu STT `true` (mis. `exactly one of OPENAI_STT_ENABLED, ELEVENLABS_STT_ENABLED, CARTESIA_STT_ENABLED must be true`), nol atau dua LLM `true`, kedua TTS `false`, nilai boolean tidak valid. Dalam mode `fake` untuk suatu kapabilitas, flag vendor kapabilitas itu **tidak divalidasi** dan diabaikan (instance `FAKE_PRIMARY` dipakai); validasi flag dijalankan penuh di mode `real` (diuji di unit test `RouterConfig.Validate`). `FAKE_PRIMARY`/`FAKE_FALLBACK` tidak boleh diisi manual di env.
 
@@ -7826,7 +7720,6 @@ Secret & base URL (secret dari Kubernetes Secret, Bab 13):
 | `DEEPSEEK_API_KEY` | wajib bila `DEEPSEEK_LLM_ENABLED=true` |
 | `ELEVENLABS_API_KEY` | wajib bila `ELEVENLABS_STT_ENABLED` atau `ELEVENLABS_TTS_ENABLED` |
 | `CARTESIA_API_KEY` | wajib bila `CARTESIA_STT_ENABLED` atau `CARTESIA_TTS_ENABLED` |
-| `AZURE_SPEECH_KEY`, `AZURE_SPEECH_ENDPOINT` | wajib bila `AZURE_PRONUNCIATION_ENABLED=true` (endpoint mis. `https://kotoki-speech.cognitiveservices.azure.com`) |
 | `OPENAI_BASE_URL` / `OPENAI_WS_BASE_URL` | `https://api.openai.com/v1` / `wss://api.openai.com/v1/realtime` |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` |
 | `ELEVENLABS_BASE_URL` / `ELEVENLABS_WS_BASE_URL` | `https://api.elevenlabs.io` / `wss://api.elevenlabs.io` |
@@ -7850,7 +7743,6 @@ type Router struct {
 	eval      EvaluationProvider         // vendor sama dengan llm (OpenAI/DeepSeek)
 	tts       map[Name]TTSProvider       // vendor TTS enabled (1–2)
 	embed     EmbeddingProvider
-	pron      PronunciationProvider      // nil bila AZURE_PRONUNCIATION_ENABLED=false
 	breakers  map[key]*breaker           // key = {Name, Capability}
 	sems      map[key]*semaphoreSlot
 	health    *HealthTracker
@@ -7868,7 +7760,6 @@ type RouterDeps struct {
 	Evaluation  EvaluationProvider         // vendor sama dengan LLM
 	TTS         map[Name]TTSProvider       // 1–2 vendor TTS enabled (atau FAKE_PRIMARY + FAKE_FALLBACK)
 	Embedding   EmbeddingProvider
-	Pron        PronunciationProvider      // nil bila dimatikan
 	Prices      PriceTable
 	Clock       clock.Clock
 	Log         *slog.Logger
@@ -7890,7 +7781,7 @@ Router **tidak** memiliki peta primary/fallback untuk STT/LLM/Evaluation/Embeddi
 #### 8.5.3 Seleksi vendor
 
 ```text
-STT / LLM / EVALUATION / EMBEDDING / PRONUNCIATION:
+STT / LLM / EVALUATION / EMBEDDING:
     vendor = satu-satunya adapter aktif
     ticket, ok := breaker(vendor, cap).Allow()
     if !ok: return *Error{Kind: UNAVAILABLE, VendorCode: "circuit_open", Retryable: true}   // fail-fast, tanpa vendor lain
@@ -7968,7 +7859,6 @@ Semaphore per (vendor, kapabilitas) per proses (`golang.org/x/sync/semaphore` we
 | realtime | TTS, tiap vendor enabled (`ELEVENLABS_TTS`, `CARTESIA_TTS`: semaphore terpisah) | 80 | 100 ms | idem; fallback TTS per karakter bila ada (8.5.7) |
 | worker evaluation | `<VENDOR LLM>_EVALUATION` | 8 | 30 s | `RATE_LIMITED` retryable |
 | worker memory | `OPENAI_EMBEDDING` | 16 | 30 s | idem |
-| worker evaluation | `AZURE_PRONUNCIATION` | 8 | 30 s | idem |
 | worker learner+summary | `<VENDOR LLM>_LLM` (`CompleteText` summary) | 8 | 30 s | idem |
 
 `CompleteText` di proses realtime (rolling summary Bab 7) memakai semaphore LLM realtime yang sama (60, tunggu 100 ms). Panggilan via `Evaluation()` memakai semaphore evaluation yang sama dengan `GenerateJSON`.
@@ -8123,7 +8013,6 @@ Metering: audio yang dikirim ulang saat rotasi ikut dihitung di `Stats().AudioMs
 | `PROVIDER_TIMEOUT_TTS_SENTENCE_TOTAL` | `10s` [builder call] | request kalimat → chunk Final | router (ctx) |
 | `PROVIDER_TIMEOUT_EVALUATION` | `60s` | per attempt | router (ctx) |
 | `PROVIDER_TIMEOUT_EMBEDDING` | `5s` | per attempt | router (ctx) |
-| `PROVIDER_TIMEOUT_PRONUNCIATION` | `15s` [builder call] | per attempt | router (ctx) |
 
 Batas sisa sesi: untuk panggilan realtime, deadline efektif = `min(now + budget, sessionExpiresAt + PROVIDER_SESSION_GRACE)` dengan `PROVIDER_SESSION_GRACE=15s` (S-7; > grace runtime `SESSION_EXPIRY_GRACE` 10 s Bab 7, sehingga pada akhir sesi runtime selalu memotong generasi lebih dulu) [builder call]. Runtime memasang deadline ctx induk generasi = `sessionExpiresAt + PROVIDER_SESSION_GRACE` (Bab 7 §7.7.4); router mengambil `min` otomatis karena memakai `context.WithTimeout` di atas ctx induk. Deadline (LLM total atau sesi) yang tercapai **setelah** `MarkAudioSent` mengakhiri stream LLM dengan `DONE{TRUNCATED}`, bukan `ERROR` (8.5.7).
 
@@ -8131,7 +8020,7 @@ Target D-100 (STT final ≤ 300 ms, LLM kalimat pertama ≤ 800 ms, TTS first au
 
 #### 8.6.2 Retry per kapabilitas
 
-Tidak ada fallback vendor untuk STT/LLM/Evaluation/Embedding/Pronunciation (D-017); retry selalu ke vendor aktif yang sama.
+Tidak ada fallback vendor untuk STT/LLM/Evaluation/Embedding (D-017); retry selalu ke vendor aktif yang sama.
 
 | Kapabilitas | Retry ke vendor yang sama | Fallback | Catatan |
 |---|---|---|---|
@@ -8142,7 +8031,6 @@ Tidak ada fallback vendor untuk STT/LLM/Evaluation/Embedding/Pronunciation (D-01
 | Evaluation (`Evaluation()`, Bab 10) | **tidak** — 1 attempt per panggilan | tidak ada | urutan & jumlah panggilan milik Bab 10 §10.6.1 (utama + repair JSON = maks 2 per delivery); retry lintas delivery lewat retry queue Bab 9 |
 | `CompleteText` (summary Bab 9) | worker: maks 3 attempt (backoff seperti Evaluation); realtime (rolling summary Bab 7): 1 attempt | tidak ada | timeout per attempt `PROVIDER_TIMEOUT_LLM_TOTAL` (15 s); first-token timer tidak berlaku |
 | Embedding | ya: maks 3 attempt | tidak ada | backoff 500 ms, 2 s (±20% jitter) |
-| Pronunciation | ya: maks 2 attempt | tidak ada | backoff 2 s; timeout per attempt 15 s → satu `AssessPronunciation` bisa ≤ ±32 s (deadline ctx pemanggil Bab 10 harus ≥ itu atau menerima pemotongan); gagal akhir → kandidat dihitung tidak sukses (Bab 10 §10.8.2) |
 
 Error akhir async dikembalikan sebagai `*provider.Error` dengan `Retryable` apa adanya; framework consumer (Bab 9) memakai `provider.IsRetryable` untuk memilih retry queue (D-092) vs DLQ.
 
@@ -8185,7 +8073,7 @@ doAsync(capability, maxAttempts, call):
 | `stt_final_ms` | runtime | `Finalize` → FINAL `FromFinalize` |
 | `turn_end_to_first_audio_ms` | runtime | D-100 |
 
-Turn yang di-`DISCARDED` tetap menyimpan usage (biaya tetap terjadi). Biaya evaluation/embedding/pronunciation **tidak** disimpan di `session_turns`; dicatat sebagai metrik (8.7.4) dan, bila Bab 10 menyediakan kolom usage pada `evaluations`, diisi dari `StructuredResult.Usage`.
+Turn yang di-`DISCARDED` tetap menyimpan usage (biaya tetap terjadi). Biaya evaluation/embedding **tidak** disimpan di `session_turns`; dicatat sebagai metrik (8.7.4) dan, bila Bab 10 menyediakan kolom usage pada `evaluations`, diisi dari `StructuredResult.Usage`.
 
 #### 8.7.2 Tabel harga (config, bukan DB)
 
@@ -8206,7 +8094,6 @@ entries:
   - {provider: CARTESIA,   capability: STT,           model: ink-2,                 per_audio_hour: 0}      # satuan → verifikasi di task adapter
   - {provider: OPENAI,     capability: EVALUATION,    model: gpt-4.1,               input_per_1m_tokens: 0, output_per_1m_tokens: 0}
   - {provider: OPENAI,     capability: EMBEDDING,     model: text-embedding-3-small, input_per_1m_tokens: 0}
-  - {provider: AZURE,      capability: PRONUNCIATION, model: "*",                   per_audio_hour: 0}
 ```
 
 `provider`/`capability` di file harga MUST UPPERCASE (loader menolak nilai lain). `CompleteText` dihargai memakai entri kapabilitas `LLM`; token ber-cache (`CachedInputTokens`) memakai `input_cache_hit_per_1m_tokens` bila ada, selain itu harga input biasa. Entri TTS dicocokkan memakai `tts_provider` + `tts_model` yang dicatat (nilai `characters.model_name`, teks bebas), wildcard `*` per vendor menjadi default.
@@ -8333,7 +8220,7 @@ Package `internal/provider/fake`. First-class: dipakai local dev (`PROVIDER_MODE
 | Env | Default | Keterangan |
 |---|---|---|
 | `FAKE_SEED` | `42` | seed PRNG deterministik |
-| `FAKE_<INST>_<CAP>_LATENCY_MS` | lihat tiap port | latency dasar; `<INST>` ∈ `PRIMARY` (semua kapabilitas), `FALLBACK` (hanya `TTS`); `<CAP>` ∈ `STT`,`LLM`,`TTS`,`EVALUATION`,`EMBEDDING`,`PRONUNCIATION` |
+| `FAKE_<INST>_<CAP>_LATENCY_MS` | lihat tiap port | latency dasar; `<INST>` ∈ `PRIMARY` (semua kapabilitas), `FALLBACK` (hanya `TTS`); `<CAP>` ∈ `STT`,`LLM`,`TTS`,`EVALUATION`,`EMBEDDING` |
 | `FAKE_<INST>_<CAP>_JITTER_MS` | `0` | jitter uniform ± ms (PRNG ber-seed) |
 | `FAKE_<INST>_<CAP>_FAILURE_RATE` | `0` | probabilitas 0..1 kegagalan per request/stream |
 | `FAKE_<INST>_<CAP>_FAIL_EVERY_N` | `0` | gagal tepat setiap request ke-N (deterministik penuh; diutamakan atas rate) |
@@ -8378,11 +8265,10 @@ Keputusan gagal: `FAIL_EVERY_N>0` → `counter % N == 0`; selain itu `hash64(FAK
 - Chunk pertama setelah `FAKE_<INST>_TTS_LATENCY_MS` (default 150); chunk 20 ms (960 byte) dikirim tiap `FAKE_TTS_CHUNK_INTERVAL_MS` (default 5 → ±4× lebih cepat dari realtime, meniru vendor).
 - Usage: `Characters` = rune, `AudioMs` = durasi.
 
-#### 8.9.5 Fake Evaluation, Embedding, Pronunciation
+#### 8.9.5 Fake Evaluation, Embedding
 
 - **Evaluation** (`GenerateJSON`, juga lewat `Evaluation()`): mengembalikan fixture `FAKE_EVAL_FIXTURE_DIR/<SchemaName>.json` (default: fixture ter-embed di `internal/provider/fake/fixtures/<SchemaName>.json`). Angka skor di fixture boleh memakai placeholder `"{{score}}"` yang diganti `50 + fnv32(RequestID) % 41` (50–90) agar deterministik per sesi. Bab 10/11 MUST menambahkan fixture untuk setiap `SchemaName` baru; contract test memvalidasi fixture terhadap skemanya. Latency default 500 ms. SchemaName tanpa fixture → `INVALID_REQUEST`.
 - **Embedding**: vektor 1536 dim deterministik via feature hashing trigram karakter: untuk tiap trigram rune `g` di teks (dipad `^`/`$`), `v[fnv32(g) % 1536] += sign(fnv32("s"+g))`; lalu normalisasi L2 (teks kosong → vektor satuan `e_0`). Teks mirip → cosine tinggi, sehingga retrieval Bab 11 bisa diuji. Usage = rune. Latency default 20 ms.
-- **Pronunciation**: `Status=OK` bila durasi 0,5–30 s (selain itu `TOO_SHORT`/`TOO_LONG`); skor = `60 + fnv32(ReferenceText + len(audio)) % 36` untuk accuracy; fluency/completeness/pron = accuracy ± 5 (deterministik); `ProsodyScore=nil`; `Words` = potongan referensi per 2 rune dengan `ErrorType=NONE`, kecuali kata ke-3 `MISPRONUNCIATION` bila accuracy < 75. Latency default 300 ms.
 
 #### 8.9.6 Fault injection runtime via Redis (D-NEW-13-8)
 
@@ -8515,14 +8401,14 @@ Rekomendasi (hasil dilaporkan; pemilik produk memutuskan):
 3. **Router test** dengan fake + `clock` palsu: breaker semua transisi (fail-fast `circuit_open`, probe pemulihan), LLM gagal → ERROR tanpa pindah vendor, deadline LLM total/sesi sesudah `MarkAudioSent` → `DONE{TRUNCATED}` (sebelum → ERROR), `CONTENT_FILTERED`, TTS epoch switch ke `voice.fallback` (hanya sebelum audio terkirim), STT rotasi koneksi vendor sama + offset + replay dari rotation buffer, `final_timeout` ×3, semaphore penuh, retry async & backoff, `Retry-After`; validasi config: tepat satu STT/LLM `true`, minimal satu TTS `true`, API key wajib per flag enabled.
 4. **Live smoke test** (opsional, build tag `live`, butuh API key): satu panggilan per adapter; dijalankan manual/nightly, tidak di CI PR.
 
-Urutan task implementasi yang disarankan: (1) tipe & error port, (2) fake + conformance suite, (3) router + breaker + semaphore + metrik + validasi flag, (4) OpenAI LLM/evaluation/embedding, (4b) OpenAI STT (8.4.2), (5) ElevenLabs STT & TTS, (6) Cartesia STT (8.4.6) & TTS (8.4.14), (7) DeepSeek LLM/evaluation (8.4.4, 8.4.9), (8) Azure pronunciation, (9) pricing + `provider-report`, (10) `provider-bench` + benchmark.
+Urutan task implementasi yang disarankan: (1) tipe & error port, (2) fake + conformance suite, (3) router + breaker + semaphore + metrik + validasi flag, (4) OpenAI LLM/evaluation/embedding, (4b) OpenAI STT (8.4.2), (5) ElevenLabs STT & TTS, (6) Cartesia STT (8.4.6) & TTS (8.4.14), (7) DeepSeek LLM/evaluation (8.4.4, 8.4.9), (8) (dihapus dari v1), (9) pricing + `provider-report`, (10) `provider-bench` + benchmark.
 
 ---
 
 ### Keputusan bab ini
 
 - D-NEW-8-1: Adapter memakai `net/http` + `coder/websocket` langsung, tanpa SDK vendor (selaras D-003).
-- D-NEW-8-2: Identifier provider dan kapabilitas UPPER_SNAKE_CASE di semua tempat — Go const value, kolom DB (`session_turns.*_provider`, `characters.provider_name`), JSON, file harga, label metrik, kunci fault injection: `ELEVENLABS`, `CARTESIA`, `OPENAI`, `DEEPSEEK`, `AZURE`, `FAKE_PRIMARY`, `FAKE_FALLBACK` (hanya slot TTS fallback); kapabilitas `STT`, `LLM`, `TTS`, `EVALUATION`, `EMBEDDING`, `PRONUNCIATION`. Pemilihan vendor di env memakai flag boolean `<VENDOR>_<CAP>_ENABLED` (D-017), bukan nilai Name. Kolom `session_turns.*_provider` tanpa CHECK daftar nilai (vendor baru tidak butuh migration).
+- D-NEW-8-2: Identifier provider dan kapabilitas UPPER_SNAKE_CASE di semua tempat — Go const value, kolom DB (`session_turns.*_provider`, `characters.provider_name`), JSON, file harga, label metrik, kunci fault injection: `ELEVENLABS`, `CARTESIA`, `OPENAI`, `DEEPSEEK`, `FAKE_PRIMARY`, `FAKE_FALLBACK` (hanya slot TTS fallback); kapabilitas `STT`, `LLM`, `TTS`, `EVALUATION`, `EMBEDDING`. Pemilihan vendor di env memakai flag boolean `<VENDOR>_<CAP>_ENABLED` (D-017), bukan nilai Name. Kolom `session_turns.*_provider` tanpa CHECK daftar nilai (vendor baru tidak butuh migration).
 - D-NEW-8-3: Port tambahan `ErrorKind` `INVALID_RESPONSE` dan `CANCELLED` di samping enam kategori wajib; tabel retryable/fallback-eligible/breaker di 8.3 (`AUTH` & `INVALID_REQUEST` boleh fallback TTS per karakter; `CONTENT_FILTERED` tidak).
 - D-NEW-8-4: OpenAI LLM & evaluation memakai Chat Completions API (bukan Responses API); DeepSeek memakai Chat Completions kompatibel (`json_object`, bukan `json_schema`).
 - D-NEW-8-5: ElevenLabs TTS memakai HTTP streaming per kalimat (`/stream?output_format=pcm_24000`) karena `voice_settings` WebSocket tidak bisa diubah setelah pesan pertama (tempo adaptive berubah antar generation).
@@ -8531,9 +8417,9 @@ Urutan task implementasi yang disarankan: (1) tipe & error port, (2) fake + conf
 - D-NEW-8-8 (D-017): Tidak ada fallback vendor otomatis STT/LLM/Evaluation: satu vendor aktif per kapabilitas dari flag env (tepat satu STT `true`, tepat satu LLM `true`, validasi startup); "backup" = vendor lain dipilih manual (ubah env + restart). Dihapus: `ResilientSTTSession`, STT replay buffer lintas vendor, `StartWith`/sticky STT (`rt.stt_vendor`), `PROVIDER_SWITCHED`, LLM `RESET`, evaluasi "fallback provider", `CompleteText` fallback. Dipertahankan: breaker, timeout/retry, rotasi koneksi vendor sama (dengan rotation buffer 15 s), retry async/backoff, repair JSON.
 - D-NEW-8-9: TTS vendor dipin per generasi; switch ke `voice.fallback` karakter menaikkan `TTSEpoch` dan runtime menyintesis ulang semua kalimat generasi.
 - D-NEW-8-10: (dihapus oleh D-017; tidak ada `RESET` — LLM gagal = generation FAILED → APOLOGY.)
-- D-NEW-8-11: Angka konkurensi per pod per (vendor, kapabilitas) (STT 125 (S-14), LLM 60, TTS 80, evaluation 8, embedding 16, pronunciation 8, LLM summary worker 8) dan tunggu semaphore realtime 100 ms; hanya kombinasi enabled yang punya semaphore.
-- D-NEW-8-12: Timeout tambahan: TTS total per kalimat 10 s, pronunciation 15 s, `PROVIDER_SESSION_GRACE` 15 s (> grace runtime 10 s, S-7).
-- D-NEW-8-13: Retry async ke vendor yang sama: `GenerateJSON` 3 attempt transport per panggilan (backoff 1 s/4 s; panggilan logis maks 2, D-017), `CompleteText` worker 3 attempt, embedding 3 attempt, pronunciation 2 attempt; `Evaluation()` 1 attempt per panggilan (urutan milik Bab 10: utama + repair = maks 2 panggilan); realtime tanpa retry.
+- D-NEW-8-11: Angka konkurensi per pod per (vendor, kapabilitas) (STT 125 (S-14), LLM 60, TTS 80, evaluation 8, embedding 16, LLM summary worker 8) dan tunggu semaphore realtime 100 ms; hanya kombinasi enabled yang punya semaphore.
+- D-NEW-8-12: Timeout tambahan: TTS total per kalimat 10 s, `PROVIDER_SESSION_GRACE` 15 s (> grace runtime 10 s, S-7).
+- D-NEW-8-13: Retry async ke vendor yang sama: `GenerateJSON` 3 attempt transport per panggilan (backoff 1 s/4 s; panggilan logis maks 2, D-017), `CompleteText` worker 3 attempt, embedding 3 attempt; `Evaluation()` 1 attempt per panggilan (urutan milik Bab 10: utama + repair = maks 2 panggilan); realtime tanpa retry.
 - D-NEW-8-14: `stt_audio_ms` per turn = delta audio terkirim sejak penutupan turn sebelumnya; sisa setelah turn terakhir dibebankan ke turn terakhir. Definisi kanonik (S-11); durasi ucapan = `user_ended_at − user_started_at`.
 - D-NEW-8-15: Tabel harga di `internal/provider/pricing/prices.yaml` (embed, override `PROVIDER_PRICES_FILE`), semua harga 0 sampai benchmark; estimasi token 1,0 token/rune bila usage tidak tersedia.
 - D-NEW-8-16: Endpoint debug internal `GET /internal/providers`; health provider tidak memengaruhi readiness pod.
@@ -8544,7 +8430,7 @@ Urutan task implementasi yang disarankan: (1) tipe & error port, (2) fake + conf
 - D-NEW-8-21 (D-014, D-015): Vendor/model/voice TTS bersumber dari `sessions.config_snapshot.character` (`provider_name`, `model_name`, `voice_id`, `voice.fallback?`; tempo `voice.speaking_rate`), dibentuk menjadi `VoiceSelection{Primary, Fallback*}`; router mengisi `TTSRequest.VoiceID`/`Model` setelah memilih voice; adapter hanya membaca `VoiceID`, `Model`, `SpeakingRate`, teks. `TTSRequest.SpeakingRate` (0,80–1,05) = `clamp(voice.speaking_rate × adaptiveRate)` (Bab 6). Tanpa ekspresi/`ResolveTTSParams`/`ExpressionCatalog`/`voice_settings` per vendor (D-014); mode fake mengabaikan voice. Tidak ada `PROVIDER_TTS_*` model env.
 - D-NEW-8-22: Nilai placeholder model awal: STT `gpt-live-transcribe` / `scribe_v2_realtime` / `ink-2`; LLM `gpt-4.1` / `deepseek-flash`; evaluation `gpt-4.1` / `deepseek-v4-pro` — wajib dikonfirmasi benchmark. TTS tidak punya default env: `model_name`/`voice_id` per karakter dari data konten (placeholder `PLACEHOLDER_*` sampai benchmark).
 - D-NEW-8-23 (D-015, D-017): TTS dipilih per karakter dari `{ELEVENLABS, CARTESIA}` (keduanya enabled bersamaan, `*_TTS_ENABLED`); `voice.fallback` opsional (vendor lain yang enabled); tanpa `voice.fallback` → kegagalan TTS = generation FAILED/APOLOGY. Kualitas Jepang vendor TTS dan dukungan Jepang mode streaming STT (OpenAI transcription, Scribe realtime, Cartesia Ink) dikonfirmasi benchmark 8.10.
-- D-NEW-8-24: Pronunciation > 30 s → `TOO_LONG` (tidak dinilai, tidak dipotong); `AZURE_PRONUNCIATION_ENABLED=false` mematikan kapabilitas (`ErrPronunciationDisabled`).
+- D-NEW-8-24: Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 - D-NEW-8-25: `AsyncRouter` menyediakan `Evaluation()` (provider EVALUATION aktif terbungkus router, 1 attempt per panggilan) untuk alur repair Bab 10, dan `CompleteText` (LLM teks non-streaming, kapabilitas LLM, model `<VENDOR>_LLM_MODEL` aktif atau override `TextRequest.Model`) untuk summary Bab 9; `RealtimeRouter.CompleteText` untuk rolling summary Bab 7. `StructuredRequest` mendapat `Seed`; `Temperature` negatif = default 0,2.
 - D-NEW-8-26: `GenerationSummary.TTSVoiceID` mengisi `session_turns.tts_voice_id`.
 - D-NEW-8-27 (S-7): `FinishReason` `TRUNCATED` (hanya router): deadline LLM total 15 s atau deadline sesi setelah `MarkAudioSent` → `DONE{TRUNCATED}`, bukan `ERROR`; deadline sesi tidak dihitung breaker [builder call].
@@ -8552,7 +8438,7 @@ Urutan task implementasi yang disarankan: (1) tipe & error port, (2) fake + conf
 - D-NEW-8-29 (S-12): `MarkAudioSent` dipanggil saat frame audio pertama masuk antrean writer (bukan saat ditulis ke socket) [builder call].
 - D-NEW-8-30: (dihapus oleh D-017; `STTSessionConfig.StartWith` tidak ada.)
 - D-NEW-8-31: DeepSeek: request tanpa pesan non-system (OPENING) diberi, bila perlu, satu giliran `user` konstanta `「会話を始めてください。」` [builder call].
-- D-NEW-8-32 (layout D-005/§2.2): Port semua kapabilitas + router dalam satu paket `internal/provider` (tanpa `net/http`/`coder/websocket`, tanpa impor paket fitur lain maupun sub-paketnya); adapter satu paket per vendor `internal/provider/<vendor>` (`elevenlabs`, `cartesia`, `openai`, `deepseek`, `azure`) berisi semua kapabilitas vendor itu; `fake`, `pricing`, `httpx`, `providertest` adalah sub-paket yang mengimpor `provider`. Data luar masuk lewat port sisi pemakai `PriceTable` (dipenuhi `pricing`), di-wire `cmd/*` via `RouterDeps` (8.1, 8.5.2).
+- D-NEW-8-32 (layout D-005/§2.2): Port semua kapabilitas + router dalam satu paket `internal/provider` (tanpa `net/http`/`coder/websocket`, tanpa impor paket fitur lain maupun sub-paketnya); adapter satu paket per vendor `internal/provider/<vendor>` (`elevenlabs`, `cartesia`, `openai`, `deepseek`) berisi semua kapabilitas vendor itu; `fake`, `pricing`, `httpx`, `providertest` adalah sub-paket yang mengimpor `provider`. Data luar masuk lewat port sisi pemakai `PriceTable` (dipenuhi `pricing`), di-wire `cmd/*` via `RouterDeps` (8.1, 8.5.2).
 - D-NEW-8-33 (D-015): Cartesia TTS (`internal/provider/cartesia`, Sonic): WebSocket persisten, satu context per kalimat, `pcm_s16le` 24 kHz, tempo via `generation_config.speed`, auth/versi API/ID model/limit konkurensi/satuan biaya ditandai verifikasi di task adapter (8.4.14). Circuit breaker, semaphore, dan metrik tetap per (vendor, kapabilitas), bukan per karakter [builder call].
 - D-NEW-8-34 (D-017): Adapter baru: OpenAI STT (Realtime transcription, resample 16→24 kHz; endpoint/handshake & model diverifikasi di task adapter), DeepSeek LLM/Evaluation (`https://api.deepseek.com`, thinking dimatikan, `json_object` + validasi skema ketat di kode + repair), Cartesia STT (Ink, `wss://api.cartesia.ai/stt/websocket`, `finalize`/`flush_done`). Dihapus: Deepgram (STT/TTS), Gemini (LLM/evaluation), OpenAI TTS. Rotation buffer 15 s dipertahankan hanya untuk rotasi koneksi vendor yang sama (8.5.8) [builder call].(mis. `kotoki_provider_fallback_total{capability="TTS",from="ELEVENLABS",to="CARTESIA",reason="TIMEOUT"}`
 ## 9. Async Messaging: Outbox, RabbitMQ, Workers
@@ -8595,7 +8481,7 @@ Paket fitur MUST NOT mengimpor `amqp`, `postgres`, `amqp091`, atau `pgx` (D-005)
 
 Aturan umum:
 - Event **MUST** dimasukkan ke `event_outbox` di transaksi yang sama dengan perubahan domain yang menyebabkannya. Kode bisnis MUST NOT publish langsung ke RabbitMQ.
-- Message hanya membawa ID + metadata kecil (≤ 64 KiB). Transcript, audio, dan data besar dibaca consumer dari PostgreSQL/object storage.
+- Message hanya membawa ID + metadata kecil (≤ 64 KiB). Transcript, audio, dan data besar dibaca consumer dari PostgreSQL.
 - Semua consumer MUST idempotent dan toleran terhadap duplikasi serta urutan acak (§9.10).
 
 ### 9.2 DDL — migration `000017_messaging`
@@ -8881,7 +8767,7 @@ Sesi `CANCELLED`, `ABANDONED`, dan `STARTING → FAILED` **tidak** menerbitkan e
                "topic_id", "scenario_id", "scenario_version_id", "character_id",
                "prompt_version_id",
                "duration_seconds", "started_at", "ended_at", "active_seconds",
-               "charged_seconds", "turn_count", "user_turn_count", "has_user_audio"],
+               "charged_seconds", "turn_count", "user_turn_count"],
   "properties": {
     "session_id":              {"type": "string", "format": "uuid"},
     "final_status":            {"enum": ["COMPLETED", "FAILED"]},
@@ -8902,9 +8788,7 @@ Sesi `CANCELLED`, `ABANDONED`, dan `STARTING → FAILED` **tidak** menerbitkan e
     "turn_count":              {"type": "integer", "minimum": 0,
                                 "description": "jumlah session_turns dengan status != DISCARDED"},
     "user_turn_count":         {"type": "integer", "minimum": 0,
-                                "description": "turn non-DISCARDED dengan user_text non-kosong"},
-    "has_user_audio":          {"type": "boolean",
-                                "description": "ada minimal satu session_turns.user_audio_object_key"}
+                                "description": "turn non-DISCARDED dengan user_text non-kosong"}
   }
 }
 ```
@@ -8920,7 +8804,7 @@ Producer `WORKER`, `aggregate_type = EVALUATION`, `aggregate_id = evaluation_id`
   "additionalProperties": true,
   "required": ["evaluation_id", "session_id", "rubric_version", "insufficient_evidence",
                "scores", "dimension_confidence", "signals", "overall_score",
-               "pronunciation_status", "session_ended_at", "scenario_difficulty_level",
+               "session_ended_at", "scenario_difficulty_level",
                "user_turn_count", "user_speech_seconds", "finding_counts", "completed_at"],
   "properties": {
     "evaluation_id":         {"type": "string", "format": "uuid"},
@@ -8929,14 +8813,13 @@ Producer `WORKER`, `aggregate_type = EVALUATION`, `aggregate_id = evaluation_id`
     "insufficient_evidence": {"type": "boolean"},
     "scores": {
       "type": "object", "additionalProperties": false,
-      "required": ["GRAMMAR", "VOCABULARY", "FLUENCY", "NATURALNESS", "TASK_ACHIEVEMENT", "PRONUNCIATION"],
+      "required": ["GRAMMAR", "VOCABULARY", "FLUENCY", "NATURALNESS", "TASK_ACHIEVEMENT"],
       "properties": {
         "GRAMMAR":          {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
         "VOCABULARY":       {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
         "FLUENCY":          {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
         "NATURALNESS":      {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
-        "TASK_ACHIEVEMENT": {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
-        "PRONUNCIATION":    {"type": ["integer", "null"], "minimum": 0, "maximum": 100}
+        "TASK_ACHIEVEMENT": {"type": ["integer", "null"], "minimum": 0, "maximum": 100}
       }
     },
     "dimension_confidence": {
@@ -8953,7 +8836,6 @@ Producer `WORKER`, `aggregate_type = EVALUATION`, `aggregate_id = evaluation_id`
       }
     },
     "overall_score":             {"type": ["number", "null"], "minimum": 0, "maximum": 100},
-    "pronunciation_status":      {"enum": ["ASSESSED", "UNAVAILABLE", "SKIPPED"]},
     "session_ended_at":          {"type": "string", "format": "date-time"},
     "scenario_difficulty_level": {"type": "integer", "minimum": 1, "maximum": 5},
     "user_turn_count":           {"type": "integer", "minimum": 0},
@@ -9431,7 +9313,7 @@ Alert awal (detail di Bab 13): `kotoki_outbox_oldest_pending_age_seconds > 60` s
 |---|---|---|
 | `outbox` | Outbox publisher (§9.3) | `internal/amqp/outbox_publisher.go` |
 | `sweeper` | Job `session_sweeper` (§9.9.2) + `reservation_cleanup` (§9.9.3) | `internal/jobs` |
-| `cleanup` | Job `transcript_retention` (§9.9.4), `audio_tmp_cleanup` (§9.9.4), `outbox_retention` (§9.9.5), `balance_reconcile` (§9.9.7), `account_purge` (§9.9.8), `memory_cleanup` (§9.9.9), `partition_maintenance` (§9.9.10) | `internal/jobs` |
+| `cleanup` | Job `transcript_retention` (§9.9.4), `outbox_retention` (§9.9.5), `balance_reconcile` (§9.9.7), `account_purge` (§9.9.8), `memory_cleanup` (§9.9.9), `partition_maintenance` (§9.9.10) | `internal/jobs` |
 | `evaluation` | Consumer `evaluation.session_completed` (Bab 10) | `internal/evaluation/consumer.go` |
 | `memory` | Consumer `memory.session_completed` (Bab 11) | `internal/memory/consumer.go` |
 | `learner` | Consumer `learner.evaluation_completed` (Bab 12) | `internal/learner/consumer.go` |
@@ -9478,14 +9360,13 @@ func RunExclusive(ctx context.Context, pool *pgxpool.Pool, key int64, fn func(co
 | `session_sweeper` | `sweeper` | 10 s | `7100001` | 30 s | §9.9.2 (semantik Bab 5 §5.6.4) |
 | `reservation_cleanup` | `sweeper` | **30 s** | `7100002` | 25 s | §9.9.3 (transaksi Bab 4 §4.6.2) |
 | `transcript_retention` | `cleanup` | 1 h | `7100003` | 15 m | §9.9.4 |
-| `audio_tmp_cleanup` | `cleanup` | 1 h | `7100004` | 15 m | §9.9.4 |
 | `outbox_retention` | `cleanup` | 1 h | `7100005` | 15 m | §9.3.4 / §9.9.5 (`event_outbox` + `processed_events`) |
 | `balance_reconcile` | `cleanup` | **1 h** | `7100006` | 10 m | §9.9.7 (query Bab 4 §4.8) |
 | `account_purge` | `cleanup` | 15 m | `7100007` | 10 m | §9.9.8 (urutan Bab 13 §13.9.3) |
 | `memory_cleanup` | `cleanup` | 1 h | `7100008` | 15 m | §9.9.9 (query Bab 11 §11.8.3) |
 | `partition_maintenance` | `cleanup` | **24 h** | `7100009` | 10 m | §9.9.10 (partisi `session_turns`/`session_events`, S-6) [builder call] |
 
-Interval dan lock key adalah konstanta kode di `internal/jobs/scheduler.go`; setiap job satu file di `internal/jobs` (`session_sweeper.go`, `reservation_cleanup.go`, `transcript_retention.go`, `audio_tmp_cleanup.go`, `outbox_retention.go`, `balance_reconcile.go`, `account_purge.go`, `memory_cleanup.go`, `partition_maintenance.go`) dan memanggil `Service` fitur bila aturan bisnisnya milik fitur (mis. `session.Service`). Env override interval (nama di Bab 13 §13.2.11) hanya untuk dev/test dan default-nya MUST sama dengan tabel ini; lock key tidak pernah dikonfigurasi. Run timeout = `context.WithTimeout` untuk satu run; run yang terpotong timeout dilanjutkan run berikutnya (semua job idempotent dan bekerja per batch).
+Interval dan lock key adalah konstanta kode di `internal/jobs/scheduler.go`; setiap job satu file di `internal/jobs` (`session_sweeper.go`, `reservation_cleanup.go`, `transcript_retention.go`, `outbox_retention.go`, `balance_reconcile.go`, `account_purge.go`, `memory_cleanup.go`, `partition_maintenance.go`) dan memanggil `Service` fitur bila aturan bisnisnya milik fitur (mis. `session.Service`). Env override interval (nama di Bab 13 §13.2.11) hanya untuk dev/test dan default-nya MUST sama dengan tabel ini; lock key tidak pernah dikonfigurasi. Run timeout = `context.WithTimeout` untuk satu run; run yang terpotong timeout dilanjutkan run berikutnya (semua job idempotent dan bekerja per batch).
 
 Aturan scheduler:
 - Satu goroutine per job dengan `time.Ticker`; jitter awal acak 0–interval; run berikutnya tidak dimulai jika run sebelumnya belum selesai di instance yang sama.
@@ -9544,7 +9425,7 @@ LIMIT 200;
 
 Per kandidat: `session.Service.Abandon(ctx, sessionID, actor CLEANUP)` (Bab 5 §5.2) yang menjalankan transaksi abandon Bab 4 §4.6.2 (lock account → reservation, re-check `HELD` + `RESERVED` + deadline lewat, `RESERVED→ABANDONED` dengan `end_reason='NOT_STARTED'`, reservation `RELEASED`, ledger `RELEASE` dengan `idempotency_key = 'release:{reservation_id}'`). Re-check gagal (mis. user baru saja start) → no-op. Reservation milik sesi `STARTING`/`ACTIVE`/`ENDING` tidak pernah disentuh. Tidak ada event outbox.
 
-#### 9.9.4 Retensi transcript & audio (D-099)
+#### 9.9.4 Retensi transcript (D-099)
 
 **`transcript_retention`** (jadwal & lock: tabel §9.9.1). Kebijakan retensi (R-21): turn transcript, `sessions.summary_text`, dan teks feedback evaluasi dihapus **180 hari setelah `sessions.ended_at`**; `session_events` dihapus setelah **365 hari**. Parameter: `$1 = now() − RETENTION_TRANSCRIPT_DAYS` (default **180** hari), `$2 = now() − RETENTION_SESSION_EVENTS_DAYS` (default **365** hari). Setiap langkah dieksekusi berulang per batch sampai baris terdampak < ukuran batch; tiap batch satu transaksi.
 
@@ -9596,13 +9477,6 @@ DELETE FROM password_reset_tokens WHERE created_at < now() - interval '24 hours'
 `sessions.transcript_purged_at` (Bab 5 §5.3) menandai sesi yang transcript-nya sudah dihapus; API transcript (`GET /sessions/{id}/turns`) mengembalikan `410` untuk sesi ini (Bab 5 §5.9).
 
 Skor evaluasi (`evaluations.*_score`, `*_signal`, `overall_score`), memory (retensi per kategori Bab 11 §11.8), profil learner, dan metadata sesi dipertahankan selama akun ada (R-21). Prasyarat lintas bab (S-6): **tidak ada FK** yang menunjuk ke `session_turns` atau `session_events` (tabel partitioned); `evaluation_findings.session_turn_id` (Bab 10 §10.2) dan `session_events.turn_id` adalah kolom UUID biasa, integritas dijaga aplikasi, sehingga DELETE baris dan DROP partisi tidak pernah terhalang FK. Konsumen ID turn MUST toleran turn yang sudah tidak ada (mis. API evaluasi, Bab 10 §10.11). Index yang dibutuhkan dari Bab 5: index `created_at` **lokal per partisi** pada `session_turns` dan `session_events`, `sessions(ended_at) WHERE ended_at IS NOT NULL AND transcript_purged_at IS NULL`. Penghapusan `memories` kedaluwarsa = job `memory_cleanup` (§9.9.9).
-
-**`audio_tmp_cleanup`** (jadwal & lock: tabel §9.9.1). Batas keras audio sementara = **24 jam** (D-099, R-27). Penghapusan normal dilakukan evaluation worker setelah evaluasi `COMPLETED` (Bab 10 §10.5 langkah 10–11). **Job ini yang menjamin batas 24 jam**; lifecycle rule object storage `audio/tmp/` expire 1 hari (Bab 13) hanya jaring pengaman (eksekusi lifecycle vendor bisa terlambat hingga ±24 jam). Audio milik evaluasi `FAILED` dibiarkan sampai batas ini agar replay DLQ masih bisa menilai pronunciation.
-1. `ListObjectsV2` prefix `audio/tmp/` (paginasi 1000); pilih objek `LastModified < now − (RETENTION_AUDIO_TMP − 1h)` (default `RETENTION_AUDIO_TMP = 24h` → ambang 23 jam; dikurangi satu interval job agar tidak ada objek yang hidup > 24 jam).
-2. `DeleteObjects` per 1000 key.
-3. `UPDATE session_turns SET user_audio_object_key = NULL WHERE user_audio_object_key = ANY($1) AND created_at > now() - interval '3 days'` (predikat `created_at` memangkas partisi, S-6; audio tidak pernah lebih tua dari 24 jam + keterlambatan job).
-
-Idempotent: menghapus objek yang sudah tidak ada bukan error.
 
 #### 9.9.5 `outbox_retention`
 
@@ -9737,7 +9611,6 @@ Idempotent (`IF NOT EXISTS`, drop berbasis batas waktu). Job ini hanya melakukan
 | `SWEEPER_EXPIRY_GRACE` / `SWEEPER_HEARTBEAT_TIMEOUT` | `15s` / `45s` (R-9) |
 | `RETENTION_TRANSCRIPT_DAYS` | `180` (R-21) |
 | `RETENTION_SESSION_EVENTS_DAYS` | `365` (R-21) |
-| `RETENTION_AUDIO_TMP` | `24h` (R-27) |
 | `ACCOUNT_PURGE_DELAY` | `1h` (Bab 13 §13.9.3) |
 | `SUMMARY_MAX_CHARS` | `300` |
 
@@ -9752,13 +9625,13 @@ Nama env mengikuti katalog Bab 13 §13.2. Interval job lain tidak dikonfigurasi 
 - D-NEW-9-5: `x-delivery-limit=10` pada queue utama sebagai pengaman poison message.
 - D-NEW-9-6: Prefetch: evaluation 4, memory 4, summary 8, learner 16; timeout handler 200/120/60/30 s.
 - D-NEW-9-7: Retensi outbox `PUBLISHED` 7 hari; `processed_events` dan outbox `FAILED` 30 hari (R-21).
-- D-NEW-9-8: Tabel job §9.9.1 adalah satu-satunya sumber nama job, flag, interval, lock key (7100001–7100009), dan timeout (R-8). Flag `sweeper`: `session_sweeper`, `reservation_cleanup`; flag `cleanup`: `transcript_retention`, `audio_tmp_cleanup`, `outbox_retention`, `balance_reconcile`, `account_purge`, `memory_cleanup`, `partition_maintenance`.
+- D-NEW-9-8: Tabel job §9.9.1 adalah satu-satunya sumber nama job, flag, interval, lock key (7100001–7100009; 7100004 dihapus dari v1, tidak dipakai ulang), dan timeout (R-8). Flag `sweeper`: `session_sweeper`, `reservation_cleanup`; flag `cleanup`: `transcript_retention`, `outbox_retention`, `balance_reconcile`, `account_purge`, `memory_cleanup`, `partition_maintenance`.
 - D-NEW-9-9: Sweeper menerapkan aturan R-9: (a) expiry + 15 s → `COMPLETED`/`DURATION_ELAPSED`, `billable_end = LEAST(COALESCE(ending_at, ended_at), expires_at)`; (b) heartbeat `kotoki:session:{id}:hb` hilang > 45 s → `FAILED`/`SERVER_ERROR`, `billable_end = LEAST(last_heartbeat_at, expires_at)` (heartbeat terakhir atau now − 45 s) — keduanya S-3, `BillableEnd` Bab 4 §4.5; (c) `ENDING` > 60 s → finalize; (d) `STARTING` > 30 s → `FAILED`, charge 0. Pengaman (b): nonaktif selama Redis tak terjangkau + 45 s setelah pulih; skip tick jika kandidat ≥ 20 dan ≥ 50 % sesi ACTIVE.
 - D-NEW-9-15 [builder call]: Aturan sweeper (e) (S-10): `ACTIVE` & `handoff_at < now − 30 s` → `BeginEnding(RECONNECT_TIMEOUT)` + `Finalize`, `billable_end = handoff_at` (`BillableEnd` Bab 4 §4.5), re-check `handoff_at` di `WHERE` transisi (attach yang menang → noop). Aturan (b) dan pengaman massal (pembilang & penyebut) mengecualikan sesi `handoff_at IS NOT NULL`. Urutan per tick (e) → (a) → (b) → (c) → (d).
 - D-NEW-9-16 [builder call]: Job `partition_maintenance` (S-6; `cleanup`, 24 h, lock `7100009`, timeout 10 m): membuat partisi bulanan UTC `{tabel}_pYYYYMM` sampai bulan berjalan + 3, men-drop (`DETACH … CONCURRENTLY` + `DROP`) partisi yang batas atasnya < now − 180 hari − 2 jam (`session_turns`) atau < now − 365 hari (`session_events`); tanpa partisi `DEFAULT`, gauge `kotoki_partition_months_ahead` (alert < 2). `transcript_retention` tetap menghapus baris di partisi batas (DELETE batch berpredikat `created_at`) agar retensi tepat. Tidak ada FK ke `session_turns`/`session_events`.
 - D-NEW-9-17 [builder call]: Summary worker memakai prompt DB key `SUMMARY` (`system_template` + `user_template`, struct `SummaryPromptData` §9.9.6); `max_output_tokens`/`temperature` dari `llm_params` version (nilai DB menang; default kode 400/0.3 hanya bila key tidak ada). Seed v1 di `seed/0070_prompts.sql`.
 - D-NEW-9-10: Semua consumer bisnis melewati event milik user `DELETED` (MarkProcessed + ACK, Bab 13 §13.9.3).
-- D-NEW-9-11: Retensi (R-21): `session_turns`, `sessions.summary_text`, `evaluation_findings` + teks feedback evaluasi (`details_purged_at`) 180 hari setelah `ended_at`; `session_events` 365 hari; skor evaluasi dipertahankan. Audio sementara: job `audio_tmp_cleanup` per jam (ambang 23 jam) menjamin batas 24 jam; lifecycle 1 hari = jaring pengaman (R-27).
+- D-NEW-9-11: Retensi (R-21): `session_turns`, `sessions.summary_text`, `evaluation_findings` + teks feedback evaluasi (`details_purged_at`) 180 hari setelah `ended_at`; `session_events` 365 hari; skor evaluasi dipertahankan. User audio tidak pernah disimpan (D-099).
 - D-NEW-9-12: `sessions.summary_text` berbahasa Jepang, ≤ 300 karakter, dibuat via prompt key `SUMMARY` dan `AsyncRouter.CompleteText` (Task `SUMMARY`, Bab 8 §8.2.8); tidak dibuat jika `user_turn_count = 0`.
 - D-NEW-9-13: Subcommand `worker dlq-replay` untuk replay DLQ.
 - D-NEW-9-14: Deployment `worker-core` 2 replica (outbox via SKIP LOCKED, job via advisory lock).
@@ -9772,7 +9645,7 @@ Evaluasi berjalan setelah sesi berakhir, sepenuhnya asynchronous, dipicu `sessio
 
 ### 10.1 Dimensi, skala, dan enum
 
-**Dimensi (D-096):** `GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `TASK_ACHIEVEMENT`, `PRONUNCIATION`.
+**Dimensi (D-096):** `GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `TASK_ACHIEVEMENT` (5 dimensi).
 
 | Dimensi | Sumber | Yang dinilai |
 |---|---|---|
@@ -9781,13 +9654,12 @@ Evaluasi berjalan setelah sesi berakhir, sepenuhnya asynchronous, dipicu `sessio
 | `FLUENCY` | LLM (transcript + statistik waktu) | panjang & kesinambungan ujaran, filler berlebihan, fragmen, kecepatan bicara |
 | `NATURALNESS` | LLM | register/keigo sesuai skenario, ungkapan alami, konvensi percakapan (aizuchi dll.) |
 | `TASK_ACHIEVEMENT` | LLM | pencapaian objektif skenario, relevansi jawaban terhadap pertanyaan AI, elaborasi |
-| `PRONUNCIATION` | `AsyncRouter.AssessPronunciation` (audio, Bab 8) | akurasi pelafalan, prosodi; **tidak pernah** dari LLM teks atau confidence STT |
 
 **Sinyal tambahan (tidak ditampilkan ke user, tidak masuk overall)** untuk skill learner D-097: `LISTENING_RESPONSE` (ketepatan respons terhadap ujaran AI) dan `INTERACTION_COMPLEXITY` (kompleksitas interaksi yang dipertahankan learner: bertanya balik, elaborasi, pengembangan topik). Skala 0–100 + confidence, dari LLM; disimpan di kolom kanonik `listening_response_signal` / `interaction_complexity_signal` (R-13, §10.2). [builder call]
 
 **Skala:** integer 0–100, **absolut** (bukan relatif terhadap level skenario atau riwayat user). Band rubric berlabel JLPT (§10.6.2) hanya anchor kalibrasi untuk evaluator LLM. Konversi skor evaluasi → proficiency 0.0–5.0 (D-097) **hanya** memakai algoritma Bab 12 §12.5 (relatif terhadap difficulty efektif sesi); bab ini tidak mendefinisikan konversi lain (R-14).
 
-**Overall (D-096):** `overall_score = round(mean(skor dimensi yang non-null), 2)` (NUMERIC(5,2)). Jika semua null → null. Contoh: G=72, V=65, F=58, N=70, T=80, P=null → (72+65+58+70+80)/5 = **69.00**.
+**Overall (D-096):** `overall_score = round(mean(5 skor dimensi), 2)` (NUMERIC(5,2)). Null hanya bila evaluasi tanpa skor (`insufficient_evidence`, semua skor null). Contoh: G=72, V=65, F=58, N=70, T=80 → (72+65+58+70+80)/5 = **69.00**.
 
 **Severity (D-096):** `INFO` (saran opsional / strength), `MINOR` (tetap dipahami tetapi salah/kurang alami), `MAJOR` (mengganggu pemahaman, atau kesalahan sistematis yang muncul ≥ 2 kali).
 
@@ -9811,19 +9683,15 @@ Evaluasi berjalan setelah sesi berakhir, sepenuhnya asynchronous, dipicu `sessio
 | `MISUNDERSTOOD_PROMPT` | TASK_ACHIEVEMENT | LLM | wajib | wajib | opsional |
 | `OBJECTIVE_NOT_MET` | TASK_ACHIEVEMENT | LLM | null | null | null |
 | `STRENGTH` | salah satu dari 5 dimensi LLM | LLM | opsional | opsional | null; severity selalu `INFO` |
-| `MISPRONOUNCED_WORD` | PRONUNCIATION | kode (provider) | wajib | wajib (kata) | null |
-| `PROSODY_ISSUE` | PRONUNCIATION | kode (provider) | wajib | wajib (ujaran) | null |
 
 ```go
 // internal/evaluation/enums.go
 package evaluation
 
 type Status string            // PENDING | RUNNING | COMPLETED | FAILED
-type Dimension string         // GRAMMAR | VOCABULARY | FLUENCY | NATURALNESS | TASK_ACHIEVEMENT | PRONUNCIATION
+type Dimension string         // GRAMMAR | VOCABULARY | FLUENCY | NATURALNESS | TASK_ACHIEVEMENT
 type Severity string          // INFO | MINOR | MAJOR
 type FindingType string       // tabel di atas
-type PronunciationStatus string // ASSESSED | UNAVAILABLE | SKIPPED
-type PronunciationUnavailableReason string // PROVIDER_DISABLED | NO_CONSENT | NO_AUDIO | INSUFFICIENT_AUDIO | PROVIDER_ERROR
 type FailureCode string       // TRANSCRIPT_UNAVAILABLE | PROVIDER_UNAVAILABLE | INVALID_MODEL_OUTPUT | CONFIGURATION_ERROR | INTERNAL_ERROR
 
 // rubric_version = version prompt EVALUATION yang dipakai (S-1) [builder call]:
@@ -9850,18 +9718,13 @@ CREATE TABLE evaluations (
     fluency_score                   SMALLINT,
     naturalness_score               SMALLINT,
     task_achievement_score          SMALLINT,
-    pronunciation_score             SMALLINT,
     overall_score                   NUMERIC(5,2),
 
     -- Sinyal skill tambahan (R-13; dibaca Bab 12 §12.4). Tidak masuk overall, tidak ditampilkan.
     listening_response_signal       SMALLINT    NULL,                          -- 0–100
     interaction_complexity_signal   SMALLINT    NULL,                          -- 0–100
-    dimension_confidence            JSONB       NOT NULL DEFAULT '{}'::jsonb,  -- {"GRAMMAR":0.82,...,"PRONUNCIATION":0.9,"LISTENING_RESPONSE":0.7}
+    dimension_confidence            JSONB       NOT NULL DEFAULT '{}'::jsonb,  -- {"GRAMMAR":0.82,...,"LISTENING_RESPONSE":0.7}
     dimension_comments              JSONB       NOT NULL DEFAULT '{}'::jsonb,  -- {"GRAMMAR":"<id>",...}
-
-    pronunciation_status            TEXT        NOT NULL DEFAULT 'UNAVAILABLE',
-    pronunciation_unavailable_reason TEXT,
-    pronunciation_utterance_count   INTEGER     NOT NULL DEFAULT 0,            -- utterance yang sukses dinilai (status OK), R-13
 
     summary_feedback                TEXT,                                      -- bahasa Indonesia
     strengths                       JSONB       NOT NULL DEFAULT '[]'::jsonb,  -- array string (id)
@@ -9880,7 +9743,6 @@ CREATE TABLE evaluations (
     llm_call_count                  SMALLINT    NOT NULL DEFAULT 0,            -- jumlah panggilan GenerateJSON (1–2, §10.6.1)
     input_tokens                    INTEGER,
     output_tokens                   INTEGER,
-    pronunciation_provider          TEXT,                                      -- UPPERCASE, mis. 'AZURE'
 
     attempt_count                   INTEGER     NOT NULL DEFAULT 0,
     failure_code                    TEXT,
@@ -9901,17 +9763,9 @@ CREATE TABLE evaluations (
         (fluency_score          IS NULL OR fluency_score          BETWEEN 0 AND 100) AND
         (naturalness_score      IS NULL OR naturalness_score      BETWEEN 0 AND 100) AND
         (task_achievement_score IS NULL OR task_achievement_score BETWEEN 0 AND 100) AND
-        (pronunciation_score    IS NULL OR pronunciation_score    BETWEEN 0 AND 100) AND
         (overall_score          IS NULL OR overall_score          BETWEEN 0 AND 100) AND
         (listening_response_signal     IS NULL OR listening_response_signal     BETWEEN 0 AND 100) AND
         (interaction_complexity_signal IS NULL OR interaction_complexity_signal BETWEEN 0 AND 100)),
-    CONSTRAINT chk_evaluations_pron_status CHECK (pronunciation_status IN ('ASSESSED', 'UNAVAILABLE', 'SKIPPED')),
-    CONSTRAINT chk_evaluations_pron_reason CHECK (
-        pronunciation_unavailable_reason IS NULL OR pronunciation_unavailable_reason IN
-        ('PROVIDER_DISABLED', 'NO_CONSENT', 'NO_AUDIO', 'INSUFFICIENT_AUDIO', 'PROVIDER_ERROR')),
-    CONSTRAINT chk_evaluations_pron_count CHECK (
-        pronunciation_utterance_count >= 0 AND
-        (pronunciation_status = 'ASSESSED' OR pronunciation_utterance_count = 0)),
     CONSTRAINT chk_evaluations_failure_code CHECK (
         failure_code IS NULL OR failure_code IN
         ('TRANSCRIPT_UNAVAILABLE', 'PROVIDER_UNAVAILABLE', 'INVALID_MODEL_OUTPUT', 'CONFIGURATION_ERROR', 'INTERNAL_ERROR')),
@@ -9920,17 +9774,12 @@ CREATE TABLE evaluations (
         status <> 'COMPLETED' OR insufficient_evidence OR (
             grammar_score IS NOT NULL AND vocabulary_score IS NOT NULL AND fluency_score IS NOT NULL AND
             naturalness_score IS NOT NULL AND task_achievement_score IS NOT NULL AND overall_score IS NOT NULL)),
-    -- insufficient evidence: semua skor null, pronunciation SKIPPED
+    -- insufficient evidence: semua skor null
     CONSTRAINT chk_evaluations_insufficient CHECK (
         NOT insufficient_evidence OR (
             status = 'COMPLETED' AND grammar_score IS NULL AND vocabulary_score IS NULL AND
             fluency_score IS NULL AND naturalness_score IS NULL AND task_achievement_score IS NULL AND
-            pronunciation_score IS NULL AND overall_score IS NULL AND pronunciation_status = 'SKIPPED')),
-    -- skor pronunciation hanya ada jika ASSESSED
-    CONSTRAINT chk_evaluations_pron_score CHECK (
-        (pronunciation_status = 'ASSESSED') = (pronunciation_score IS NOT NULL) OR status <> 'COMPLETED'),
-    CONSTRAINT chk_evaluations_pron_reason_required CHECK (
-        status <> 'COMPLETED' OR (pronunciation_status = 'UNAVAILABLE') = (pronunciation_unavailable_reason IS NOT NULL)),
+            overall_score IS NULL)),
     CONSTRAINT chk_evaluations_completed_at CHECK ((status = 'COMPLETED') = (completed_at IS NOT NULL)),
     CONSTRAINT chk_evaluations_failed CHECK (status <> 'FAILED' OR failure_code IS NOT NULL),
     CONSTRAINT chk_evaluations_attempts CHECK (attempt_count >= 0)
@@ -9957,14 +9806,14 @@ CREATE TABLE evaluation_findings (
     explanation           TEXT        NOT NULL,                          -- bahasa Indonesia
     pattern_key           TEXT,                                          -- mis. 'particle.de_ni_location'
     confidence            NUMERIC(3,2) NOT NULL,
-    source                TEXT        NOT NULL,                          -- LLM | PRONUNCIATION_PROVIDER
+    source                TEXT        NOT NULL,                          -- LLM
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT uq_evaluation_findings_ordinal UNIQUE (evaluation_id, ordinal),
     CONSTRAINT chk_ef_dimension CHECK (dimension IN
-        ('GRAMMAR', 'VOCABULARY', 'FLUENCY', 'NATURALNESS', 'TASK_ACHIEVEMENT', 'PRONUNCIATION')),
+        ('GRAMMAR', 'VOCABULARY', 'FLUENCY', 'NATURALNESS', 'TASK_ACHIEVEMENT')),
     CONSTRAINT chk_ef_severity CHECK (severity IN ('INFO', 'MINOR', 'MAJOR')),
-    CONSTRAINT chk_ef_source CHECK (source IN ('LLM', 'PRONUNCIATION_PROVIDER')),
+    CONSTRAINT chk_ef_source CHECK (source IN ('LLM')),
     CONSTRAINT chk_ef_confidence CHECK (confidence BETWEEN 0 AND 1),
     CONSTRAINT chk_ef_type_dimension CHECK (
         CASE finding_type
@@ -9983,9 +9832,7 @@ CREATE TABLE evaluation_findings (
             WHEN 'OFF_TOPIC_RESPONSE'       THEN dimension = 'TASK_ACHIEVEMENT'
             WHEN 'MISUNDERSTOOD_PROMPT'     THEN dimension = 'TASK_ACHIEVEMENT'
             WHEN 'OBJECTIVE_NOT_MET'        THEN dimension = 'TASK_ACHIEVEMENT'
-            WHEN 'MISPRONOUNCED_WORD'       THEN dimension = 'PRONUNCIATION'
-            WHEN 'PROSODY_ISSUE'            THEN dimension = 'PRONUNCIATION'
-            WHEN 'STRENGTH'                 THEN dimension <> 'PRONUNCIATION' AND severity = 'INFO'
+            WHEN 'STRENGTH'                 THEN severity = 'INFO'
             ELSE false
         END),
     CONSTRAINT chk_ef_lengths CHECK (
@@ -10052,21 +9899,21 @@ Statistik (dihitung dari DB oleh worker):
 - `user_speech_seconds < EVAL_MIN_USER_SPEECH_SECONDS` (default **20**), atau
 - `active_seconds < EVAL_MIN_ACTIVE_SECONDS` (default **60**).
 
-Hasil: `status=COMPLETED`, `insufficient_evidence=true`, semua skor & overall NULL, `pronunciation_status=SKIPPED`, tanpa findings, tanpa panggilan LLM/pronunciation, `summary_feedback` = teks tetap:
+Hasil: `status=COMPLETED`, `insufficient_evidence=true`, semua skor & overall NULL, tanpa findings, tanpa panggilan LLM, `summary_feedback` = teks tetap:
 
 > "Percakapan ini terlalu singkat untuk dinilai secara akurat. Coba bicara minimal 3 kali dengan total sekitar 1 menit agar kami bisa memberikan umpan balik yang berguna."
 
-`strengths`, `focus_areas`, `recommendations` = `[]`. `evaluation.completed` tetap dipublish (learner mengabaikan, Bab 9 §9.10). Audio sementara langsung dihapus.
+`strengths`, `focus_areas`, `recommendations` = `[]`. `evaluation.completed` tetap dipublish (learner mengabaikan, Bab 9 §9.10).
 
 ### 10.5 Alur evaluation worker
 
-Handler `evaluation.Consumer` (`internal/evaluation/consumer.go`) memenuhi `amqp.Handler` (Bab 9 §9.7.1) secara struktural — hanya mengimpor `internal/events` (`events.Delivery`, `events.SessionCompletedV1`, `events.Permanent`), tidak mengimpor `amqp` — untuk queue `evaluation.session_completed` (`events.QueueEvaluation`), `SupportedEvents = {"session.completed": 1}`, timeout 200 s. Transaksi memakai port `evaluation.Store.WithinTx(ctx, func(ctx, tx evaluation.Tx) error)`; `evaluation.Tx` mengekspos `Evaluations()`, `Turns()` (hanya untuk `user_audio_object_key`), `Processed() events.ProcessedEvents`, `Outbox() events.OutboxWriter` (implementasi `postgres.Store`).
+Handler `evaluation.Consumer` (`internal/evaluation/consumer.go`) memenuhi `amqp.Handler` (Bab 9 §9.7.1) secara struktural — hanya mengimpor `internal/events` (`events.Delivery`, `events.SessionCompletedV1`, `events.Permanent`), tidak mengimpor `amqp` — untuk queue `evaluation.session_completed` (`events.QueueEvaluation`), `SupportedEvents = {"session.completed": 1}`, timeout 200 s. Transaksi memakai port `evaluation.Store.WithinTx(ctx, func(ctx, tx evaluation.Tx) error)`; `evaluation.Tx` mengekspos `Evaluations()`, `Turns()`, `Processed() events.ProcessedEvents`, `Outbox() events.OutboxWriter` (implementasi `postgres.Store`).
 
 ```text
  1. Decode payload session.completed v1 (framework sudah pre-check processed_events).
  2. Load session (id, user_id, status, started_at, ended_at, disconnected_seconds, topic_id,
     scenario_id, scenario_version_id, config_snapshot,
-    adaptive_difficulty) + users (status, audio_consent). Tidak ada → Permanent(ENTITY_NOT_FOUND).
+    adaptive_difficulty) + users (status). Tidak ada → Permanent(ENTITY_NOT_FOUND).
     sessions.user_id ≠ envelope.user_id → Permanent(INVARIANT_VIOLATION).
     users.status = 'DELETED' → transaksi MarkProcessed saja → ACK (Bab 9 §9.7.2).
     Status bukan COMPLETED/FAILED atau started_at NULL → transaksi MarkProcessed saja → ACK.
@@ -10094,42 +9941,36 @@ Handler `evaluation.Consumer` (`internal/evaluation/consumer.go`) memenuhi `amqp
     Turn kosong padahal user_turn_count payload > 0 (transcript sudah terhapus retensi) →
     Permanent(TRANSCRIPT_UNAVAILABLE).
  6. Insufficient evidence? → langkah 10 (jalur singkat).
- 7. Paralel (errgroup):
-      a. LLM evaluation (§10.6–§10.7) → EvalOutput tervalidasi, atau error.
-      b. Pronunciation (§10.8) → PronResult (selalu sukses; kegagalan → UNAVAILABLE).
-    Error di (a) → kembalikan error (klasifikasi Bab 9 §9.7.3). (b) tidak pernah membatalkan (a).
- 8. Normalisasi findings: map turn_seq → session_turn_id, tambahkan findings pronunciation,
+ 7. LLM evaluation (§10.6–§10.7) → EvalOutput tervalidasi, atau error.
+    Error → kembalikan error (klasifikasi Bab 9 §9.7.3).
+ 8. Normalisasi findings: map turn_seq → session_turn_id,
     urutkan (severity MAJOR→MINOR→INFO; STRENGTH terakhir; lalu turn_seq, lalu dimensi),
     beri ordinal 1..n.
  9. Hitung overall (§10.1).
 10. TRANSAKSI FINAL:
       tx.Processed().MarkProcessed(ctx, 'evaluation.session_completed', env) -- ErrAlreadyProcessed → rollback, ACK
       UPDATE evaluations SET status='COMPLETED', insufficient_evidence,
-             grammar_score … pronunciation_score, overall_score,
+             grammar_score … task_achievement_score, overall_score,
              listening_response_signal, interaction_complexity_signal,   -- dari output.signals.*.score
-             dimension_confidence,          -- 5 dimensi LLM + 2 sinyal dari output; PRONUNCIATION = 0.90 jika ASSESSED
+             dimension_confidence,          -- 5 dimensi LLM + 2 sinyal dari output
              dimension_comments, summary_feedback, strengths, focus_areas, recommendations,
-             pronunciation_status, pronunciation_unavailable_reason,
-             pronunciation_utterance_count, pronunciation_provider,     -- §10.8.2
              user_turn_count, user_speech_seconds, active_seconds, scenario_difficulty_level,
              provider, model, llm_call_count, input_tokens, output_tokens,
              completed_at=now(), updated_at=now()
         WHERE id=$1 AND status <> 'COMPLETED'                        -- 0 baris → rollback, ACK
       -- Jalur insufficient evidence: semua skor/sinyal NULL, dimension_confidence '{}',
-      -- pronunciation_utterance_count 0, llm_call_count 0.
+      -- llm_call_count 0.
       DELETE FROM evaluation_findings WHERE evaluation_id=$1          -- sisa percobaan lama (defensif)
       INSERT INTO evaluation_findings … (batch)
-      UPDATE session_turns SET user_audio_object_key = NULL WHERE session_id=$sid
-        AND user_audio_object_key IS NOT NULL
       tx.Outbox().Enqueue(ctx, evaluation.completed v1)               -- §10.9
     COMMIT
-11. Setelah commit (best-effort): hapus objek audio/tmp/{session_id}/ (Bab 9 §9.9.4 sebagai backstop).
+11. Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 12. Return nil → ACK.
 ```
 
 `OnFailure(ctx, d, err, final)`:
 - `final=false`: `UPDATE evaluations SET status='PENDING', last_error=left($err,2000), updated_at=now() WHERE session_id=$1 AND status='RUNNING'`.
-- `final=true`: transaksi: `UPDATE evaluations SET status='FAILED', failure_code=$code, last_error=…, updated_at=now() WHERE session_id=$1 AND status IN ('RUNNING','PENDING')` + jika 1 baris ter-update, `tx.Outbox().Enqueue(ctx, evaluation.failed v1)`. **Tidak** `MarkProcessed` (agar replay DLQ dapat mencoba lagi). Audio tidak dihapus (dihapus `audio_tmp_cleanup` pada batas 24 jam, R-27; replay dalam 24 jam masih punya audio).
+- `final=true`: transaksi: `UPDATE evaluations SET status='FAILED', failure_code=$code, last_error=…, updated_at=now() WHERE session_id=$1 AND status IN ('RUNNING','PENDING')` + jika 1 baris ter-update, `tx.Outbox().Enqueue(ctx, evaluation.failed v1)`. **Tidak** `MarkProcessed` (agar replay DLQ dapat mencoba lagi).
 - Pemetaan `failure_code`: `events.PermanentError.Code` `TRANSCRIPT_UNAVAILABLE`/`CONFIGURATION_ERROR` → sama; error provider → `PROVIDER_UNAVAILABLE`; `ErrInvalidModelOutput` → `INVALID_MODEL_OUTPUT`; lainnya → `INTERNAL_ERROR`.
 
 Duplikat paralel (dua salinan event diproses dua pod bersamaan) menghasilkan dua panggilan LLM; hanya satu yang commit (guard `MarkProcessed` + `status <> 'COMPLETED'`). Ini diterima karena jarang.
@@ -10200,7 +10041,7 @@ package evaluation
 
 type EvaluationPromptData struct {
     RubricVersion      string   // RubricVersionOf(pv), mis. "rubric-v1"
-    FindingTypes       string   // kode: tabel §10.1 tanpa tipe PRONUNCIATION, satu baris per tipe
+    FindingTypes       string   // kode: tabel §10.1 satu baris per tipe
     PatternKeyExamples string   // kode: daftar contoh di bawah, dipisah koma
     TopicTitle         string   // topics.name
     ScenarioTitle      string   // scenarios.name
@@ -10242,7 +10083,6 @@ HARD RULES
 - STT artifacts are NOT learner errors: never report kanji/kana choice, homophone spelling,
   punctuation, spacing, or number formatting. If an apparent error could plausibly be an STT
   misrecognition, do not report it.
-- Do NOT assess pronunciation and do NOT output findings with dimension PRONUNCIATION.
 - "original" MUST be copied verbatim from the referenced USER turn (a contiguous fragment, max 60
   characters). "corrected" MUST be a natural Japanese correction of only that fragment, at the
   "Expected politeness" given in the user message.
@@ -10347,7 +10187,7 @@ Aturan:
 
 **Contoh `PatternKeyExamples`:** `particle.de_ni_location`, `particle.wa_ga`, `particle.wo_omission`, `conjugation.i_adjective_past`, `conjugation.te_form`, `aspect.teiru`, `politeness.plain_in_formal`, `politeness.keigo_misuse`, `vocab.english_substitution`, `vocab.wrong_counter`, `structure.missing_predicate`, `fluency.one_word_answers`, `task.no_follow_up_question`.
 
-**Format `FindingTypes`** (dihasilkan dari tabel §10.1, kecuali tipe PRONUNCIATION), satu baris per tipe, contoh: `PARTICLE_ERROR -> GRAMMAR; turn_seq, original, corrected required`.
+**Format `FindingTypes`** (dihasilkan dari tabel §10.1), satu baris per tipe, contoh: `PARTICLE_ERROR -> GRAMMAR; turn_seq, original, corrected required`.
 
 ### 10.7 Output LLM: JSON schema & validasi
 
@@ -10503,46 +10343,9 @@ Aturan per-finding (finding yang melanggar **dibuang**, output tetap valid; metr
 - Duplikat (`finding_type`, `turn_seq`, `original` ternormalisasi sama) → simpan yang pertama.
 - Batas jumlah setelah filter: maks 15 non-STRENGTH (ambil MAJOR dulu, lalu confidence tertinggi), maks 3 STRENGTH.
 
-### 10.8 Pronunciation (D-099, D-040)
+### 10.8 (dihapus dari v1)
 
-#### 10.8.1 Audio sementara
-
-Ditangkap oleh runtime realtime (Bab 7 §7.5.5) hanya jika `PRONUNCIATION_CAPTURE_ENABLED=true` **dan** `users.audio_consent = true` saat runtime sesi dibangun (R-19, Bab 13 §13.9.1): PCM16 mono 16 kHz per user utterance (maks 45 s), WAV, disimpan ke `audio/tmp/{session_id}/{turn_id}.wav`, key ditulis ke `session_turns.user_audio_object_key`. Tanpa consent tidak ada audio, sehingga pronunciation `UNAVAILABLE`. Penghapusan: evaluation worker setelah `COMPLETED` (§10.5 langkah 10–11) dan job `audio_tmp_cleanup` (Bab 9 §9.9.4) yang menjamin batas 24 jam; lifecycle rule 1 hari hanya jaring pengaman (R-27). Audio evaluasi `FAILED` dibiarkan sampai batas 24 jam.
-
-#### 10.8.2 Alur
-
-Kontrak Bab 8 §8.2.7/§8.2.8: `provider.AsyncRouter.AssessPronunciation(ctx, provider.PronunciationRequest)` → `provider.PronunciationResult`. Router menegakkan timeout `PROVIDER_TIMEOUT_PRONUNCIATION` (15 s) per attempt, maks 2 attempt (backoff 2 s, sehingga satu panggilan ≤ ±32 s), tanpa fallback (Bab 8 §8.6.2); ctx tiap panggilan diberi deadline 35 s; adapter Azure tidak mengirim audio > 30 s (`Status = TOO_LONG`) atau < 500 ms (`TOO_SHORT`).
-
-```text
-PRONUNCIATION_ENABLED=false, atau router mengembalikan
-  provider.ErrPronunciationDisabled (AZURE_PRONUNCIATION_ENABLED=false) → UNAVAILABLE / PROVIDER_DISABLED
-users.audio_consent = false (dibaca saat evaluasi)   → UNAVAILABLE / NO_CONSENT
-    (audio yang mungkin masih ada tidak diunduh; tetap dihapus di langkah 10–11)
-Pilih kandidat: eligible user turn dengan user_audio_object_key NOT NULL,
-  rune user_text ≥ 4, durasi (user_ended_at − user_started_at) 1–30 s.
-  Utterance > 30 s tidak dinilai (setara TOO_LONG, R-27).
-  Urut durasi menurun; ambil sampai PRONUNCIATION_MAX_UTTERANCES (10) atau
-  total PRONUNCIATION_MAX_AUDIO_SECONDS (120 s).
-Tidak ada kandidat                                   → UNAVAILABLE / NO_AUDIO
-Kandidat < 3 atau total durasi < 10 s                → UNAVAILABLE / INSUFFICIENT_AUDIO
-Untuk tiap kandidat (konkurensi PRONUNCIATION_CONCURRENCY = 3):
-  unduh objek (objek hilang → lewati kandidat)
-  res, err := router.AssessPronunciation(ctx, provider.PronunciationRequest{
-      AudioWAV: wav, ReferenceText: user_text, Locale: "ja-JP", RequestID: turn_id.String()})
-  sukses ⇔ err == nil && res.Status == OK      (NO_MATCH / TOO_SHORT / TOO_LONG / error = tidak sukses)
-Sukses < 50% kandidat terpilih, atau sukses < 3      → UNAVAILABLE / PROVIDER_ERROR
-Selain itu                                           → ASSESSED
-```
-
-Hasil yang disimpan: `pronunciation_utterance_count` = jumlah utterance sukses (0 jika tidak `ASSESSED`); `pronunciation_provider` = `res.Provider` (mis. `AZURE`); `dimension_confidence["PRONUNCIATION"] = 0.90` jika `ASSESSED` [builder call]. Field yang dipakai dari `PronunciationResult`: `PronScore`, `ProsodyScore` (nullable), `AudioMs`, dan `Words[]{Text, AccuracyScore, ErrorType}`.
-
-**Agregasi:** `pronunciation_score = round( Σ(PronScore_i × AudioMs_i) / Σ AudioMs_i )` atas utterance yang sukses.
-
-**Findings pronunciation** (dibuat kode, `source='PRONUNCIATION_PROVIDER'`, `confidence=0.80`):
-- `MISPRONOUNCED_WORD`: kata dengan `AccuracyScore < 60` (severity `MAJOR` jika < 40, selain itu `MINOR`); ambil maksimal 5 kata dengan skor terendah di seluruh sesi, satu per kata unik (`Words[].Text`). `original_text` = kata; `explanation` = `Kata 「{word}」 kurang jelas diucapkan (akurasi {score}/100). Dengarkan contoh pelafalannya lalu ulangi perlahan, perhatikan panjang vokal dan konsonan ganda.`
-- `PROSODY_ISSUE`: maksimal 2 utterance dengan `ProsodyScore < 60` (severity `MINOR`; `ProsodyScore` nil → tidak dinilai). `original_text` = `user_text` (dipotong 60 rune); `explanation` = `Intonasi dan ritme kalimat ini terdengar kurang alami (prosodi {score}/100). Coba tiru irama penutur asli: beri jeda di batas frasa dan jangan memberi tekanan yang sama di setiap suku kata.`
-
-Kegagalan pronunciation tidak pernah menggagalkan evaluasi dan tidak memicu retry message. Jika `UNAVAILABLE`: `pronunciation_score=NULL`, overall dihitung dari 5 dimensi lainnya (D-096). Metric `kotoki_pronunciation_assessments_total{result="assessed|unavailable", reason}`.
+Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 
 ### 10.9 Publikasi `evaluation.completed`
 
@@ -10553,7 +10356,7 @@ err := tx.Outbox().Enqueue(ctx, events.NewEvaluationCompleted(events.EvaluationC
     EvaluationID: ev.ID, SessionID: ev.SessionID, UserID: ev.UserID,
     RubricVersion: ev.RubricVersion /* = RubricVersionOf(pv) */, InsufficientEvidence: ev.InsufficientEvidence,
     Scores: ev.Scores(), DimensionConfidence: ev.DimensionConfidence, Signals: ev.Signals(),
-    OverallScore: ev.OverallScore, PronunciationStatus: ev.PronunciationStatus,
+    OverallScore: ev.OverallScore,
     SessionEndedAt: sess.EndedAt, ScenarioDifficultyLevel: scenario.DifficultyLevel,
     UserTurnCount: stats.UserTurns, UserSpeechSeconds: stats.UserSpeechSeconds,
     FindingCounts: countBySeverity(findings), CompletedAt: now,
@@ -10566,7 +10369,7 @@ Karena satu transaksi dengan `UPDATE … status='COMPLETED'` dan `MarkProcessed`
 
 - Error retryable → retry queue 5 s / 30 s / 2 m / 10 m (Bab 9); `evaluations.status = PENDING` di antara percobaan.
 - Setelah 4 retry atau error non-retryable → `FAILED` + `evaluation.failed` (outbox) + message ke `evaluation.session_completed.dlq`.
-- Replay (`worker dlq-replay --queue evaluation.session_completed`) mengklaim ulang baris `FAILED` → `RUNNING` (langkah 4) dan dapat berakhir `COMPLETED` (lalu `evaluation.completed` terbit normal). Audio masih tersedia jika replay < 24 jam setelah sesi; jika tidak, pronunciation `UNAVAILABLE`/`NO_AUDIO`.
+- Replay (`worker dlq-replay --queue evaluation.session_completed`) mengklaim ulang baris `FAILED` → `RUNNING` (langkah 4) dan dapat berakhir `COMPLETED` (lalu `evaluation.completed` terbit normal).
 - Tidak ada endpoint user untuk memicu ulang evaluasi di MVP.
 
 ### 10.11 API: `GET /api/v1/sessions/{session_id}/evaluation`
@@ -10602,10 +10405,8 @@ Untuk `PENDING`/`RUNNING`, server menambahkan header `Retry-After: 3`. Client di
     {"dimension": "VOCABULARY",       "score": 55, "comment": "..."},
     {"dimension": "FLUENCY",          "score": 45, "comment": "..."},
     {"dimension": "NATURALNESS",      "score": 50, "comment": "..."},
-    {"dimension": "TASK_ACHIEVEMENT", "score": 60, "comment": "..."},
-    {"dimension": "PRONUNCIATION",    "score": null, "comment": null}
+    {"dimension": "TASK_ACHIEVEMENT", "score": 60, "comment": "..."}
   ],
-  "pronunciation": {"status": "UNAVAILABLE", "reason": "NO_AUDIO"},
   "summary": "Kamu bisa mempertahankan percakapan tentang pekerjaan ...",
   "strengths": ["Penggunaan です・ます konsisten sepanjang percakapan."],
   "focus_areas": ["Partikel で vs に untuk tempat", "Bentuk lampau kata sifat-i"],
@@ -10632,13 +10433,12 @@ Untuk `PENDING`/`RUNNING`, server menambahkan header `Retry-After: 3`. Client di
 ```
 
 Aturan field:
-- `dimensions` selalu 6 elemen dalam urutan `GRAMMAR, VOCABULARY, FLUENCY, NATURALNESS, TASK_ACHIEVEMENT, PRONUNCIATION`. `comment` PRONUNCIATION dibuat kode: `ASSESSED` → `"Skor dari {n} ujaran yang dianalisis."`; selain itu null.
-- `pronunciation.reason` null kecuali `UNAVAILABLE`; nilai: `PROVIDER_DISABLED`, `NO_CONSENT` (client dapat menyarankan mengaktifkan consent audio via `PUT /api/v1/me/consents`), `NO_AUDIO`, `INSUFFICIENT_AUDIO`, `PROVIDER_ERROR`.
+- `dimensions` selalu 5 elemen dalam urutan `GRAMMAR, VOCABULARY, FLUENCY, NATURALNESS, TASK_ACHIEVEMENT`.
 - `findings` urut `ordinal`. `turn_id`/`turn_seq` null jika finding tidak terikat turn. Karena `session_turn_id` tanpa FK (S-6), `turn_id` juga dikembalikan null bila `sessions.transcript_purged_at IS NOT NULL` (turn mungkin sudah terhapus); API tidak pernah JOIN ke `session_turns` untuk endpoint ini.
 - `overall_score` angka dengan maksimal 2 desimal atau null.
 - Tidak mengekspos `provider`, `model`, `confidence`, `pattern_key`, `signals`, token, atau `last_error`.
 - `details_purged=true` (setelah retensi 180 hari): skor tetap ada; `summary`, `comment`, `strengths`, `focus_areas`, `recommendations`, `findings` kosong/null.
-- `insufficient_evidence=true`: semua skor null, `pronunciation.status="SKIPPED"`, `summary` = teks tetap §10.4, array kosong.
+- `insufficient_evidence=true`: semua skor null, `summary` = teks tetap §10.4, array kosong.
 - `PENDING`/`RUNNING`: `evaluation_id` null jika belum ada baris; semua field hasil null/array kosong; `completed_at` null.
 - `FAILED`: `failure_message = "Evaluasi untuk sesi ini gagal diproses. Tim kami sudah diberi tahu."`; field hasil null.
 
@@ -10646,9 +10446,9 @@ Kode error endpoint ini (pemilik Bab 10, R-12) yang wajib ada di katalog Bab 5 �
 
 ### 10.12 Kalibrasi & rubric versioning
 
-**Golden set** (`test/golden/evaluation/`, JSONL + WAV opsional; hanya data sintetis atau dengan persetujuan tertulis):
+**Golden set** (`test/golden/evaluation/`, JSONL; hanya data sintetis atau dengan persetujuan tertulis):
 - **80 sampel**: 4 level × 20 — `BEGINNER` (≈N5), `ELEMENTARY` (≈N4), `INTERMEDIATE` (≈N3), `ADVANCED` (≈N2+). Tiap level mencakup ≥ 4 jenis skenario (mis. daily, job interview, culture, free talk) dan kedua `conversation_start_mode`.
-- Tiap sampel: 6–15 user turn, format input identik dengan worker (scenario context + transcript + statistik). ≥ 40 sampel menyertakan audio per utterance untuk kalibrasi pronunciation. Tambahan 8 sampel insufficient-evidence (tidak dinilai, menguji jalur §10.4).
+- Tiap sampel: 6–15 user turn, format input identik dengan worker (scenario context + transcript + statistik). Tambahan 8 sampel insufficient-evidence (tidak dinilai, menguji jalur §10.4).
 - Label: 2 rater independen (pengajar bahasa Jepang native/near-native) memberi skor 0–100 per dimensi + sinyal, dan daftar kesalahan MAJOR yang wajib terdeteksi (`turn_seq`, `original`, `finding_type`). Gold score = rata-rata 2 rater; selisih > 20 poin diadjudikasi rater ketiga.
 
 **Pengukuran** (tool `go run ./cmd/kotoki-cli eval-golden --provider=<OPENAI|DEEPSEEK> --runs=3 --out report.json`):
@@ -10663,7 +10463,6 @@ Kode error endpoint ini (pemilik Bab 10, R-12) yang wajib ada di katalog Bab 5 �
 | Recall MAJOR | fraksi kesalahan MAJOR gold yang muncul sebagai finding (turn sama, `finding_type` sama atau dimensi sama) | ≥ 0.70 |
 | Presisi finding | sampel 100 finding acak dinilai rater valid/tidak | ≥ 0.80 |
 | Validitas output | fraksi panggilan pertama yang lolos validator | ≥ 0.95 |
-| Pronunciation | Pearson skor provider vs gold rater (sampel beraudio) | ≥ 0.60 |
 | Agreement antar-rater | QWK rater1 vs rater2 (acuan plafon) | dilaporkan |
 
 **Kapan dijalankan:** wajib sebelum mem-publish version prompt `EVALUATION` baru (termasuk perubahan `llm_params`/`output_schema`), model evaluation (config D-041), provider, atau tabel finding type/validator (kode); mingguan (job CI terjadwal) untuk mendeteksi drift model vendor. Perubahan diterima jika semua kriteria lulus **dan** MAE tidak memburuk > 2 poin di dimensi mana pun dibanding konfigurasi aktif.
@@ -10684,33 +10483,30 @@ Kode error endpoint ini (pemilik Bab 10, R-12) yang wajib ada di katalog Bab 5 �
 | `EVAL_HANDLER_TIMEOUT` | `200s` |
 
 `EVAL_LLM_TEMPERATURE`, `EVAL_MAX_OUTPUT_TOKENS`, `EVAL_LLM_SEED` **dihapus** (S-1): nilainya kini `llm_params` version prompt `EVALUATION` (§10.6.1). Katalog env Bab 13 §13.2 harus ikut menghapusnya.
-| `PRONUNCIATION_ENABLED` | `false` di `PROVIDER_MODE=fake`, `true` di prod (hanya sisi penilaian; capture = `PRONUNCIATION_CAPTURE_ENABLED` Bab 7) |
-| `PRONUNCIATION_MAX_UTTERANCES` / `PRONUNCIATION_MAX_AUDIO_SECONDS` | `10` / `120` |
-| `PRONUNCIATION_CONCURRENCY` | `3` |
 
-Timeout per attempt provider (`PROVIDER_TIMEOUT_EVALUATION` 60 s, `PROVIDER_TIMEOUT_PRONUNCIATION` 15 s), model (`OPENAI_EVALUATION_MODEL`/`DEEPSEEK_EVALUATION_MODEL`), vendor aktif (sakelar `OPENAI_LLM_ENABLED`/`DEEPSEEK_LLM_ENABLED`, tepat satu), dan kebijakan retry adalah config Bab 8/13 (§8.5.1, §8.6); bab ini tidak mendefinisikan ulang.
+Timeout per attempt provider (`PROVIDER_TIMEOUT_EVALUATION` 60 s), model (`OPENAI_EVALUATION_MODEL`/`DEEPSEEK_EVALUATION_MODEL`), vendor aktif (sakelar `OPENAI_LLM_ENABLED`/`DEEPSEEK_LLM_ENABLED`, tepat satu), dan kebijakan retry adalah config Bab 8/13 (§8.5.1, §8.6); bab ini tidak mendefinisikan ulang.
 
-Fake provider (D-007, Bab 8 §8.9.5): adapter evaluation fake (`FAKE`) mengembalikan output deterministik valid yang diturunkan dari hash transcript (skor 40–80, satu finding per 3 user turn dengan `original` diambil dari teks asli); adapter pronunciation fake mengembalikan `Status=OK`, `PronScore` 70 untuk semua utterance. Ini memungkinkan test end-to-end tanpa vendor.
+Fake provider (D-007, Bab 8 §8.9.5): adapter evaluation fake (`FAKE`) mengembalikan output deterministik valid yang diturunkan dari hash transcript (skor 40–80, satu finding per 3 user turn dengan `original` diambil dari teks asli). Ini memungkinkan test end-to-end tanpa vendor.
 
 ### 10.14 Test wajib
 
-- Unit: validator (setiap aturan §10.7.2 punya test positif/negatif), render transcript (interrupted/failed/opening), overall dengan/ tanpa pronunciation, kriteria insufficient evidence di batas (2/3 turn, 19/20 s, 59/60 s), pemilihan kandidat pronunciation (utterance 31 s tidak dipilih), pemetaan `ExpectedFormality` 4 nilai + fallback (S-17), render seed v1 dengan `PromptFixtures()` + contoh output lolos `output_schema` seed, `llm_params` tanpa key → default kode.
-- Integration (testcontainers Postgres + RabbitMQ, provider fake): `session.completed` → evaluasi `COMPLETED` + findings + keempat kolom R-13 terisi (`listening_response_signal`, `interaction_complexity_signal`, `dimension_confidence`, `pronunciation_utterance_count`) + `evaluation.completed` di outbox; duplikat event → satu evaluasi; output invalid 1× → repair sukses (`llm_call_count = 2`); vendor LLM error → tanpa panggilan ke vendor lain, retry queue (`used_fallback` selalu `false`); invalid di kedua panggilan → 5 percobaan → `FAILED` + DLQ + `evaluation.failed`; replay DLQ → `COMPLETED`; audio hilang → `UNAVAILABLE/NO_AUDIO`; `users.audio_consent=false` → `UNAVAILABLE/NO_CONSENT`; user `DELETED` → tidak ada baris `evaluations`, event di-ACK.
+- Unit: validator (setiap aturan §10.7.2 punya test positif/negatif), render transcript (interrupted/failed/opening), overall = rata-rata 5 dimensi, kriteria insufficient evidence di batas (2/3 turn, 19/20 s, 59/60 s), pemetaan `ExpectedFormality` 4 nilai + fallback (S-17), render seed v1 dengan `PromptFixtures()` + contoh output lolos `output_schema` seed, `llm_params` tanpa key → default kode.
+- Integration (testcontainers Postgres + RabbitMQ, provider fake): `session.completed` → evaluasi `COMPLETED` + findings + ketiga kolom R-13 terisi (`listening_response_signal`, `interaction_complexity_signal`, `dimension_confidence`) + `evaluation.completed` di outbox; duplikat event → satu evaluasi; output invalid 1× → repair sukses (`llm_call_count = 2`); vendor LLM error → tanpa panggilan ke vendor lain, retry queue (`used_fallback` selalu `false`); invalid di kedua panggilan → 5 percobaan → `FAILED` + DLQ + `evaluation.failed`; replay DLQ → `COMPLETED`; user `DELETED` → tidak ada baris `evaluations`, event di-ACK.
 - API: matriks §10.11 (409/404/PENDING sintetis/COMPLETED/FAILED/purged/insufficient), isolasi user lain → 404.
 
 ### Keputusan bab ini
 
 - D-NEW-10-1: Skor dimensi integer 0–100 absolut; band rubric berlabel JLPT hanya anchor evaluator. Konversi ke proficiency hanya lewat Bab 12 §12.5 (R-14). `overall_score` NUMERIC(5,2).
 - D-NEW-10-2: Status evaluasi `PENDING`/`RUNNING`/`COMPLETED`/`FAILED`; baris dibuat worker saat klaim (`RUNNING`); API mensintesis `PENDING` sebelum baris ada; `PENDING` di DB = menunggu retry.
-- D-NEW-10-3: Sinyal tambahan `LISTENING_RESPONSE` dan `INTERACTION_COMPLEXITY` (0–100 + confidence) dari LLM untuk skill D-097, tidak masuk overall dan tidak ditampilkan. Kolom kanonik (R-13): `listening_response_signal`, `interaction_complexity_signal`, `dimension_confidence`, `pronunciation_utterance_count`.
-- D-NEW-10-4: Insufficient evidence: < 3 eligible user turn, atau < 20 s ucapan user, atau < 60 s sesi aktif → `COMPLETED`, `insufficient_evidence=true`, skor null, pronunciation `SKIPPED`.
-- D-NEW-10-5: Enum finding type 18 nilai (tabel §10.1) dengan pemetaan tetap ke dimensi; findings PRONUNCIATION hanya dari kode.
+- D-NEW-10-3: Sinyal tambahan `LISTENING_RESPONSE` dan `INTERACTION_COMPLEXITY` (0–100 + confidence) dari LLM untuk skill D-097, tidak masuk overall dan tidak ditampilkan. Kolom kanonik (R-13): `listening_response_signal`, `interaction_complexity_signal`, `dimension_confidence`.
+- D-NEW-10-4: Insufficient evidence: < 3 eligible user turn, atau < 20 s ucapan user, atau < 60 s sesi aktif → `COMPLETED`, `insufficient_evidence=true`, skor null.
+- D-NEW-10-5: Enum finding type 16 nilai (tabel §10.1) dengan pemetaan tetap ke dimensi.
 - D-NEW-10-6: Prompt evaluasi berbahasa Inggris; teks untuk user berbahasa Indonesia; koreksi berbahasa Jepang. Teks rubric literal di `system_template` (berversi bersama prompt); daftar finding type & contoh pattern key dihasilkan kode dari tabel §10.1. `ExpectedFormality` = formalitas sesi (D-NEW-10-20).
 - D-NEW-10-7: LLM mereferensi turn via `turn_seq` (sequence_number), dipetakan kode ke `session_turn_id`; `original` wajib substring ternormalisasi dari `user_text`, jika tidak finding dibuang.
 - D-NEW-10-8: Panggilan LLM memakai `AsyncRouter.Evaluation()` Bab 8 (vendor LLM aktif tunggal, 1 attempt per panggilan, tanpa fallback vendor, D-017); maksimum 2 panggilan per delivery (utama + repair); `temperature`/`max_output_tokens`/`seed` dari `llm_params` version (seed v1: 0 / 4000 / 42).
-- D-NEW-10-9: Pronunciation via `AsyncRouter.AssessPronunciation`: kandidat 1–30 s (> 30 s tidak dinilai, R-27), maks 10 utterance / 120 s audio, min 3 utterance & 10 s, skor = rata-rata berbobot durasi `PronScore`; findings `MISPRONOUNCED_WORD` (< 60) dan `PROSODY_ISSUE` (< 60). Tanpa `audio_consent` → `UNAVAILABLE/NO_CONSENT` (R-19).
+- D-NEW-10-9: Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 - D-NEW-10-10: Findings dengan confidence < 0.6 tidak disimpan; maks 15 error + 3 strength.
-- D-NEW-10-11: `FAILED` final tidak menulis `processed_events` agar replay DLQ bisa menyelesaikan evaluasi; audio evaluasi `FAILED` dibiarkan sampai batas 24 jam (R-27). "Dihapus setelah evaluasi selesai" (D-099) = setelah `COMPLETED`.
+- D-NEW-10-11: `FAILED` final tidak menulis `processed_events` agar replay DLQ bisa menyelesaikan evaluasi.
 - D-NEW-10-12: Golden set 80 sampel (4 level × 20) + 8 sampel insufficient, 2 rater, kriteria lulus pada tabel §10.12; dijalankan sebelum perubahan prompt/model/rubric dan mingguan.
 - D-NEW-10-13: Endpoint `GET /api/v1/sessions/{session_id}/evaluation` dengan bentuk & logika §10.11 (R-12); kode error `EVALUATION_NOT_AVAILABLE` (404) dan `SESSION_NOT_ENDED` (409) didaftarkan di katalog Bab 5 §5.10.
 - D-NEW-10-14: Target latensi evaluasi (sesi berakhir → `COMPLETED`) P95 ≤ 120 s.
@@ -11555,7 +11351,7 @@ Pemilik tabel: `learner_profiles`, `learner_skill_states`, `proficiency_estimate
 | Area | Keputusan |
 |---|---|
 | Skala | 0.00–5.00, 2 desimal (D-097). Label UI ≈ JLPT (§12.9.3), tidak otoritatif |
-| Skill | `GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `PRONUNCIATION`, `LISTENING_RESPONSE`, `INTERACTION_COMPLEXITY` (D-097) |
+| Skill | `GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `LISTENING_RESPONSE`, `INTERACTION_COMPLEXITY` (D-097) |
 | Update | EMA berbobot confidence, step `α = max(0.15, 1/(n+2)) × c_obs`, batas naik **+0.40** / turun **−0.30** per evaluasi |
 | Evidence | Skor evaluasi 0–100 dipetakan relatif terhadap difficulty efektif sesi |
 | Trend | Slope OLS 3–5 estimasi terakhir (≤ 120 hari), ambang ±0.05 per estimasi |
@@ -11627,7 +11423,7 @@ CREATE TABLE learner_skill_states (
 
     CONSTRAINT ux_learner_skill_states_user_skill UNIQUE (user_id, skill),
     CONSTRAINT chk_lss_skill CHECK (skill IN ('GRAMMAR', 'VOCABULARY', 'FLUENCY', 'NATURALNESS',
-        'PRONUNCIATION', 'LISTENING_RESPONSE', 'INTERACTION_COMPLEXITY')),
+        'LISTENING_RESPONSE', 'INTERACTION_COMPLEXITY')),
     CONSTRAINT chk_lss_prior CHECK (prior_level BETWEEN 0 AND 5 AND prior_confidence BETWEEN 0 AND 1),
     CONSTRAINT chk_lss_level CHECK (estimated_level BETWEEN 0 AND 5),
     CONSTRAINT chk_lss_ceiling CHECK (demonstrated_ceiling IS NULL OR demonstrated_ceiling BETWEEN 0 AND 5),
@@ -11654,7 +11450,7 @@ CREATE TABLE proficiency_estimates (
     algorithm_version      SMALLINT NOT NULL,
 
     raw_score              NUMERIC(5,2) NOT NULL,          -- skor 0–100 dari evaluation
-    effective_difficulty   SMALLINT NULL,                  -- D_eff 1–5; NULL untuk PRONUNCIATION (absolut)
+    effective_difficulty   SMALLINT NULL,                  -- D_eff 1–5
     evidence_level         NUMERIC(3,2) NOT NULL,          -- L_obs
     evidence_confidence    NUMERIC(4,3) NOT NULL,          -- c_obs
 
@@ -11669,7 +11465,7 @@ CREATE TABLE proficiency_estimates (
 
     CONSTRAINT ux_proficiency_estimates_eval_skill UNIQUE (source_evaluation_id, skill),
     CONSTRAINT chk_pe_skill CHECK (skill IN ('GRAMMAR', 'VOCABULARY', 'FLUENCY', 'NATURALNESS',
-        'PRONUNCIATION', 'LISTENING_RESPONSE', 'INTERACTION_COMPLEXITY')),
+        'LISTENING_RESPONSE', 'INTERACTION_COMPLEXITY')),
     CONSTRAINT chk_pe_raw CHECK (raw_score BETWEEN 0 AND 100),
     CONSTRAINT chk_pe_deff CHECK (effective_difficulty IS NULL OR effective_difficulty BETWEEN 1 AND 5),
     CONSTRAINT chk_pe_levels CHECK (evidence_level BETWEEN 0 AND 5 AND previous_level BETWEEN 0 AND 5
@@ -11714,13 +11510,13 @@ dan `.down.sql`-nya men-drop kedua constraint sebelum `DROP TABLE evaluations`.
 ```sql
 INSERT INTO learner_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING;
 INSERT INTO learner_skill_states (id, user_id, skill, prior_level, prior_confidence, estimated_level, confidence)
-SELECT gen_id, $1, s.skill, s.prior, s.conf, s.prior, s.conf FROM (VALUES ...7 baris dari tabel prior...) s
+SELECT gen_id, $1, s.skill, s.prior, s.conf, s.prior, s.conf FROM (VALUES ...6 baris dari tabel prior...) s
 ON CONFLICT (user_id, skill) DO NOTHING;
 ```
 
 Dipanggil oleh: `GET/PATCH /profile*`, `POST /sessions` (sebelum menghitung adaptive; `session → learner`), learner worker. Memory worker menjalankan SQL yang sama lewat port memory-nya sendiri (`EnsureMemoryEnabled`, Bab 11 §11.5.1) karena `memory` tidak mengimpor `learner` (Bab 2 §2.2 butir 3). Registrasi (Bab 3) tidak perlu mengubah alurnya.
 
-Tabel prior (D_self dari onboarding). Skill "reseptif/struktural" = `GRAMMAR`, `VOCABULARY`, `LISTENING_RESPONSE`; skill "produksi lisan" = `FLUENCY`, `NATURALNESS`, `PRONUNCIATION`, `INTERACTION_COMPLEXITY` (diberi −0.5 karena JLPT mengukur kemampuan reseptif, bukan bicara) [builder call]:
+Tabel prior (D_self dari onboarding). Skill "reseptif/struktural" = `GRAMMAR`, `VOCABULARY`, `LISTENING_RESPONSE`; skill "produksi lisan" = `FLUENCY`, `NATURALNESS`, `INTERACTION_COMPLEXITY` (diberi −0.5 karena JLPT mengukur kemampuan reseptif, bukan bicara) [builder call]:
 
 | `self_declared_level` | Prior reseptif | Prior produksi | Confidence awal |
 |---|---|---|---|
@@ -11738,14 +11534,13 @@ Onboarding (`PATCH /api/v1/profile` dengan `self_declared_level`): jika **semua*
 
 ### 12.4 Mapping skill ↔ evidence evaluasi
 
-Evaluation (D-096) memberi skor 0–100 untuk `GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `TASK_ACHIEVEMENT`, `PRONUNCIATION`. Dua skill D-097 tidak punya dimensi langsung; buktinya berasal dari sinyal tambahan evaluasi. Kolom berikut didefinisikan di DDL `evaluations` Bab 10 §10.2 (nama kanonik R-13; rubrik sinyal di Bab 10 §10.6.2) dan hanya **dibaca** bab ini:
+Evaluation (D-096) memberi skor 0–100 untuk `GRAMMAR`, `VOCABULARY`, `FLUENCY`, `NATURALNESS`, `TASK_ACHIEVEMENT`. Dua skill D-097 tidak punya dimensi langsung; buktinya berasal dari sinyal tambahan evaluasi. Kolom berikut didefinisikan di DDL `evaluations` Bab 10 §10.2 (nama kanonik R-13; rubrik sinyal di Bab 10 §10.6.2) dan hanya **dibaca** bab ini:
 
 | Kolom `evaluations` (Bab 10) | Tipe | Dipakai bab ini untuk |
 |---|---|---|
 | `listening_response_signal` | `SMALLINT NULL` 0–100 | skor skill `LISTENING_RESPONSE` |
 | `interaction_complexity_signal` | `SMALLINT NULL` 0–100 | skor skill `INTERACTION_COMPLEXITY` |
 | `dimension_confidence` | `JSONB NOT NULL DEFAULT '{}'` | `q_eval` per dimensi/sinyal (kunci: dimensi D-096 yang non-null + `LISTENING_RESPONSE` + `INTERACTION_COMPLEXITY`). Kunci hilang → default 0.70. |
-| `pronunciation_utterance_count` | `INTEGER NOT NULL DEFAULT 0` | `q_sample` PRONUNCIATION (utterance yang sukses dinilai) |
 
 Tabel mapping:
 
@@ -11755,7 +11550,6 @@ Tabel mapping:
 | `VOCABULARY` | `vocabulary_score` | `vocabulary_complexity` | `min(1, n_turns/12)` |
 | `FLUENCY` | `fluency_score` | `expected_response_length` | `min(1, n_turns/12)` |
 | `NATURALNESS` | `naturalness_score` | `scenario_difficulty` | `min(1, n_turns/12)` |
-| `PRONUNCIATION` | `pronunciation_score` (NULL / `pronunciation_status = UNAVAILABLE` → skip) | — (skala absolut) | `min(1, pronunciation_utterance_count/8)` |
 | `LISTENING_RESPONSE` | `listening_response_signal` (NULL → skip) | `round_half_up((speech_speed + question_complexity)/2)` | `min(1, n_turns/12)` |
 | `INTERACTION_COMPLEXITY` | `interaction_complexity_signal` (NULL → skip) | `round_half_up((follow_up_depth + turn_taking_complexity)/2)` | `min(1, n_turns/12)` |
 | — | `task_achievement_score` | tidak dipetakan ke skill (dipakai Bab 10 untuk feedback) | — |
@@ -11784,16 +11578,15 @@ Semua konstanta di `internal/learner/params.go` dan terikat `AlgorithmVersion = 
 #### 12.5.1 Langkah per skill
 
 ```text
-Input: skor s ∈ [0,100], D_eff ∈ {1..5} (atau none untuk PRONUNCIATION), q_eval ∈ [0,1], q_sample ∈ [0,1],
+Input: skor s ∈ [0,100], D_eff ∈ {1..5}, q_eval ∈ [0,1], q_sample ∈ [0,1],
        state lama (L_old, c_old, n, ceiling, last_evidence_at), t = sessions.ended_at
 
 1. Evidence level L_obs
-   - Skill relatif (semua kecuali PRONUNCIATION):
+   - Semua skill (relatif terhadap D_eff):
        if s >= 70: L_raw = D_eff + (s − 70) / 30
        else:       L_raw = D_eff + (s − 70) / 35
        L_obs = clamp(L_raw, max(0, D_eff − 2.0), min(5, D_eff + 1.0))
      (skor 70 = "mampu di level D_eff"; skor sempurna di scenario mudah tidak membuktikan level jauh di atasnya)
-   - PRONUNCIATION (skor absolut assessment): L_obs = clamp((s − 50) / 10, 0, 5)
 
 2. Evidence confidence
    c_obs = q_eval × q_sample
@@ -11856,8 +11649,8 @@ BEGIN
   EnsureProfile(tx, user)
   n_turns := COUNT turn valid (§12.4)
   if n_turns < 4:  INSERT processed_events; COMMIT; ACK   -- evidence terlalu sedikit, tidak ada update
-  states := SELECT * FROM learner_skill_states WHERE user_id=$u FOR UPDATE   -- 7 baris
-  for skill in 7 skills:
+  states := SELECT * FROM learner_skill_states WHERE user_id=$u FOR UPDATE   -- 6 baris
+  for skill in 6 skills:
       ambil (s, D_eff, q_eval, q_sample) per §12.4; skor NULL → continue
       hitung langkah 1–2 §12.5.1 (L_obs, c_obs); c_obs < 0.05 → continue
       if state.last_evidence_at == nil or ss.ended_at > state.last_evidence_at:     -- JALUR NORMAL (urut)
@@ -11931,8 +11724,6 @@ Interpretasi: skor 58 di scenario level 4 tetap menaikkan estimasi karena 58 pad
 
 **Contoh batas naik**: `L_old = 2.00`, `n = 0`, `c_obs = 1.0`, `L_obs = 3.00` → `α = 0.50`, `Δ_raw = 0.50` → dipotong `+0.40` → `L_new = 2.40`.
 
-**Contoh PRONUNCIATION**: skor 78, 10 utterance (`q_sample = 1.0`), `q_eval = 0.9` → `L_obs = (78−50)/10 = 2.80`, `c_obs = 0.90`.
-
 **Contoh penalty** (tanpa decay, evidence sebelumnya di hari yang sama): `L_old = 3.50`, `c_old = 0.70`, `L_obs = 2.20` (gap 1.30 > 1.0), `c_obs = 0.80`, `n = 6` → `α = 0.15 × 0.80 = 0.12`, `Δ = −0.156` → `L_new = 3.34`; `gain = 0.25×0.80×0.30 = 0.060`, `penalty = 0.15×0.80×0.70 = 0.084` → `c = 0.676`.
 
 ### 12.6 Level efektif untuk adaptasi
@@ -11952,8 +11743,8 @@ Dihitung saat session create (§12.8.1), murni dari DB, tanpa tabel tersendiri.
 
 ```text
 Input:
-  L_k, c_k        = EffectiveLevel / EffectiveConfidence 7 skill
-  avg             = mean(L_k) atas 7 skill
+  L_k, c_k        = EffectiveLevel / EffectiveConfidence 6 skill
+  avg             = mean(L_k) atas 6 skill
   findings        = dari maksimal 5 evaluasi COMPLETED terakhir user (Bab 10: evaluation_findings.dimension, severity)
   E               = jumlah evaluasi tersebut (0 → f_k = 0)
   scenarioFocus   = scenario_versions.evaluation_focus (TEXT[], 0–3 nama skill D-097, Bab 6)
@@ -11961,7 +11752,7 @@ Input:
 Per skill k:
   relgap_k  = max(0, avg − L_k)
   f_k       = E == 0 ? 0 : min(1, (2×MAJOR_k + 1×MINOR_k) / (3 × E))      -- INFO diabaikan
-              (finding.dimension dipetakan 1:1 untuk GRAMMAR, VOCABULARY, FLUENCY, NATURALNESS, PRONUNCIATION;
+              (finding.dimension dipetakan 1:1 untuk GRAMMAR, VOCABULARY, FLUENCY, NATURALNESS;
                TASK_ACHIEVEMENT tidak dipetakan; LISTENING_RESPONSE & INTERACTION_COMPLEXITY tidak punya finding)
   trend_k   = DECLINING → +0.30 ; IMPROVING → −0.10 ; selain itu 0
   focus_k   = 1 jika scenarioFocus memuat nama skill k (persis, UPPER_SNAKE) else 0
@@ -11988,10 +11779,10 @@ JOIN recent r ON r.id = f.evaluation_id
 GROUP BY f.dimension;
 ```
 
-Contoh: skill `GRAMMAR 2.35 (c 0.50, IMPROVING)`, `VOCABULARY 3.10`, `FLUENCY 2.40 (c 0.45)`, `NATURALNESS 2.20 (c 0.45)`, `PRONUNCIATION 2.80`, `LISTENING_RESPONSE 2.90`, `INTERACTION_COMPLEXITY 2.00 (c 0.10)`; avg = 17.75/7 = 2.536. Findings 3 evaluasi: GRAMMAR 2 MAJOR + 4 MINOR → `f = 8/9 = 0.889`; NATURALNESS 3 MINOR → `0.333`.
-- GRAMMAR: `0.50×0.186 + 0.5×0.889 − 0.10 = 0.437`
-- NATURALNESS: `0.45×0.336 + 0.5×0.333 = 0.318`
-- FLUENCY: `0.45×0.136 = 0.061`; INTERACTION_COMPLEXITY: `0.10×0.536 = 0.054`
+Contoh: skill `GRAMMAR 2.35 (c 0.50, IMPROVING)`, `VOCABULARY 3.10`, `FLUENCY 2.40 (c 0.45)`, `NATURALNESS 2.20 (c 0.50)`, `LISTENING_RESPONSE 2.90`, `INTERACTION_COMPLEXITY 2.00 (c 0.10)`; avg = 14.95/6 = 2.492. Findings 3 evaluasi: GRAMMAR 2 MAJOR + 4 MINOR → `f = 8/9 = 0.889`; NATURALNESS 3 MINOR → `0.333`.
+- GRAMMAR: `0.50×0.142 + 0.5×0.889 − 0.10 = 0.415`
+- NATURALNESS: `0.50×0.292 + 0.5×0.333 = 0.313`
+- FLUENCY: `0.45×0.092 = 0.041`; INTERACTION_COMPLEXITY: `0.10×0.492 = 0.049`
 → `FocusSkills = [GRAMMAR, NATURALNESS]`.
 
 ### 12.8 Adaptive difficulty
@@ -12008,14 +11799,14 @@ Contoh: skill `GRAMMAR 2.35 (c 0.50, IMPROVING)`, `VOCABULARY 3.10`, `FLUENCY 2.
 ```go
 package learner // internal/learner
 
-type Skill string // GRAMMAR, VOCABULARY, FLUENCY, NATURALNESS, PRONUNCIATION, LISTENING_RESPONSE, INTERACTION_COMPLEXITY
+type Skill string // GRAMMAR, VOCABULARY, FLUENCY, NATURALNESS, LISTENING_RESPONSE, INTERACTION_COMPLEXITY
 
 type Formality string        // CASUAL, POLITE, KEIGO_LIGHT, KEIGO — KEIGO_LIGHT hanya level internal adaptive (R-15),
                               // dipetakan ke instruksi prompt §12.8.4; bukan nilai kolom DB mana pun
 type DialectExposure string  // NONE, LIGHT, FULL
 
 type AdaptiveInput struct {
-    Levels               map[Skill]float64 // EffectiveLevel §12.6, 7 skill
+    Levels               map[Skill]float64 // EffectiveLevel §12.6, 6 skill
     Confidences          map[Skill]float64 // EffectiveConfidence
     Trends               map[Skill]string
     FindingStats         map[Skill]FindingStat // §12.7
@@ -12187,7 +11978,6 @@ FocusSkills → baris tambahan `学習のねらい:` + descriptor (maks 2):
 | VOCABULARY | 話題に関係する具体的な物事について尋ね、学習者が語彙を使う機会を作る。 |
 | FLUENCY | 「もう少し詳しく教えてください」などで、学習者が続けて話せるように促す。 |
 | NATURALNESS | 自然な言い回しや相づちを自分の発話の中で示す。 |
-| PRONUNCIATION | 学習者が短い言葉をはっきり声に出す機会（確認・復唱）を作る。 |
 | LISTENING_RESPONSE | 数字・理由・条件など、理解して答える必要のある情報を含めて話す。 |
 | INTERACTION_COMPLEXITY | 学習者が質問したり意見を述べたりする機会を作る。 |
 
@@ -12258,7 +12048,7 @@ Endpoint kanonik (R-18; semua di bawah `/api/v1`, didaftarkan lengkap di Bab 5 b
 }
 ```
 
-`overall_level` = rata-rata `estimated_level` 7 skill berbobot `max(0.05, EffectiveConfidence)`, 2 desimal.
+`overall_level` = rata-rata `estimated_level` 6 skill berbobot `max(0.05, EffectiveConfidence)`, 2 desimal.
 
 #### 12.9.2 `PATCH /api/v1/profile`
 
@@ -12314,7 +12104,7 @@ Validasi enum sesuai CHECK §12.2.1 → `400 VALIDATION_FAILED`. `nickname` (S-4
 }
 ```
 
-- `skills` selalu 7 item, urutan seperti D-097.
+- `skills` selalu 6 item, urutan seperti D-097.
 - `confidence` = EffectiveConfidence (setelah decay), 2 desimal. `confidence_label`: < 0.30 `LOW`, < 0.60 `MEDIUM`, ≥ 0.60 `HIGH`.
 - `is_provisional` = `evidence_count < 3 || confidence < 0.30`.
 - `level_label` (≈ JLPT, hanya referensi UX): < 0.50 `BEGINNER`; < 1.50 `N5`; < 2.50 `N4`; < 3.50 `N3`; < 4.50 `N2`; ≥ 4.50 `N1`.
@@ -12348,7 +12138,7 @@ Urut `assessed_at DESC`.
 - Isolasi: aturan §11.10 berlaku identik untuk `db/queries/learner.sql` (setiap query non-`Sys` memuat `user_id = `); `TestLearnerQueriesAreUserScoped` wajib. Learner worker memverifikasi `evaluations.user_id = sessions.user_id = payload.user_id`; mismatch → DLQ.
 - Test wajib:
   - `TestProficiencyGolden_Grammar` — tiga sesi §12.5.4, assertion nilai tersimpan persis (`2.16/0.280`, `2.27/0.389`, `2.35/0.502/IMPROVING`).
-  - Test batas naik/turun, penalty, PRONUNCIATION NULL → tidak ada baris, `n_turns < 4` → tidak ada update.
+  - Test batas naik/turun, penalty, skor/sinyal NULL → tidak ada baris, `n_turns < 4` → tidak ada update.
   - Idempotency: event sama dua kali → satu baris per skill, `evidence_count` naik sekali; insert langsung kedua ke `proficiency_estimates` dengan `(source_evaluation_id, skill)` sama gagal unique.
   - Trend: series `[2.0,2.0,2.0]` → STABLE; `[2.4,2.2,2.0]` → DECLINING; 2 titik → INSUFFICIENT_DATA; titik > 120 hari diabaikan.
   - `ComputeAdaptiveDifficulty` table test: contoh §12.8.3 menghasilkan JSON persis; GRAMMAR rendah hanya menurunkan `grammar_complexity`/`scaffolding`/`formality`; `STANDARD_ONLY` → `NONE`; preferensi SLOWER menurunkan `speech_speed` 1 tingkat.
@@ -12359,14 +12149,14 @@ Urut `assessed_at DESC`.
 
 ### Keputusan bab ini
 
-- D-NEW-12-1: Skill `LISTENING_RESPONSE`/`INTERACTION_COMPLEXITY` dan `q_eval`/`q_sample` dibaca dari kolom DDL `evaluations` Bab 10 §10.2 (R-13): `listening_response_signal`, `interaction_complexity_signal`, `dimension_confidence`, `pronunciation_utterance_count`. `TASK_ACHIEVEMENT` tidak dipetakan ke skill.
+- D-NEW-12-1: Skill `LISTENING_RESPONSE`/`INTERACTION_COMPLEXITY` dan `q_eval`/`q_sample` dibaca dari kolom DDL `evaluations` Bab 10 §10.2 (R-13): `listening_response_signal`, `interaction_complexity_signal`, `dimension_confidence`. `TASK_ACHIEVEMENT` tidak dipetakan ke skill.
 - D-NEW-12-2: `sessions.adaptive_difficulty JSONB NOT NULL` (DDL & alur create Bab 5, R-3) diisi saat `POST /sessions` dari `learner.Service.ComputeAdaptiveDifficulty`; immutable; dipakai learner worker untuk `D_eff`.
 - D-NEW-12-3: Input konten dari kolom Bab 6 (R-15): `scenario_versions.difficulty_level` (1–5), `scenario_versions.evaluation_focus` (`TEXT[]` nama skill D-097), `scenario_versions.formality` (`CASUAL|POLITE|KEIGO`), serta `gender` (`FEMALE|MALE`) dan `accent` (`KANTO|KANSAI`) karakter dari `sessions.config_snapshot->'character'->'voice'`. `KEIGO_LIGHT` hanya level internal adaptive.
 - D-NEW-12-4: `TTSSpeakingRate` = faktor `adaptiveRate` rumus tempo Bab 6 §6.6.3; hasilnya `SpeakingRate` di request TTS Bab 8, clamp 0.80–1.05 (R-16). Runtime Bab 7 menerapkan `MaxAISentencesPerTurn` sebagai batas keras (cancel LLM setelah N kalimat) dan penyesuaian in-session §12.8.5 (R-17).
 - D-NEW-12-5: FK `learner_skill_states.last_evaluation_id` dan `proficiency_estimates.source_evaluation_id` ke `evaluations` ditambahkan di migration `000016_evaluations` (Bab 10 §10.2), karena `000014` < `000016`.
 - D-NEW-12-6: `learner_profiles` PK = `user_id`; dibuat lazy via `EnsureProfile` (registrasi Bab 3 tidak berubah). Kolom onboarding: `self_declared_level` (`BEGINNER|N5..N1`), `target_level`, `learning_goal`, preferensi speech speed/formality/dialect, `memory_enabled`.
 - D-NEW-12-7: Prior onboarding per tabel §12.3 (skill produksi lisan −0.5, cap 4.5, confidence 0.10; skip onboarding → 1.00/0.05).
-- D-NEW-12-8: Algoritma proficiency v1 (§12.5): mapping skor relatif `D_eff` (pivot 70, span 30/35, band −2/+1), PRONUNCIATION absolut `(s−50)/10`, `α = max(0.15, 1/(n+2))·c_obs`, cap +0.40/−0.30, confidence gain 0.25 / penalty 0.15 / max 0.95 / half-life 90 hari, trend OLS ±0.05 atas 3–5 titik ≤ 120 hari, minimal 4 turn.
+- D-NEW-12-8: Algoritma proficiency v1 (§12.5): mapping skor relatif `D_eff` (pivot 70, span 30/35, band −2/+1), `α = max(0.15, 1/(n+2))·c_obs`, cap +0.40/−0.30, confidence gain 0.25 / penalty 0.15 / max 0.95 / half-life 90 hari, trend OLS ±0.05 atas 3–5 titik ≤ 120 hari, minimal 4 turn.
 - D-NEW-12-9: `demonstrated_ceiling` = max `estimated_level` yang pernah dicapai; adaptasi memakai `max(L, ceiling − 0.5)`.
 - D-NEW-12-10: 13 dimensi adaptive dengan rumus `Stretch` (§12.8.3) dan descriptor prompt (§12.8.4); `topic familiarity` diimplementasikan sebagai `topic_novelty`; dialect exposure `NONE/LIGHT/FULL`; formality `CASUAL/POLITE/KEIGO_LIGHT/KEIGO`.
 - D-NEW-12-11: FocusSkills maks 2, rumus §12.7, ambang 0.30; tanpa tabel persisten.
@@ -12406,9 +12196,8 @@ Bab ini mendefinisikan semua yang dibutuhkan agar tiga binary (`cmd/api`, `cmd/r
        │                  │                        │
        ├── Redis (managed, primary+replica) ◄──────┤
        ├── PostgreSQL 17 + pgvector (managed HA) ◄─┤
-       ├── Object storage (bucket kotoki-audio-prod)◄┤
        └── STT/LLM/TTS/Embedding providers         ├── RabbitMQ 3 node (namespace kotoki-data, quorum queues)
-                                                   └── Evaluation/Embedding/Pronunciation providers
+                                                   └── Evaluation/Embedding providers
  Observability: OTel Collector (tail sampling) → Tempo; Grafana Alloy → Loki; Prometheus (kube-prometheus-stack) → Grafana; KEDA untuk autoscaling.
 ```
 
@@ -12422,7 +12211,7 @@ Aturan:
 #### 13.2.1 Konvensi
 
 1. Semua konfigurasi dibaca **sekali** di `main()` lewat `github.com/caarlos0/env/v11` ke struct bertipe di `internal/platform/config`, lalu di-inject (D-004). `os.Getenv` MUST NOT dipanggil di luar `internal/platform/config` (ditegakkan `forbidigo`, Bab 14).
-2. **Tanpa prefix aplikasi** (tidak ada `KOTOKI_`). Nama = `UPPER_SNAKE_CASE` dengan prefix grup topik (`APP_`, `LOG_`, `HTTP_`, `OPS_`, `DB_`, `REDIS_`, `RABBITMQ_`, `OUTBOX_`, `WORKER_`, `S3_`, `AUTH_`, `MAIL_`/`SMTP_`, `CORS_`, `WS_`, `REALTIME_`, `VAD_`, `TURN_`, `BARGEIN_`, `PROVIDER_`, `FAKE_`, `EVAL_`, `PRONUNCIATION_`, `SWEEPER_`, `RETENTION_`, `CONTENT_`, `OTEL_`). Nama yang ditetapkan register (`PROVIDER_MODE`, `INITIAL_BALANCE_SECONDS`, `WS_ALLOWED_ORIGINS`) dipakai persis.
+2. **Tanpa prefix aplikasi** (tidak ada `KOTOKI_`). Nama = `UPPER_SNAKE_CASE` dengan prefix grup topik (`APP_`, `LOG_`, `HTTP_`, `OPS_`, `DB_`, `REDIS_`, `RABBITMQ_`, `OUTBOX_`, `WORKER_`, `AUTH_`, `MAIL_`/`SMTP_`, `CORS_`, `WS_`, `REALTIME_`, `VAD_`, `TURN_`, `BARGEIN_`, `PROVIDER_`, `FAKE_`, `EVAL_`, `SWEEPER_`, `RETENTION_`, `CONTENT_`, `OTEL_`). Nama yang ditetapkan register (`PROVIDER_MODE`, `INITIAL_BALANCE_SECONDS`, `WS_ALLOWED_ORIGINS`) dipakai persis.
 3. **Pemilik nama = bab pemilik topik** (kolom "Sumber" tiap subbab: Bab 3 auth, Bab 6 konten, Bab 7 realtime, Bab 8 provider & fake, Bab 9 worker/outbox/job, Bab 10 evaluasi, Bab 13 infrastruktur umum, privasi, observability). Katalog ini **mengumpulkan** semua variabel dan MUST identik (nama & default) dengan tabel bab pemiliknya; jika berbeda, bab pemilik yang benar dan katalog ini diperbaiki. Interval, lock ID, dan timeout job terjadwal **bukan** env — konstanta tabel Bab 9 §9.9.1 (R-8).
 4. Durasi memakai format Go `time.ParseDuration` (`800ms`, `15s`, `720h`). Bilangan bulat tanpa satuan. Daftar dipisah koma. Boolean `true`/`false`. Identifier provider selalu UPPERCASE (R-6).
 5. Default per binary diisi dengan **prefill struct** sebelum `env.Parse` (caarlos0/env tidak menimpa field yang sudah terisi bila variabel tidak diset dan tag tidak punya `envDefault`):
@@ -12510,20 +12299,9 @@ func LoadRealtime() (Realtime, error) {
 | `OUTBOX_TX_TIMEOUT` | `15s` | — | W | |
 | `OUTBOX_MAX_ATTEMPTS` | `10` | — | W | Lalu status `FAILED`. |
 
-#### 13.2.6 Object storage (sumber: Bab 13)
+#### 13.2.6 (dihapus dari v1)
 
-| Variabel | Default | Wajib | Bin | Keterangan |
-|---|---|---|---|---|
-| `S3_ENDPOINT` | `` | — | RW | Kosong = endpoint AWS default. Lokal `http://localhost:9000`. |
-| `S3_REGION` | `us-east-1` | Prod | RW | |
-| `S3_BUCKET_AUDIO` | `kotoki-audio-local` | Prod | RW | Prod: `kotoki-audio-prod`; staging: `kotoki-audio-staging`. |
-| `S3_ACCESS_KEY_ID` 🔒 | `` | — | RW | Kosong → default credential chain (IRSA / Workload Identity). |
-| `S3_SECRET_ACCESS_KEY` 🔒 | `` | — | RW | |
-| `S3_USE_PATH_STYLE` | `false` | — | RW | `true` untuk MinIO. |
-| `S3_SSE` | `` | Prod | RW | `AES256` di prod/staging (header `x-amz-server-side-encryption`). Kosong di lokal. |
-| `S3_REQUEST_TIMEOUT` | `10s` | — | RW | |
-
-Capture audio utterance dikendalikan `PRONUNCIATION_CAPTURE_ENABLED` (Bab 7, §13.2.10) **dan** `users.audio_consent` (R-19, §13.9.1).
+Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 
 #### 13.2.7 Auth, akun, privasi & email (sumber: Bab 3 §3.4/§3.14; privasi Bab 13 §13.9)
 
@@ -12562,14 +12340,13 @@ Capture audio utterance dikendalikan `PRONUNCIATION_CAPTURE_ENABLED` (Bab 7, §1
 | Variabel | Default | Wajib | Bin | Keterangan |
 |---|---|---|---|---|
 | `PROVIDER_MODE` | `real` | — | RW | `real` atau `fake` (D-007). `.env.example` lokal = `fake`; prod menolak `fake` (§13.2.13). |
-| `PROVIDER_MODE_STT`, `PROVIDER_MODE_LLM`, `PROVIDER_MODE_TTS`, `PROVIDER_MODE_EVALUATION`, `PROVIDER_MODE_EMBEDDING`, `PROVIDER_MODE_PRONUNCIATION` | (kosong = ikut `PROVIDER_MODE`) | — | RW | Override mode per kapabilitas. |
+| `PROVIDER_MODE_STT`, `PROVIDER_MODE_LLM`, `PROVIDER_MODE_TTS`, `PROVIDER_MODE_EVALUATION`, `PROVIDER_MODE_EMBEDDING` | (kosong = ikut `PROVIDER_MODE`) | — | RW | Override mode per kapabilitas. |
 | `OPENAI_STT_ENABLED` / `ELEVENLABS_STT_ENABLED` / `CARTESIA_STT_ENABLED` | `true` / `false` / `false` | — | R | D-017 (menggantikan D-040 STT). Sakelar boolean per vendor STT; **tepat satu `true`**. Selain itu (nol atau ≥ 2 `true`) → proses gagal start dengan pesan yang menyebut ketiga nama variabel (§13.2.13). Tanpa fallback otomatis: "backup" dipilih manual (ubah env + restart; runbook R10 §13.14.2). |
 | `OPENAI_LLM_ENABLED` / `DEEPSEEK_LLM_ENABLED` | `true` / `false` | — | RW | D-017. Vendor LLM untuk percakapan, rolling summary, summary sesi, evaluasi, dan ekstraksi memory; **tepat satu `true`**, selain itu startup gagal (nama variabel disebut). Tanpa fallback otomatis. Binary `realtime` dan `worker` MUST memakai nilai yang sama (satu ConfigMap, §13.5). |
 | `ELEVENLABS_TTS_ENABLED` / `CARTESIA_TTS_ENABLED` | `true` / `true` | — | RW | D-017. **Minimal satu `true`**; keduanya aktif bersamaan (vendor dipilih per karakter, `characters.provider_name`). Karakter ACTIVE yang `provider_name`-nya tidak enabled / tanpa API key ditolak resolver/validator (`CONTENT_MISCONFIGURED` / `CHARACTER_NOT_AVAILABLE`, Bab 6); `voice.fallback` harus mengarah ke vendor TTS lain yang enabled. Bin api (resolver) hanya memeriksa sakelar ini; keberadaan API key divalidasi saat startup `realtime`. |
 | _(tidak ada `PROVIDER_*_PRIMARY`/`_FALLBACK` untuk STT/LLM/Evaluation)_ | — | — | — | Router memilih satu vendor aktif per kapabilitas saat startup dari sakelar di atas; Evaluation mengikuti vendor LLM aktif; Embedding selalu `OPENAI` (`OPENAI_API_KEY` wajib); breaker, timeout, retry, dan konkurensi tetap per (vendor, kapabilitas). Nilai vendor di log/metrik/DB tetap UPPERCASE persis `provider.Name`. |
 | _(tidak ada `PROVIDER_TTS_PRIMARY`/`_FALLBACK`)_ | — | — | — | Vendor/model/voice TTS per karakter dari `config_snapshot.character` (`provider_name`/`model_name`/`voice_id`, `voice.fallback` opsional; D-015). Vendor valid: `ELEVENLABS`, `CARTESIA` (CHECK `characters.provider_name`); yang "dikonfigurasi" = sakelar `*_TTS_ENABLED=true` + mode aktif (dibaca resolver/validator konten Bab 6, bin api; API key divalidasi startup `realtime`). |
 | `OPENAI_EMBEDDING_ENABLED` | `true` | — | RW | Satu-satunya vendor embedding; harus `true` (startup gagal bila `false`); tanpa fallback (DeepSeek tidak dipakai untuk embedding). `OPENAI_API_KEY` karena itu selalu wajib di mode real. |
-| `AZURE_PRONUNCIATION_ENABLED` | `true` | — | W | `false` = pronunciation dimatikan (`ErrPronunciationDisabled`; `AZURE_SPEECH_*` tidak wajib; Bab 10 `PROVIDER_DISABLED`). Menggantikan `PROVIDER_PRONUNCIATION_PRIMARY`. |
 | `OPENAI_LLM_MODEL` / `DEEPSEEK_LLM_MODEL` | `gpt-4.1` / `deepseek-flash` | real | RW | D-041/D-017; model percakapan per vendor (hanya vendor aktif yang dibaca); placeholder sampai benchmark Bab 8 §8.10 (nilai final di `deploy/config/provider-profile.env`; model id DeepSeek: verifikasi di task adapter). Menggantikan `PROVIDER_LLM_MODEL`/`PROVIDER_LLM_FALLBACK_MODEL`. |
 | `OPENAI_EVALUATION_MODEL` / `DEEPSEEK_EVALUATION_MODEL` | `gpt-4.1` / `deepseek-v4-pro` | real | W | Model evaluasi/ekstraksi memory/summary milik vendor LLM aktif (Bab 10). DeepSeek tanpa `json_schema` strict → validasi skema di kode + repair (maks 2 panggilan LLM per delivery). |
 | `LLM_MAX_OUTPUT_TOKENS` / `LLM_TEMPERATURE` | `300` / `0.8` | — | RW | Berlaku vendor LLM aktif (Bab 8 §8.5.1; menggantikan `PROVIDER_LLM_MAX_OUTPUT_TOKENS`/`PROVIDER_LLM_TEMPERATURE`). |
@@ -12582,7 +12359,6 @@ Capture audio utterance dikendalikan `PRONUNCIATION_CAPTURE_ENABLED` (Bab 7, §1
 | `DEEPSEEK_LLM_THINKING` / `DEEPSEEK_EVALUATION_THINKING` | `disabled` / `disabled` | — | RW | Bab 8 §8.4.4, §8.4.9. |
 | `OPENAI_API_KEY` 🔒, `DEEPSEEK_API_KEY` 🔒 | `` | real | RW | Wajib bila ada kapabilitas vendor itu yang enabled (OpenAI juga untuk embedding, yang selalu enabled: `OPENAI_API_KEY` **selalu wajib** di mode real, meskipun `DEEPSEEK_LLM_ENABLED=true` dan `OPENAI_STT_ENABLED=false`). |
 | `ELEVENLABS_API_KEY` 🔒, `CARTESIA_API_KEY` 🔒 | `` | real | RW | Wajib bila kapabilitas STT atau TTS vendor itu enabled (divalidasi startup, §13.2.13). |
-| `AZURE_SPEECH_KEY` 🔒, `AZURE_SPEECH_ENDPOINT` | `` / — | real | W | `AZURE_SPEECH_ENDPOINT` mis. `https://kotoki-speech.cognitiveservices.azure.com`; tidak wajib bila `AZURE_PRONUNCIATION_ENABLED=false`. |
 | `ELEVENLABS_BASE_URL` / `ELEVENLABS_WS_BASE_URL` | `https://api.elevenlabs.io` / `wss://api.elevenlabs.io` | — | R | |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | — | RW | API kompatibel Chat Completions OpenAI; nilai final base URL/path: verifikasi di task adapter. |
 | `OPENAI_BASE_URL` / `OPENAI_WS_BASE_URL` | `https://api.openai.com/v1` / `wss://api.openai.com/v1/realtime` | — | RW | |
@@ -12592,11 +12368,10 @@ Capture audio utterance dikendalikan `PRONUNCIATION_CAPTURE_ENABLED` (Bab 7, §1
 | `PROVIDER_TIMEOUT_TTS_FIRST_AUDIO` / `PROVIDER_TIMEOUT_TTS_SENTENCE_TOTAL` | `1500ms` / `10s` | — | R | |
 | `PROVIDER_TIMEOUT_EVALUATION` | `60s` | — | W | |
 | `PROVIDER_TIMEOUT_EMBEDDING` | `5s` | — | RW | |
-| `PROVIDER_TIMEOUT_PRONUNCIATION` | `15s` | — | W | |
 | `PROVIDER_SESSION_GRACE` | `15s` | — | R | Deadline panggilan realtime ≤ `expires_at` + nilai ini; > `SESSION_EXPIRY_GRACE` runtime (10 s). Deadline tercapai setelah audio terkirim → `DONE{TRUNCATED}`, bukan kegagalan (S-7) [builder call]. |
 | `PROVIDER_CB_FAILURE_THRESHOLD` / `PROVIDER_CB_WINDOW` | `5` / `30s` | — | RW | Circuit breaker per (vendor, kapabilitas) per proses (D-043, R-32). |
 | `PROVIDER_CB_OPEN_DURATION` / `PROVIDER_CB_HALF_OPEN_PROBES` | `20s` / `1` | — | RW | |
-| `PROVIDER_CONCURRENCY_<VENDOR>_<CAP>` | tabel Bab 8 §8.5.6 (realtime STT 125 — ≥ hard max 120 sesi/pod, S-14 [builder call]; LLM 60; TTS 80 per vendor TTS (`ELEVENLABS`, `CARTESIA`); worker evaluation 8, embedding 16, pronunciation 8, LLM summary 8) | — | RW | Semaphore per (vendor, kapabilitas) — 13 kombinasi yang didukung: `OPENAI`{STT, LLM, EVALUATION, EMBEDDING}, `DEEPSEEK`{LLM, EVALUATION}, `ELEVENLABS`{STT, TTS}, `CARTESIA`{STT, TTS}, `AZURE`{PRONUNCIATION}; hanya kombinasi yang vendornya enabled yang dibuat. Mis. `PROVIDER_CONCURRENCY_OPENAI_STT`, `PROVIDER_CONCURRENCY_CARTESIA_TTS`. Prod: `floor(limit_akun_vendor × 0,9 / jumlah_replika)`. |
+| `PROVIDER_CONCURRENCY_<VENDOR>_<CAP>` | tabel Bab 8 §8.5.6 (realtime STT 125 — ≥ hard max 120 sesi/pod, S-14 [builder call]; LLM 60; TTS 80 per vendor TTS (`ELEVENLABS`, `CARTESIA`); worker evaluation 8, embedding 16, LLM summary 8) | — | RW | Semaphore per (vendor, kapabilitas) — 10 kombinasi yang didukung: `OPENAI`{STT, LLM, EVALUATION, EMBEDDING}, `DEEPSEEK`{LLM, EVALUATION}, `ELEVENLABS`{STT, TTS}, `CARTESIA`{STT, TTS}; hanya kombinasi yang vendornya enabled yang dibuat. Mis. `PROVIDER_CONCURRENCY_OPENAI_STT`, `PROVIDER_CONCURRENCY_CARTESIA_TTS`. Prod: `floor(limit_akun_vendor × 0,9 / jumlah_replika)`. |
 | `PROVIDER_PRICES_FILE` | `` (tabel ter-embed) | — | RW | Override `prices.yaml` (Bab 8 §8.7.2). |
 
 Variabel provider tambahan MUST didefinisikan dulu di Bab 8 dengan prefix `PROVIDER_` (konfigurasi) atau `<VENDOR>_` (kredensial/URL), lalu disalin ke sini. Estimasi 1,0 token/rune saat usage vendor tidak ada adalah konstanta Bab 8 §8.7 (bukan env; `PROVIDER_TOKEN_PER_RUNE_ESTIMATE` dihapus dari katalog karena tidak didefinisikan Bab 8) [builder call, S-20].
@@ -12606,7 +12381,7 @@ Variabel provider tambahan MUST didefinisikan dulu di Bab 8 dengan prefix `PROVI
 | Variabel | Default | Bin | Keterangan |
 |---|---|---|---|
 | `FAKE_SEED` | `42` | RW | Seed PRNG deterministik. |
-| `FAKE_<INST>_<CAP>_LATENCY_MS` | per port (STT final 150, LLM first token 300, TTS first chunk 150, evaluation 500, embedding 20, pronunciation 300) | RW | `<INST>` ∈ `PRIMARY` (semua kapabilitas; instance `FAKE_PRIMARY`), `FALLBACK` (hanya `TTS`; instance `FAKE_FALLBACK` untuk slot `voice.fallback`); `<CAP>` ∈ `STT`,`LLM`,`TTS`,`EVALUATION`,`EMBEDDING`,`PRONUNCIATION`. Tidak ada instance fallback STT/LLM/Evaluation (D-017). |
+| `FAKE_<INST>_<CAP>_LATENCY_MS` | per port (STT final 150, LLM first token 300, TTS first chunk 150, evaluation 500, embedding 20) | RW | `<INST>` ∈ `PRIMARY` (semua kapabilitas; instance `FAKE_PRIMARY`), `FALLBACK` (hanya `TTS`; instance `FAKE_FALLBACK` untuk slot `voice.fallback`); `<CAP>` ∈ `STT`,`LLM`,`TTS`,`EVALUATION`,`EMBEDDING`. Tidak ada instance fallback STT/LLM/Evaluation (D-017). |
 | `FAKE_<INST>_<CAP>_JITTER_MS` | `0` | RW | |
 | `FAKE_<INST>_<CAP>_FAILURE_RATE` / `FAKE_<INST>_<CAP>_FAIL_EVERY_N` | `0` / `0` | RW | |
 | `FAKE_<INST>_<CAP>_FAILURE_KIND` / `FAKE_<INST>_<CAP>_FAILURE_PHASE` / `FAKE_<INST>_<CAP>_FAIL_AFTER` | `UNAVAILABLE` / `start` / `3` | RW | |
@@ -12659,7 +12434,6 @@ Variabel provider tambahan MUST didefinisikan dulu di Bab 8 dengan prefix `PROVI
 | `ROLLING_SUMMARY_LLM_MODEL` | `` (kosong = model LLM vendor aktif: `OPENAI_LLM_MODEL` atau `DEEPSEEK_LLM_MODEL`) | — | R | Model rolling summary (Bab 7) dan summary sesi (Bab 9). |
 | `ROLLING_SUMMARY_TRIGGER_TURNS` / `ROLLING_SUMMARY_TIMEOUT` | `4` / `10s` | R | Model = `ROLLING_SUMMARY_LLM_MODEL` (default = model LLM vendor aktif; Bab 8 `CompleteText`). |
 | `MAX_CONSECUTIVE_FAILED_TURNS` | `3` | R | |
-| `PRONUNCIATION_CAPTURE_ENABLED` | `true` | R | D-099; capture juga mensyaratkan `users.audio_consent` (R-19). |
 | `DRAIN_SAFEPOINT_TIMEOUT` / `DRAIN_FLUSH_TIMEOUT` | `20s` / `5s` | R | R-22, §13.10.5. |
 
 `PROVIDER_TIMEOUT_STT_FINAL` (§13.2.8) dipakai runtime sebagai timer final STT.
@@ -12673,7 +12447,6 @@ Variabel provider tambahan MUST didefinisikan dulu di Bab 8 dengan prefix `PROVI
 | `SWEEPER_HEARTBEAT_TIMEOUT` | `45s` | W | R-9 aturan (b) dan masa stabil Redis §13.4.4. |
 | `RETENTION_TRANSCRIPT_DAYS` | `180` | W | R-21: `session_turns`, `summary_text`, teks feedback evaluasi. |
 | `RETENTION_SESSION_EVENTS_DAYS` | `365` | W | R-21. |
-| `RETENTION_AUDIO_TMP` | `24h` | W | R-27, job `audio_tmp_cleanup`. |
 | `RETENTION_OUTBOX_PUBLISHED_DAYS` / `RETENTION_PROCESSED_EVENTS_DAYS` | `7` / `30` | W | R-21 (outbox `FAILED` juga 30 hari). |
 | `RETENTION_EXPIRED_TOKENS_DAYS` | `7` | W | Bab 3: langkah tambahan job `transcript_retention`. |
 | `SUMMARY_MAX_CHARS` | `300` | W | Bab 9 §9.9.6. |
@@ -12681,9 +12454,6 @@ Variabel provider tambahan MUST didefinisikan dulu di Bab 8 dengan prefix `PROVI
 | `EVAL_MIN_FINDING_CONFIDENCE` | `0.6` | W | |
 | `EVAL_TRANSCRIPT_MAX_CHARS` | `60000` | W | |
 | `EVAL_HANDLER_TIMEOUT` | `200s` | W | |
-| `PRONUNCIATION_ENABLED` | `false` bila `PROVIDER_MODE=fake`, selain itu `true` | W | Sisi penilaian (Bab 10); sisi capture = `PRONUNCIATION_CAPTURE_ENABLED`. |
-| `PRONUNCIATION_MAX_UTTERANCES` / `PRONUNCIATION_MAX_AUDIO_SECONDS` | `10` / `120` | W | |
-| `PRONUNCIATION_CONCURRENCY` | `3` | W | |
 
 Parameter LLM evaluasi (temperature, max output tokens, seed) **bukan env**: dibaca dari `prompt_versions.llm_params` version EVALUATION yang dipakai (key `temperature`, `max_output_tokens`, `top_p`, `seed`; nilai DB menang, konstanta kode hanya default saat key tidak ada). `EVAL_LLM_TEMPERATURE`, `EVAL_MAX_OUTPUT_TOKENS`, `EVAL_LLM_SEED` dihapus (S-1) [builder call].
 
@@ -12714,11 +12484,10 @@ Parameter LLM evaluasi (temperature, max output tokens, seed) **bukan env**: dib
 | `DB_URL` dengan `sslmode=disable` | boleh | tolak | tolak |
 | `REDIS_URL` bukan `rediss://` (mode non-Sentinel) | boleh | tolak | tolak |
 | `RABBITMQ_URL` bukan `amqps://` | boleh | tolak | tolak |
-| `S3_SSE` kosong | boleh | tolak | tolak |
 | STT: jumlah sakelar `OPENAI_STT_ENABLED`/`ELEVENLABS_STT_ENABLED`/`CARTESIA_STT_ENABLED` yang `true` ≠ 1 (nol atau lebih dari satu) | tolak | tolak | tolak |
 | LLM: jumlah `OPENAI_LLM_ENABLED`/`DEEPSEEK_LLM_ENABLED` yang `true` ≠ 1 | tolak | tolak | tolak |
 | TTS: `ELEVENLABS_TTS_ENABLED` dan `CARTESIA_TTS_ENABLED` keduanya `false` | tolak | tolak | tolak |
-| Mode `real` dan, untuk setiap kapabilitas vendor yang enabled, API key (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `ELEVENLABS_API_KEY`, `CARTESIA_API_KEY`) atau model (`*_STT_MODEL`, `*_LLM_MODEL`, `*_EVALUATION_MODEL`, `OPENAI_EMBEDDING_MODEL`) kosong; `OPENAI_API_KEY` selalu wajib (embedding); `AZURE_*` wajib bila pronunciation aktif; atau identifier vendor bukan UPPERCASE `provider.Name` (Bab 8 §8.5.1) | tolak | tolak | tolak |
+| Mode `real` dan, untuk setiap kapabilitas vendor yang enabled, API key (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `ELEVENLABS_API_KEY`, `CARTESIA_API_KEY`) atau model (`*_STT_MODEL`, `*_LLM_MODEL`, `*_EVALUATION_MODEL`, `OPENAI_EMBEDDING_MODEL`) kosong; `OPENAI_API_KEY` selalu wajib (embedding); atau identifier vendor bukan UPPERCASE `provider.Name` (Bab 8 §8.5.1) | tolak | tolak | tolak |
 | Mode TTS `real` dan ada karakter ACTIVE dengan `provider_name` (atau `voice.fallback.provider_name`) vendor TTS yang sakelar `*_TTS_ENABLED`-nya `false` (D-015, D-017) | tolak (pesan menyebut karakter + variabel) | tolak | tolak |
 | `REALTIME_READY_MAX_SESSIONS ≤ REALTIME_MAX_SESSIONS ≤ REALTIME_HARD_MAX_SESSIONS` tidak terpenuhi | tolak | tolak | tolak |
 | Nilai durasi ≤ 0 atau `DB_MIN_CONNS > DB_MAX_CONNS` | tolak | tolak | tolak |
@@ -12741,7 +12510,7 @@ Nilai ini ditempatkan di ConfigMap overlay `prod`/`staging` (`deploy/k8s/overlay
 
 #### 13.3.1 Deployment produksi
 
-- **Default: managed PostgreSQL 17** (mis. Cloud SQL / RDS / Azure Flexible Server) dengan pgvector ≥ 0.7.0, HA multi-zone (standby sinkron + automatic failover) [builder call]. Alasan: tim kecil, PITR & failover teruji tanpa mengoperasikan sendiri.
+- **Default: managed PostgreSQL 17** (mis. Cloud SQL / RDS / managed PostgreSQL cloud lain) dengan pgvector ≥ 0.7.0, HA multi-zone (standby sinkron + automatic failover) [builder call]. Alasan: tim kecil, PITR & failover teruji tanpa mengoperasikan sendiri.
 - **Alternatif self-hosted: CloudNativePG** (`Cluster` 3 instance: 1 primary + 2 replica, `minSyncReplicas: 1`, `maxSyncReplicas: 1`, storage 200 Gi SSD per instance, pod anti-affinity per zone, backup via Barman Cloud plugin ke object storage). Image MUST menyertakan pgvector (verifikasi `CREATE EXTENSION vector` di staging).
 - Ukuran awal: **4 vCPU / 16 GiB RAM / 200 GiB SSD** (autogrow on), `max_connections = 400`. Disk steady-state pada utilisasi rata-rata §13.3.5 ±0,6 TB setelah ±13 bulan (jendela partisi hidup penuh); autogrow wajib aktif dan alert disk > 80% (CloudNativePG: perbesar PVC sebelum batas) [builder call, S-6].
 - Parameter: `shared_preload_libraries = pg_stat_statements`, `track_io_timing = on`, `log_min_duration_statement = 500ms`, `idle_in_transaction_session_timeout = 15s` (cadangan selain runtime param), `maintenance_work_mem = 1GB` (index & vacuum partisi besar), `timezone = UTC`.
@@ -12941,23 +12710,9 @@ Respons ditolak: HTTP `429`, body format D-013 dengan `code = "RATE_LIMITED"`, h
 - Monitoring wajib (alert §13.7.5): node down, quorum queue tanpa leader/kehilangan mayoritas, memory/disk alarm, kedalaman `*.dlq` > 0, backlog queue utama, unacked tumbuh terus.
 - Worker outbox juga mengekspor `kotoki_rabbitmq_queue_messages{queue}` (via `QueueDeclarePassive` tiap 30 s) sehingga alert dan KEDA tidak bergantung pada format exporter.
 
-### 13.6 Object storage
+### 13.6 (dihapus dari v1)
 
-- Provider: S3-compatible (S3 / GCS interoperability / MinIO lokal) via `aws-sdk-go-v2` (D-003).
-- Bucket: `kotoki-audio-{env}` (`kotoki-audio-prod`, `kotoki-audio-staging`, `kotoki-audio-local`). Satu bucket per environment, **private**, Block Public Access aktif, versioning **nonaktif** (agar DELETE benar-benar menghapus), bucket policy menolak request tanpa TLS (`aws:SecureTransport=false` → Deny).
-- Key (D-099): `audio/tmp/{session_id}/{turn_id}.wav` — WAV PCM16 mono 16 kHz. Tidak ada `user_id`, email, atau nama file dari user di key/metadata. Metadata object: `x-amz-meta-session-id`, `x-amz-meta-turn-id` saja. `Content-Type: audio/wav`.
-- Enkripsi at rest: SSE `AES256` (`S3_SSE`), atau default encryption bucket dengan KMS bila provider mendukung. In transit: HTTPS.
-- Akses:
-
-| Principal | Aksi | Resource |
-|---|---|---|
-| `kotoki-realtime` | `PutObject` | `audio/tmp/*` |
-| `kotoki-worker` (evaluation, cleanup) | `GetObject`, `DeleteObject`, `ListBucket` (prefix `audio/tmp/`) | `audio/tmp/*` |
-| `kotoki-api` | tidak ada | — |
-
-- **Presigned URL tidak dipakai** di versi ini: browser tidak pernah membaca/menulis audio langsung [builder call].
-- **Lifecycle rule (D-099):** rule `expire-audio-tmp`: prefix `audio/tmp/`, `Expiration.Days = 1`, plus `AbortIncompleteMultipartUpload.DaysAfterInitiation = 1`. Karena granularitas lifecycle adalah hari (penghapusan aktual bisa sampai ±48 jam), **batas 24 jam dijamin oleh job `audio_tmp_cleanup`** (R-27; flag `cleanup`, per jam — jadwal & lock Bab 9 §9.9.1): `ListObjectsV2` prefix `audio/tmp/`, hapus object dengan `LastModified < now − RETENTION_AUDIO_TMP`. Worker evaluation menghapus object segera setelah evaluasi selesai; audio evaluasi `FAILED` dibiarkan sampai batas 24 jam (R-27). Lifecycle rule hanya jaring pengaman. Realtime hanya meng-upload bila `PRONUNCIATION_CAPTURE_ENABLED` **dan** `users.audio_consent = true` (R-19, Bab 7 §7.5.5).
-- Kegagalan upload audio di realtime: di-log `warn` + `kotoki_storage_errors_total{op="put"}`, `session_turns.user_audio_object_key` tetap `NULL`, percakapan tidak terganggu (pronunciation turn itu `UNAVAILABLE`). Upload dilakukan asinkron (goroutine dengan timeout `S3_REQUEST_TIMEOUT`), bukan di jalur latensi turn.
+Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 
 ### 13.7 Observability
 
@@ -13010,7 +12765,7 @@ Span wajib:
 | `outbox.publish {event_type}` | producer | W | `messaging.system=rabbitmq`, `messaging.destination.name=kotoki.events`, `messaging.message.id` |
 | `rabbitmq.consume {queue}` | consumer | W | `messaging.*`, `kotoki.attempt` |
 | `evaluation.run`, `memory.extract`, `learner.update`, `summary.generate` | internal | W | `kotoki.session_id` |
-| `provider.evaluation`, `provider.embedding`, `provider.pronunciation` | client | W R | `kotoki.provider`, `kotoki.model` |
+| `provider.evaluation`, `provider.embedding` | client | W R | `kotoki.provider`, `kotoki.model` |
 | `sweeper.tick`, `cleanup.{job}` | internal | W | jumlah baris diproses |
 
 **Propagasi end-to-end lintas RabbitMQ:** saat `session.completed` (dan event lain) di-INSERT ke `event_outbox` di dalam transaksi bisnis, nilai `traceparent` dan `tracestate` dari context aktif disimpan di baris outbox (kolom yang didefinisikan Bab 9 — lihat D-NEW-13-6). Publisher memasang keduanya sebagai AMQP header `traceparent`/`tracestate`; consumer meng-extract via `propagation.TraceContext{}` dan memulai span consumer sebagai child. Retry (republish dari retry queue) mempertahankan header. Hasil: satu trace dari `session.end` di realtime → publish → evaluation/memory/summary → `evaluation.completed` → learner.
@@ -13030,7 +12785,6 @@ Setiap request/turn/message menghasilkan rantai span yang melewati **semua layer
 | **Service** | semua paket fitur | **setiap method publik `Service`/`RuntimeService`/`AdminService`/`RetrievalService`** memanggil `otel.Start` + `defer otel.End` (contoh di bawah) | `{fitur}.{Method}`, mis. `session.Create`, `balance.Settle`, `memory.RefreshEpisodic` |
 | Repository | `postgres` | `pgx.QueryTracer` (sudah ada) untuk setiap query; `postgres.Store.WithinTx` membuat span pembungkus | `db.{sqlc_query_name}`, `db.tx` |
 | Redis | `redisstore` | hook go-redis v9 buatan sendiri (`redis.Hook`: `ProcessHook`, `ProcessPipelineHook`) — tanpa dependensi tambahan | `redis.{command}` (mis. `redis.EVALSHA`), atribut `db.system=redis`; nilai key/argumen **tidak** dicatat, hanya prefix key (`kotoki:session:*:rt`) |
-| Object storage | `objectstore` | span manual di setiap method publik | `s3.{Operation}` (mis. `s3.PutObject`), atribut bucket + prefix key |
 | Provider | `provider` + adapter vendor | span client (sudah ada di tabel di atas); adapter menambah atribut `http.response.status_code` / kode error vendor | `provider.{cap}.{op}` |
 | Realtime runtime | `conversation` | root span per turn (sudah ada) + child per tahap (`turn.stt_final_wait`, `provider.llm.stream`, `provider.tts.stream`) | — |
 
@@ -13071,7 +12825,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (_ Session, err er
    - `errs.LocationOf(err) (Location, bool)`, `errs.CodeOf(err) Code`, `errs.KindOf(err) Kind` — bekerja menembus `fmt.Errorf("…: %w")` via `errors.As`.
    - Implementasi memakai `errors.Is/As` standar; tidak ada library error pihak ketiga.
 2. **Aturan pemakaian (MUST):**
-   - Error dari library luar (pgx, go-redis, amqp091, net/http vendor, aws-sdk) dibungkus `errs.Wrap` **di adapter** (`postgres`, `redisstore`, `amqp`, `objectstore`, `provider/<vendor>`) di titik pertama error diterima, dengan kode yang sesuai (mis. `errs.Wrap(err, errs.CodeInternal, "insert session")`; pelanggaran unique → kode bisnis yang relevan). Atribut tambahan yang aman (SQLSTATE, HTTP status vendor, nama constraint) dicatat di span adapter.
+   - Error dari library luar (pgx, go-redis, amqp091, net/http vendor) dibungkus `errs.Wrap` **di adapter** (`postgres`, `redisstore`, `amqp`, `provider/<vendor>`) di titik pertama error diterima, dengan kode yang sesuai (mis. `errs.Wrap(err, errs.CodeInternal, "insert session")`; pelanggaran unique → kode bisnis yang relevan). Atribut tambahan yang aman (SQLSTATE, HTTP status vendor, nama constraint) dicatat di span adapter.
    - Error bisnis dibuat dengan `errs.New` di paket fitur.
    - Layer di atasnya cukup `fmt.Errorf("session.Create: %w", err)` atau mengembalikan apa adanya; **tidak** log ulang (aturan log §13.7.1 tetap: log `ERROR` sekali di boundary).
 3. **Hasil di Tempo:** span terdalam yang gagal (mis. `db.InsertSession`) berstatus Error dengan `code.file.path=internal/postgres/session_repo.go`, `code.line.number=…`, SQLSTATE, dan event exception berisi stack trace; setiap span induk (`session.Create` → `HTTP POST /api/v1/sessions`) juga berstatus Error dan membawa atribut lokasi asal yang sama, sehingga dari span teratas langsung terlihat file/baris asal.
@@ -13122,15 +12876,14 @@ Bucket standar:
 | Metrik | Tipe | Label |
 |---|---|---|
 | `kotoki_sessions_ended_total` | counter | `service`, `end_reason`, `status` |
-| `kotoki_storage_errors_total` | counter | `op` |
 
-**Provider** — kanonik di **Bab 8 §8.8** (`kotoki_provider_requests_total{provider,capability,model,outcome}`, `kotoki_provider_errors_total{provider,capability,kind,vendor_code}`, `kotoki_provider_latency_seconds{…,phase}`, `kotoki_provider_fallback_total{from,to,reason}` (hanya TTS per karakter, `voice.fallback`; tanpa fallback STT/LLM, D-017), `kotoki_provider_circuit_state{provider,capability}` dengan nilai **0 CLOSED, 1 OPEN, 2 HALF_OPEN**, `kotoki_provider_active`, `kotoki_provider_usage_total`, `kotoki_provider_cost_usd_total`, …). Nilai label `provider` dan `capability` UPPERCASE (R-6: `OPENAI`, `DEEPSEEK`, `ELEVENLABS`, `CARTESIA`, `AZURE`, `FAKE`, `STT`, `LLM`, `TTS`, `EVALUATION`, …); dashboard/alert dipecah per label `provider` (vendor) sehingga pergantian vendor manual (R10) terlihat di grafik.
+**Provider** — kanonik di **Bab 8 §8.8** (`kotoki_provider_requests_total{provider,capability,model,outcome}`, `kotoki_provider_errors_total{provider,capability,kind,vendor_code}`, `kotoki_provider_latency_seconds{…,phase}`, `kotoki_provider_fallback_total{from,to,reason}` (hanya TTS per karakter, `voice.fallback`; tanpa fallback STT/LLM, D-017), `kotoki_provider_circuit_state{provider,capability}` dengan nilai **0 CLOSED, 1 OPEN, 2 HALF_OPEN**, `kotoki_provider_active`, `kotoki_provider_usage_total`, `kotoki_provider_cost_usd_total`, …). Nilai label `provider` dan `capability` UPPERCASE (R-6: `OPENAI`, `DEEPSEEK`, `ELEVENLABS`, `CARTESIA`, `FAKE`, `STT`, `LLM`, `TTS`, `EVALUATION`, …); dashboard/alert dipecah per label `provider` (vendor) sehingga pergantian vendor manual (R10) terlihat di grafik.
 
 **Worker, outbox, job** — kanonik di **Bab 9 §9.7.9** (`kotoki_consumer_messages_total{queue,result}` termasuk `result="skipped_deleted_user"`, `kotoki_consumer_processing_seconds`, `kotoki_outbox_pending`, `kotoki_outbox_oldest_pending_age_seconds` (**outbox lag**), `kotoki_outbox_failed`, `kotoki_job_runs_total{job,result}`, `kotoki_job_duration_seconds{job}`, `kotoki_job_items_total{job,action}`; label `job` = nama job tabel Bab 9 §9.9.1). Tambahan yang diwajibkan bab ini (diekspor proses worker):
 
 | Metrik | Tipe | Label |
 |---|---|---|
-| `kotoki_job_last_success_timestamp_seconds` | gauge | `job` (nama Bab 9 §9.9.1: `session_sweeper`, `reservation_cleanup`, `transcript_retention`, `audio_tmp_cleanup`, `outbox_retention`, `balance_reconcile`, `account_purge`, `memory_cleanup`, `partition_maintenance`) |
+| `kotoki_job_last_success_timestamp_seconds` | gauge | `job` (nama Bab 9 §9.9.1: `session_sweeper`, `reservation_cleanup`, `transcript_retention`, `outbox_retention`, `balance_reconcile`, `account_purge`, `memory_cleanup`, `partition_maintenance`) |
 | `kotoki_rabbitmq_queue_messages` | gauge | `queue` (termasuk `*.retry.*` dan `*.dlq` → **DLQ depth**; diekspor proses dengan handler `outbox`) |
 | `kotoki_sweeper_heartbeat_checks_suspended` | gauge | — (0/1, §13.4.4; Bab 9 §9.9.2) |
 | `kotoki_balance_invariant_violations` | gauge | `check` (`R1`…`R6`; hasil job `balance_reconcile`, query Bab 4 §4.8) |
@@ -13183,7 +12936,7 @@ Bucket standar:
 | `OutboxFailed` | `kotoki_outbox_failed` > 0 | 5m | warning |
 | `SweeperStale` | `time() - kotoki_job_last_success_timestamp_seconds{job="session_sweeper"}` > 60 | 2m | critical |
 | `SweeperHeartbeatSuspended` | `kotoki_sweeper_heartbeat_checks_suspended == 1` | 10m | warning |
-| `CleanupStale` | `time() - kotoki_job_last_success_timestamp_seconds{job=~"transcript_retention|audio_tmp_cleanup|outbox_retention|balance_reconcile|memory_cleanup"}` > 3h, `job="reservation_cleanup"` > 5m, `job="account_purge"` > 1h, atau `job="partition_maintenance"` > 26h (S-6) | 10m | warning |
+| `CleanupStale` | `time() - kotoki_job_last_success_timestamp_seconds{job=~"transcript_retention|outbox_retention|balance_reconcile|memory_cleanup"}` > 3h, `job="reservation_cleanup"` > 5m, `job="account_purge"` > 1h, atau `job="partition_maintenance"` > 26h (S-6) | 10m | warning |
 | `BalanceInvariantViolation` | `kotoki_balance_invariant_violations` > 0 | 0m | critical |
 | `PartitionsRunningOut` | `min by (table) (kotoki_partition_months_ahead)` < 2 (Bab 9 §9.9.10) | 30m | critical |
 | `DBPoolSaturated` | `acquired/max` > 0.9 per deployment | 5m | warning |
@@ -13202,7 +12955,7 @@ Target: **OWASP ASVS 5.0 Level 2** [builder call]. Checklist ASVS L2 disimpan di
 #### 13.8.1 TLS
 
 - TLS diterminasi di Envoy Gateway: TLS 1.2 minimum, 1.3 diutamakan; sertifikat cert-manager (ACME). HTTP → 301 ke HTTPS. Header `Strict-Transport-Security: max-age=31536000; includeSubDomains`.
-- Koneksi ke data store terenkripsi: PG `sslmode=verify-full`, Redis `rediss://`, RabbitMQ `amqps://`, S3 HTTPS. Trafik pod↔pod di dalam cluster (gateway → pod) plaintext di jaringan cluster, dibatasi NetworkPolicy [builder call].
+- Koneksi ke data store terenkripsi: PG `sslmode=verify-full`, Redis `rediss://`, RabbitMQ `amqps://`. Trafik pod↔pod di dalam cluster (gateway → pod) plaintext di jaringan cluster, dibatasi NetworkPolicy [builder call].
 
 #### 13.8.2 CORS, Origin, header, CSRF
 
@@ -13233,13 +12986,13 @@ Input validation: JSON decoder `DisallowUnknownFields`; DTO divalidasi manual di
 | Secret | Kunci |
 |---|---|
 | `kotoki-api-secrets` | `DB_URL`, `REDIS_URL`, `AUTH_JWT_SECRET`, `AUTH_JWT_PREVIOUS_SECRET`, `SMTP_PASSWORD` |
-| `kotoki-realtime-secrets` | `DB_URL`, `REDIS_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (put-only), `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `ELEVENLABS_API_KEY`, `CARTESIA_API_KEY` |
-| `kotoki-worker-secrets` | `DB_URL`, `REDIS_URL`, `RABBITMQ_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `AZURE_SPEECH_KEY` |
+| `kotoki-realtime-secrets` | `DB_URL`, `REDIS_URL`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `ELEVENLABS_API_KEY`, `CARTESIA_API_KEY` |
+| `kotoki-worker-secrets` | `DB_URL`, `REDIS_URL`, `RABBITMQ_URL`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` |
 | `kotoki-migrate-secrets` | `DB_MIGRATE_URL` |
 
 - Kubernetes Secret dienkripsi at rest (KMS envelope encryption cluster). Tidak ada secret di ConfigMap, image, Git, log, payload RabbitMQ, atau Redis.
 - Rotasi: JWT via `AUTH_JWT_PREVIOUS_SECRET` (rotasi tiap 90 hari); kunci provider tiap 90 hari atau segera saat dicurigai bocor (runbook §13.14.2 R8). Pod di-restart (rollout) setelah Secret berubah — ESO + annotation checksum di Deployment.
-- Data ke provider (OpenAI, DeepSeek, ElevenLabs, Cartesia, Azure; D-017): payload tidak berisi email/phone. DeepSeek mengirim teks transkrip/prompt ke vendor LLM tambahan bila diaktifkan: kebijakan retensi/training dan lokasi pemrosesan vendor MUST ditinjau tertulis sebelum `DEEPSEEK_LLM_ENABLED=true` di produksi (item go-live §13.14.1), dan aviso privasi (Bab 3 terms) menyebut daftar vendor. Identitas yang dikirim (bila API vendor punya field `user`) = `sha256(user_id)` 16 hex. Opsi "zero data retention / no training" di akun vendor diaktifkan bila tersedia (item checklist go-live).
+- Data ke provider (OpenAI, DeepSeek, ElevenLabs, Cartesia; D-017): payload tidak berisi email/phone. DeepSeek mengirim teks transkrip/prompt ke vendor LLM tambahan bila diaktifkan: kebijakan retensi/training dan lokasi pemrosesan vendor MUST ditinjau tertulis sebelum `DEEPSEEK_LLM_ENABLED=true` di produksi (item go-live §13.14.1), dan aviso privasi (Bab 3 terms) menyebut daftar vendor. Identitas yang dikirim (bila API vendor punya field `user`) = `sha256(user_id)` 16 hex. Opsi "zero data retention / no training" di akun vendor diaktifkan bila tersedia (item checklist go-live).
 
 #### 13.8.5 Container & supply chain
 
@@ -13262,26 +13015,22 @@ Kolom berikut MUST ada di DDL `users` (Bab 3) — D-NEW-13-1:
 ```sql
 terms_version            TEXT        NOT NULL,              -- versi terms+privacy yang disetujui
 terms_accepted_at        TIMESTAMPTZ NOT NULL,
-audio_consent            BOOLEAN     NOT NULL DEFAULT false, -- izin menyimpan sementara audio untuk pronunciation
-audio_consent_updated_at TIMESTAMPTZ NULL,
 deleted_at               TIMESTAMPTZ NULL,                   -- saat user meminta hapus akun
 purged_at                TIMESTAMPTZ NULL,                   -- saat purge selesai
 -- users.status MUST mendukung nilai 'DELETED'
 ```
 
 Kontrak:
-- `POST /api/v1/auth/register` menambah field body `terms_version` (string, wajib, MUST sama dengan `PRIVACY_POLICY_VERSION`, jika tidak → `400 VALIDATION_FAILED` pada field `terms_version`, Bab 3 §3.13) dan `audio_consent` (boolean, opsional, default `false`). Teks persetujuan (ditampilkan frontend) mencakup: pemrosesan mikrofon real-time, pemrosesan oleh provider AI pihak ketiga (STT/LLM/TTS/evaluasi), penyimpanan transcript 180 hari, memory & profil belajar, evaluasi. `audio_consent` terpisah: penyimpanan sementara audio ≤ 24 jam untuk penilaian pelafalan.
+- `POST /api/v1/auth/register` menambah field body `terms_version` (string, wajib, MUST sama dengan `PRIVACY_POLICY_VERSION`, jika tidak → `400 VALIDATION_FAILED` pada field `terms_version`, Bab 3 §3.13). Teks persetujuan (ditampilkan frontend) mencakup: pemrosesan mikrofon real-time, pemrosesan oleh provider AI pihak ketiga (STT/LLM/TTS/evaluasi), penyimpanan transcript 180 hari, memory & profil belajar, evaluasi.
 - `GET /api/v1/auth/terms` (publik, tanpa auth) → `200 {"terms_version":"2026-10-01"}` (= `PRIVACY_POLICY_VERSION`); dipakai frontend & `kotoki-cli` sebelum registrasi.
-- `GET /api/v1/me` mengembalikan `terms_version`, `terms_current_version` (= `PRIVACY_POLICY_VERSION`), `audio_consent`.
-- `PUT /api/v1/me/consents` body `{"terms_version":"2026-10-01","audio_consent":true}` → `200` dengan nilai baru; menulis log audit `consent_updated`.
+- `GET /api/v1/me` mengembalikan `terms_version`, `terms_current_version` (= `PRIVACY_POLICY_VERSION`).
+- `PUT /api/v1/me/consents` body `{"terms_version":"2026-10-01"}` → `200` dengan nilai baru; menulis log audit `consent_updated`.
 - Jika `users.terms_version != PRIVACY_POLICY_VERSION`, `POST /api/v1/sessions` menolak dengan `403`, `code = "TERMS_NOT_ACCEPTED"` (endpoint lain tetap jalan) — D-NEW-13-2.
-- Realtime membaca `users.audio_consent` saat membangun runtime sesi; `false` → tidak ada upload audio (pronunciation `UNAVAILABLE`). Perubahan consent berlaku mulai sesi berikutnya.
 
 #### 13.9.2 Retensi
 
 | Data | Retensi | Mekanisme |
 |---|---|---|
-| Audio utterance (`audio/tmp/…`) | hanya ada bila `audio_consent = true`; dihapus setelah evaluasi selesai; maks 24 jam (D-099, R-27) | worker evaluation + job `audio_tmp_cleanup` (per jam) + lifecycle 1 hari |
 | STT partial, LLM delta, TTS chunk, payload provider mentah | tidak disimpan | — |
 | Transcript: baris `session_turns` | 180 hari setelah `sessions.ended_at` (R-21, `RETENTION_TRANSCRIPT_DAYS`) | job `transcript_retention` (Bab 9 §9.9.4, DELETE di partisi batas) + `partition_maintenance` (DROP partisi yang seluruhnya kedaluwarsa, S-6; §13.3.5) |
 | `sessions.summary_text` | 180 hari setelah `ended_at` (R-21) | job `transcript_retention`: `UPDATE sessions SET summary_text = NULL` |
@@ -13318,7 +13067,7 @@ Purge asinkron — job `account_purge` (flag `cleanup`, tiap 15 menit; lock & ti
 
 | # | Langkah | Detail |
 |---|---|---|
-| 1 | Object storage | Untuk setiap `sessions.id` user: `ListObjectsV2` prefix `audio/tmp/{session_id}/` → `DeleteObjects`. |
+| 1 | (dihapus dari v1) | Dihapus dari v1 (pronunciation ditunda ke pasca-v1). |
 | 2 | Memory | `DELETE FROM memories WHERE user_id=$1` (Bab 11). |
 | 3 | Evaluasi | `DELETE evaluation_findings` lalu `evaluations` untuk sesi milik user (Bab 10). |
 | 4 | Learner | `DELETE proficiency_estimates`, `learner_skill_states`, `learner_profiles` milik user (Bab 12). |
@@ -13546,7 +13295,7 @@ Default deny ingress+egress di namespace `kotoki`, lalu allow:
 | api, realtime, worker → PostgreSQL (ipBlock subnet DB managed) | 5432 |
 | api, realtime, worker → Redis (ipBlock subnet Redis managed) | 6379/6380 |
 | worker → RabbitMQ (`kotoki-data`) | 5671 |
-| realtime, worker → internet 443 (`0.0.0.0/0` kecuali `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) | 443 (provider AI, object storage) |
+| realtime, worker → internet 443 (`0.0.0.0/0` kecuali `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) | 443 (provider AI) |
 | api → internet 587 | SMTP |
 | semua pod → `observability` OTel Collector | 4317 |
 
@@ -13695,7 +13444,6 @@ Turunan:
 | PG pertumbuhan | §13.3.5 (partisi bulanan, S-6) | ±2,2 GB/hari pada utilisasi rata-rata 30% (turns ±2 + events ±0,17); steady-state ±420 GB turns + ±70 GB events, total disk ±0,6 TB; pertumbuhan berhenti setelah partisi pertama di-drop |
 | Redis ops | heartbeat 200/s (tiap 5 s per sesi, Bab 7) + owner refresh 200/s + mirror state ±330/s + replay XADD+EXPIRE ±2.700/s + lock/ticket/ratelimit ±250/s | ±3.700 ops/s rata-rata, puncak ±7.500; memori < 300 MiB |
 | RabbitMQ | publish: `session.completed` 1,1/s + `evaluation.completed` 1,1/s + `memory.extracted` 1,1/s; delivery: ±5/s | ±3,3 publish/s, puncak ±15 msg/s |
-| Upload audio pronunciation | maks 1 WAV/turn × 160 KB (5 s PCM16 16 kHz) | ≤ 66,7 PUT/s, ≤ 85 Mbps; batas aktual mengikuti kebijakan sampling Bab 10 |
 | Worker evaluation | 1,1 sesi/s × ±20 s evaluasi / prefetch 4 | ±6 pod |
 | Worker memory | 1,1/s × ±10 s / 4 | ±3 pod |
 | Worker learner+summary | 1,1/s × ±5 s / 4 | ±2 pod |
@@ -13833,7 +13581,7 @@ Job `balance_reconcile` (flag `cleanup`, **per jam**; jadwal, lock, timeout di B
 | F11 | PG failover | managed: trigger failover; CNPG: hapus pod primary | 30–120 s tulis gagal: REST `503`; realtime mengikuti Bab 7 (retry persist dengan backoff); pool tersambung ulang otomatis | 0 double-charge; 0 sesi stuck `ENDING` > 5 menit setelah pulih; `kotoki-verify` 0 |
 | F12 | Worker evaluation dibunuh saat memproses | delete pod | Pesan redelivered, diproses sekali (D-093) | tepat 1 evaluasi per sesi |
 | F13 | Pesan duplikat | publish ulang `session.completed` manual via management UI | Consumer skip (`result="duplicate"`) | tidak ada evaluasi/memory ganda |
-| F14 | Object storage tidak tersedia | NetworkChaos blok egress S3 dari realtime | Upload gagal, `storage_errors_total` naik, pronunciation `UNAVAILABLE`, percakapan normal | turn latency tidak berubah |
+| F14 | (dihapus dari v1) | – | Dihapus dari v1 (pronunciation ditunda ke pasca-v1). | – |
 | F15 | Sesi habis saat AI bicara | sesi 300 s, VU bicara menjelang akhir | `ENDING` dengan `DURATION_ELAPSED` lalu `COMPLETED` (D-052) | charge = reserved (≤), ledger benar |
 | F16 | Jaringan client putus-sambung | `--drop-after` di harness | `session.resume` replay atau `session.snapshot` (D-083) | event tidak hilang/ganda di client |
 
@@ -13870,7 +13618,6 @@ Job `balance_reconcile` (flag `cleanup`, **per jam**; jadwal, lock, timeout di B
 - [ ] Secret via ESO; tidak ada secret di Git/image (scan `gitleaks` di CI)
 - [ ] Rate limit aktif; uji authz (akses resource user lain → 404/403)
 - [ ] Rotasi refresh token & reuse detection teruji
-- [ ] Bucket private, lifecycle rule aktif, cleanup audio ≤ 24 jam terverifikasi
 - [ ] Consent registrasi & delete account end-to-end teruji (purge menghapus semua data §13.9.3)
 - [ ] Privacy policy menyebut provider pihak ketiga, retensi, backup 14 hari
 
@@ -13897,16 +13644,16 @@ Langkah umum: akui alert → tentukan severity → buka kanal insiden → mitiga
 | R6 | `RealtimeRejectingCapacity`, `PodCrashLooping` realtime | KEDA/HPA status, Prometheus terjangkau? event OOMKilled | Naikkan `minReplicaCount`; OOM → naikkan limit memori sementara + profil heap (`PPROF_ENABLED` di satu pod). |
 | R7 | `BalanceInvariantViolation` (SEV1) | `kotoki-verify` untuk daftar akun | Bekukan pembuatan sesi (scale `kotoki-api` session create via feature flag/rate limit 0), investigasi ledger; koreksi hanya via `balance-adjustments` admin (D-031) dengan reason, tidak pernah UPDATE manual. |
 | R8 | Secret bocor | Sumber kebocoran | Rotasi di secret manager → ESO sync → rollout restart; JWT: set secret baru + `AUTH_JWT_PREVIOUS_SECRET` kosong (paksa login ulang); refresh token: `DELETE FROM refresh_tokens` bila perlu. Catat sebagai SEV1. |
-| R9 | `SweeperStale`, `CleanupStale` | Pod outbox hidup? Advisory lock tertahan? | Restart `kotoki-worker-core`; cek `pg_locks` advisory. Retensi tertunda > 24 jam untuk audio = insiden privasi SEV2. |
+| R9 | `SweeperStale`, `CleanupStale` | Pod outbox hidup? Advisory lock tertahan? | Restart `kotoki-worker-core`; cek `pg_locks` advisory. |
 | R10 | Ganti vendor STT/LLM manual (D-017): outage vendor aktif (`ProviderUnavailable`), kuota/biaya, atau penurunan kualitas | Vendor aktif = sakelar `*_ENABLED` di ConfigMap; konfirmasi vendor tujuan: API key ada di secret (`kotoki-realtime-secrets`/`kotoki-worker-secrets`), model terisi (`*_STT_MODEL`/`*_LLM_MODEL`/`*_EVALUATION_MODEL`), kuota akun cukup, retensi/privasi vendor sudah ditinjau (DeepSeek) | (1) Ubah ConfigMap: STT — set tepat satu dari `OPENAI_STT_ENABLED`/`ELEVENLABS_STT_ENABLED`/`CARTESIA_STT_ENABLED` = `true` dan dua lainnya `false`; LLM — `OPENAI_LLM_ENABLED`/`DEEPSEEK_LLM_ENABLED` (tepat satu; berlaku untuk percakapan **dan** evaluasi/summary/memory); (2) `kubectl rollout restart` `kotoki-realtime` (STT/LLM) dan `kotoki-worker-*` (LLM) — realtime memakai drain Bab 7 §7.12.1 / §13.10.5 (sesi aktif terputus sesaat dan reconnect); startup gagal bila bukan tepat satu `true` (pesan menyebut variabel); (3) verifikasi: `kotoki_provider_requests_total{provider="<vendor baru>"}` naik, circuit `CLOSED`, smoke `kotoki-cli converse` 1 fixture; (4) pesan evaluasi `FAILED` di DLQ dapat di-replay (Bab 9 §9.7.8) setelah worker memakai vendor baru; (5) catat perubahan & rollback dengan membalik flag yang sama. TTS tidak diganti lewat runbook ini: ubah `characters.provider_name` (admin) atau `*_TTS_ENABLED`. |
 
 ### Keputusan bab ini
 
-- D-NEW-13-23 [builder call]: Span wajib di setiap layer (handler, service — setiap method publik, repository, Redis, S3, provider, consumer, job) lewat `internal/platform/otel` (`Start`/`End`); error internal → status Error + `RecordError` dengan stack + atribut semconv `code.function.name`/`code.file.path`/`code.line.number` dari lokasi asal (`errs.New`/`errs.Wrap` merekam `runtime.Caller`); error bisnis 4xx hanya atribut `kotoki.error_code`; panic dicatat sebagai exception; log ERROR boundary memuat `error_location` (§13.7.2.1–13.7.2.2).
-- D-NEW-13-1: Tabel `users` (Bab 3) wajib punya `terms_version`, `terms_accepted_at`, `audio_consent`, `audio_consent_updated_at`, `deleted_at`, `purged_at`, dan `status` mendukung `DELETED`. Registrasi wajib `terms_version` = `PRIVACY_POLICY_VERSION`; `audio_consent` opsional default `false`; tanpa consent audio tidak ada upload audio.
+- D-NEW-13-23 [builder call]: Span wajib di setiap layer (handler, service — setiap method publik, repository, Redis, provider, consumer, job) lewat `internal/platform/otel` (`Start`/`End`); error internal → status Error + `RecordError` dengan stack + atribut semconv `code.function.name`/`code.file.path`/`code.line.number` dari lokasi asal (`errs.New`/`errs.Wrap` merekam `runtime.Caller`); error bisnis 4xx hanya atribut `kotoki.error_code`; panic dicatat sebagai exception; log ERROR boundary memuat `error_location` (§13.7.2.1–13.7.2.2).
+- D-NEW-13-1: Tabel `users` (Bab 3) wajib punya `terms_version`, `terms_accepted_at`, `deleted_at`, `purged_at`, dan `status` mendukung `DELETED`. Registrasi wajib `terms_version` = `PRIVACY_POLICY_VERSION`.
 - D-NEW-13-2: Endpoint `GET /api/v1/auth/terms` (publik) dan `PUT /api/v1/me/consents`; `POST /api/v1/sessions` menolak `403 TERMS_NOT_ACCEPTED` bila versi terms usang. Kode error baru untuk Bab 5: `TERMS_NOT_ACCEPTED`, `ACCOUNT_HAS_ACTIVE_SESSION`, `SERVICE_UNAVAILABLE` (503).
 - D-NEW-13-3: Hapus akun `DELETE /api/v1/me` (password re-auth, 409 bila sesi aktif, cancel sesi `RESERVED`) → status `DELETED` → purge asinkron oleh job `account_purge` (flag `cleanup`, 15 menit; tabel Bab 9 §9.9.1, R-8) setelah `ACCOUNT_PURGE_DELAY=1h` dengan urutan §13.9.3; ledger & baris sessions dipertahankan, user dianonimkan. Consumer async melewati event milik user `DELETED`.
-- D-NEW-13-4: Retensi (R-21): `session_turns` dihapus, `sessions.summary_text` di-NULL, teks feedback evaluasi & findings dipurge 180 hari setelah `ended_at`; `session_events` 365 hari (keduanya job `transcript_retention`); skor evaluasi, profil selama akun ada; memory per kategori Bab 11; outbox published 7 hari, outbox `FAILED` & `processed_events` 30 hari (`outbox_retention`); audio tmp ≤ 24 jam (`audio_tmp_cleanup`, R-27).
+- D-NEW-13-4: Retensi (R-21): `session_turns` dihapus, `sessions.summary_text` di-NULL, teks feedback evaluasi & findings dipurge 180 hari setelah `ended_at`; `session_events` 365 hari (keduanya job `transcript_retention`); skor evaluasi, profil selama akun ada; memory per kategori Bab 11; outbox published 7 hari, outbox `FAILED` & `processed_events` 30 hari (`outbox_retention`); user audio tidak pernah disimpan.
 - D-NEW-13-5: Katalog env var §13.2 mengumpulkan semua variabel dengan nama & default **bab pemilik topik** (Bab 3/6/7/8/9/10; Bab 13 untuk infrastruktur umum); tanpa prefix aplikasi. Listener ops terpisah `OPS_ADDR` (api/realtime) dan `WORKER_HTTP_ADDR` (worker, Bab 9). Interval/lock job bukan env (Bab 9 §9.9.1).
 - D-NEW-13-6: `event_outbox.traceparent`/`tracestate TEXT NULL` (R-31, DDL Bab 9), diteruskan sebagai AMQP header untuk tracing end-to-end.
 - D-NEW-13-7: Rate limiting token bucket Lua di `kotoki:ratelimit:{policy}:{subject}` dengan tabel policy §13.4.3 (termasuk `ws_connect_ip` 30/menit dan `ws_attach_user` 10/menit, Bab 7); Redis down → fallback limiter lokal per pod.
@@ -13923,9 +13670,9 @@ Langkah umum: akui alert → tentukan severity → buka kanal insiden → mitiga
 - D-NEW-13-16: Job `balance_reconcile` per jam (R-8, Bab 9 §9.9.1) menulis `kotoki_balance_invariant_violations{check}`; load test gate G4a menaikkan sementara `REALTIME_READY_MAX_SESSIONS=101`.
 - D-NEW-13-24 (D-017): Vendor STT/LLM dipilih manual lewat sakelar env `*_ENABLED` (tepat satu aktif, divalidasi startup §13.2.13), tanpa fallback otomatis; TTS: `ELEVENLABS_TTS_ENABLED`/`CARTESIA_TTS_ENABLED` (≥ 1) dengan vendor per karakter; model per vendor (`OPENAI_STT_MODEL`, `DEEPSEEK_LLM_MODEL`, dst.); secret `DEEPSEEK_API_KEY` ditambahkan, Deepgram/Gemini dihapus; konkurensi/breaker per (vendor, kapabilitas); runbook R10 "ganti vendor STT/LLM manual".
 - D-NEW-13-17: Target keamanan OWASP ASVS 5.0 Level 2; region deployment Jakarta (fallback Singapura).
-- D-NEW-13-18: Presigned URL tidak dipakai; akses object storage dibatasi per binary (realtime put-only, worker get/delete/list).
-- D-NEW-13-19: Sweeper aturan (b) di-suspend selama Redis tak terjangkau dan sampai Redis terjangkau terus-menerus ≥ 45 s, plus skip massal (≥ 20 sesi dan ≥ 50 % sesi `ACTIVE`) (R-9); audio tmp dijamin ≤ 24 jam oleh job `audio_tmp_cleanup`, lifecycle 1 hari hanya jaring pengaman (R-27).
-- D-NEW-13-20: Image MinIO lokal dipin ke tag `RELEASE` terakhir yang dapat di-pull (distribusi community MinIO dihentikan akhir 2025); bila tidak tersedia, builder memakai tag RELEASE terakhir yang tersedia dan mencatatnya di `docs/implementation-deviations.md` (D-006 tetap).
+- D-NEW-13-18: Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
+- D-NEW-13-19: Sweeper aturan (b) di-suspend selama Redis tak terjangkau dan sampai Redis terjangkau terus-menerus ≥ 45 s, plus skip massal (≥ 20 sesi dan ≥ 50 % sesi `ACTIVE`) (R-9).
+- D-NEW-13-20: Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 
 ---
 
@@ -13943,7 +13690,7 @@ Bab ini menetapkan cara menguji, aturan kerja untuk agent AI coding, lingkungan 
                  ├──────────────────────────┤
                  │ E2E realtime (-tags e2e) │  binary asli + fake provider + fixture audio
                  ├──────────────────────────┤
-                 │ Integration              │  testcontainers PG/Redis/RabbitMQ/MinIO
+                 │ Integration              │  testcontainers PG/Redis/RabbitMQ
                  │ (-tags integration)      │  + migration test
                  ├──────────────────────────┤
                  │ Contract (golden JSON)   │  bagian dari unit run
@@ -14013,16 +13760,15 @@ func TestPGSessionRepo(t *testing.T) {
 
 ### 14.3 Integration test (testcontainers)
 
-Build tag `//go:build integration`. Test integration adapter berada di paket adapter (`internal/postgres`, `internal/redisstore`, `internal/amqp`, `internal/objectstore`, `internal/mailer`) sebagai `*_integration_test.go`. Helper container di `internal/testutil` (file juga ber-tag `integration || e2e`; `testdata.go` §14.2 tidak ber-tag):
+Build tag `//go:build integration`. Test integration adapter berada di paket adapter (`internal/postgres`, `internal/redisstore`, `internal/amqp`, `internal/mailer`) sebagai `*_integration_test.go`. Helper container di `internal/testutil` (file juga ber-tag `integration || e2e`; `testdata.go` §14.2 tidak ber-tag):
 
 | Helper | Image | Isolasi per test |
 |---|---|---|
 | `testutil.NewPostgres(t) *pgxpool.Pool` | `pgvector/pgvector:pg17` | Container dimulai sekali per package (`sync.Once`); DB `kotoki_template` dimigrasi sekali; tiap test `CREATE DATABASE t_<uuid> TEMPLATE kotoki_template`, `DROP … WITH (FORCE)` di `t.Cleanup` |
 | `testutil.NewRedis(t) *redis.Client` | `redis:7.4` | `FLUSHALL` di awal test; test Redis tidak memakai `t.Parallel()` |
 | `testutil.NewRabbitMQ(t) (url string)` | `rabbitmq:4-management` | vhost unik `t_<uuid>` dibuat via management API, dihapus di cleanup |
-| `testutil.NewMinIO(t) (*s3.Client, bucket string)` | image MinIO sama dengan compose | bucket unik `t-<uuid>` |
 
-Percepatan lokal: bila `TEST_DATABASE_URL`, `TEST_REDIS_URL`, `TEST_RABBITMQ_URL`, atau `TEST_S3_ENDPOINT` diset (mis. menunjuk docker-compose), helper memakai service tersebut alih-alih container. Variabel `TEST_*` hanya dibaca oleh `internal/testutil`.
+Percepatan lokal: bila `TEST_DATABASE_URL`, `TEST_REDIS_URL`, atau `TEST_RABBITMQ_URL` diset (mis. menunjuk docker-compose), helper memakai service tersebut alih-alih container. Variabel `TEST_*` hanya dibaca oleh `internal/testutil`.
 
 Cakupan wajib integration:
 - Semua repository `internal/postgres` via contract suite `internal/testutil/repotest` (§14.2), plus query sqlc kompleks (pgvector retrieval, `FOR UPDATE SKIP LOCKED` outbox).
@@ -14031,8 +13777,7 @@ Cakupan wajib integration:
 - Redis: ticket GETDEL sekali pakai (D-022), rate limiter Lua (§13.4.3: burst, refill, `Retry-After`), ownership + fencing (D-084), replay stream MAXLEN/TTL (D-083), semua key punya TTL (`TTL > 0`).
 - RabbitMQ: deklarasi topologi (D-091/D-092), publisher confirm, retry 5s→…→DLQ, idempotensi consumer (D-093) dengan redelivery paksa.
 - Outbox end-to-end: insert outbox di transaksi → publisher → consumer, termasuk header `traceparent`.
-- Object storage: put/get/delete audio, cleanup berdasarkan `LastModified`.
-- Job Bab 9 §9.9.1 (nama, lock ID, interval dari tabel itu): `session_sweeper` (aturan R-9 termasuk suspend Redis ≥ 45 s & skip massal §13.4.4), `reservation_cleanup`, `transcript_retention` (180/365 hari, R-21), `audio_tmp_cleanup`, `outbox_retention`, `balance_reconcile`, `account_purge` (§13.9.3), `memory_cleanup`, `partition_maintenance` (S-6: fake clock/`now` parameter → partisi 3 bulan ke depan dibuat idempoten; partisi `session_turns` dengan batas atas < now − 180 hari − 2 jam dan `session_events` < now − 365 hari di-drop, partisi batas tidak; INSERT lintas partisi tetap benar), `session_sweeper` aturan (e) handoff (S-10: `ACTIVE` & `handoff_at < now − 30 s` → `RECONNECT_TIMEOUT`, `billable_end = handoff_at`; aturan (b) dan skip massal mengecualikan `handoff_at IS NOT NULL`) [builder call].
+- Job Bab 9 §9.9.1 (nama, lock ID, interval dari tabel itu): `session_sweeper` (aturan R-9 termasuk suspend Redis ≥ 45 s & skip massal §13.4.4), `reservation_cleanup`, `transcript_retention` (180/365 hari, R-21), `outbox_retention`, `balance_reconcile`, `account_purge` (§13.9.3), `memory_cleanup`, `partition_maintenance` (S-6: fake clock/`now` parameter → partisi 3 bulan ke depan dibuat idempoten; partisi `session_turns` dengan batas atas < now − 180 hari − 2 jam dan `session_events` < now − 365 hari di-drop, partisi batas tidak; INSERT lintas partisi tetap benar), `session_sweeper` aturan (e) handoff (S-10: `ACTIVE` & `handoff_at < now − 30 s` → `RECONNECT_TIMEOUT`, `billable_end = handoff_at`; aturan (b) dan skip massal mengecualikan `handoff_at IS NOT NULL`) [builder call].
 - Learner order-tolerant (S-19, Bab 12): kirim `evaluation.completed` sesi N+1 lalu sesi N (N `ended_at` lebih awal) → `proficiency_estimates` N tersimpan dengan `assessed_at = ended_at` N, state skill di-replay urut `assessed_at` dan **identik** dengan hasil pengiriman berurutan; `last_evidence_at` = max; redelivery duplikat tidak mengubah state [builder call].
 
 ### 14.4 Contract test
@@ -14060,7 +13805,7 @@ testdata/api/
 ### 14.5 E2E realtime dengan fake provider
 
 Lokasi `test/e2e/`, tag `e2e`. `TestMain`:
-1. Menyalakan container PG/Redis/RabbitMQ/MinIO (helper §14.3), menjalankan migration + `seed/*.sql`.
+1. Menyalakan container PG/Redis/RabbitMQ (helper §14.3), menjalankan migration + `seed/*.sql`.
 2. `go build -race` ketiga binary ke direktori temp, menjalankannya sebagai **subprocess** dengan env uji (`APP_ENV=local`, `PROVIDER_MODE=fake`, port bebas acak, `INITIAL_BALANCE_SECONDS=3600`, `ACCOUNT_PURGE_DELAY=1s`, `WS_ALLOW_EMPTY_ORIGIN=true`), menunggu `/readyz` 200 (timeout 30 s). Stdout/stderr disimpan ke file dan dicetak bila test gagal. Binary asli diuji apa adanya (wiring manual D-004 ikut teruji).
 3. Test memakai `internal/kotokiclient` (§14.11).
 4. Env subprocess dibangun eksplisit (`cmd.Env` = daftar di atas + `PATH`), **tidak** mewarisi `os.Environ()`, sehingga `.env` developer tidak memengaruhi hasil e2e.
@@ -14108,9 +13853,9 @@ Skenario wajib:
 
 ### 14.6 Provider adapter test
 
-- **Recorded (default, tanpa tag)**: setiap adapter vendor di `internal/provider/<vendor>/` (`openai` = STT + LLM + Evaluation + Embedding, `deepseek` = LLM + Evaluation, `elevenlabs` = STT + TTS, `cartesia` = STT + TTS, `azure` = pronunciation) diuji terhadap server lokal `internal/testutil/replay` yang memutar rekaman lokal paket `internal/provider/<vendor>/testdata/recordings/<case>.jsonl` (HTTP request/response, atau frame WebSocket dengan arah dan offset waktu). Tanpa library rekam-ulang pihak ketiga.
+- **Recorded (default, tanpa tag)**: setiap adapter vendor di `internal/provider/<vendor>/` (`openai` = STT + LLM + Evaluation + Embedding, `deepseek` = LLM + Evaluation, `elevenlabs` = STT + TTS, `cartesia` = STT + TTS) diuji terhadap server lokal `internal/testutil/replay` yang memutar rekaman lokal paket `internal/provider/<vendor>/testdata/recordings/<case>.jsonl` (HTTP request/response, atau frame WebSocket dengan arah dan offset waktu). Tanpa library rekam-ulang pihak ketiga.
 - Assertion wajib per adapter: request dibentuk benar (model dari config, `language=ja`, format audio PCM16 16 kHz untuk STT / PCM16 24 kHz untuk TTS, vendor/`model_name`/`VoiceID` dari `config_snapshot.character` dan `SpeakingRate` dari `voice.speaking_rate` (Bab 6 D-014, D-015); header versi `Cartesia-Version` dari `CARTESIA_VERSION`), parsing streaming (partial/final, token delta, chunk audio), pemetaan error (`401/403` → non-retryable config error; `429` → rate limited retryable; `5xx`/timeout → retryable), pembatalan (`ctx` cancel menutup stream ≤ 100 ms), timeout D-043.
-- **Merekam**: `go test -tags live ./internal/provider/<vendor> -run <Test> -record` menulis rekaman; header `Authorization` (OpenAI, DeepSeek), `xi-api-key` (ElevenLabs), `X-API-Key` (Cartesia), `Ocp-Apim-Subscription-Key` (Azure) dan query `key=` dihapus sebelum ditulis. Rekaman di-review sebelum commit (tidak boleh berisi secret/PII).
+- **Merekam**: `go test -tags live ./internal/provider/<vendor> -run <Test> -record` menulis rekaman; header `Authorization` (OpenAI, DeepSeek), `xi-api-key` (ElevenLabs), `X-API-Key` (Cartesia) dan query `key=` dihapus sebelum ditulis. Rekaman di-review sebelum commit (tidak boleh berisi secret/PII).
 - Test adapter diuji **per vendor per kapabilitas** (bukan per sakelar env): sakelar `*_ENABLED` (§13.2.8) diuji di test config/router (tepat satu STT & satu LLM aktif; ≥ 1 TTS aktif; kombinasi tidak valid → startup gagal dengan nama variabel) dan test router (breaker per (vendor, kapabilitas); tanpa fallback vendor STT/LLM).
 - Adapter `deepseek` (D-017): test recorded wajib mencakup mode `json_object` (DeepSeek tanpa `json_schema` strict) + validasi skema sisi kode + repair, serta pemetaan usage token.
 - **Live (`-tags live`)**: butuh kunci di env; dilewati (`t.Skip`) bila kunci kosong **atau** sakelar vendor/kapabilitas itu bukan `true` di env uji (test live berjalan per vendor, tidak bergantung pada vendor aktif produksi). Kriteria:
@@ -14118,7 +13863,7 @@ Skenario wajib:
   - LLM (OpenAI & DeepSeek): 10 prompt golden → teks Jepang, teks Jepang polos tanpa tag/markup (D-014) yang dipotong `SentenceParser` menjadi kalimat valid, first token < `PROVIDER_TIMEOUT_LLM_FIRST_TOKEN`.
   - TTS (per vendor: ElevenLabs dan Cartesia): teks Jepang 30 karakter → ≥ 0,5 s PCM16 24 kHz untuk setiap `characters.voice_id` (+ `voice.fallback.voice_id` bila ada) hasil seed (4 karakter) lewat `provider_name`/`model_name`-nya; dilewati bila kunci vendor kosong atau `voice_id` masih `PLACEHOLDER_…`. Benchmark TTS membandingkan vendor per karakter (Bab 8 §8.10).
   - Evaluation (OpenAI & DeepSeek): 3 sampel golden Bab 10 menghasilkan output yang lolos validator skema kode (DeepSeek via `json_object` + validasi/repair, maks 2 panggilan LLM per delivery).
-  - Embedding (OpenAI): dimensi 1536. Pronunciation (Azure): skor terisi untuk `ja_self_intro`.
+  - Embedding (OpenAI): dimensi 1536.
   - Satu run live < 5 menit.
 
 ### 14.7 Migration test
@@ -14134,7 +13879,7 @@ Skenario wajib:
 ### 14.8 Race detector, coverage, flakiness
 
 - Race detector wajib di semua run (§14.1). Temuan race = build gagal.
-- Coverage diukur dari `make test` (unit) dengan `-coverprofile=coverage.out`; integration mengukur paket adapter `postgres`/`redisstore`/`amqp`/`objectstore` secara terpisah. Ambang di `test/tools/covercheck/thresholds.txt`, dicek `go run ./test/tools/covercheck -profile coverage.out -thresholds test/tools/covercheck/thresholds.txt`:
+- Coverage diukur dari `make test` (unit) dengan `-coverprofile=coverage.out`; integration mengukur paket adapter `postgres`/`redisstore`/`amqp` secara terpisah. Ambang di `test/tools/covercheck/thresholds.txt`, dicek `go run ./test/tools/covercheck -profile coverage.out -thresholds test/tools/covercheck/thresholds.txt`:
 
 | Package | Minimum |
 |---|---|
@@ -14142,7 +13887,7 @@ Skenario wajib:
 | `internal/conversation/...` (termasuk `audio`, `protocol`) | 80% |
 | `internal/httpapi`, `internal/wsgateway` | 70% |
 | `internal/provider/...` (port + router + `fake` + adapter vendor, recorded) | 70% |
-| `internal/postgres`, `internal/redisstore`, `internal/amqp`, `internal/objectstore` (dari run integration) | 70% |
+| `internal/postgres`, `internal/redisstore`, `internal/amqp` (dari run integration) | 70% |
 | Total `internal/...` (tanpa `internal/postgres/sqlcgen` & `internal/testutil/...`) | 75% |
 
   Coverage per package tidak boleh turun > 1 poin dari `main` pada PR (dicek job unit dengan membandingkan artifact `main` terakhir).
@@ -14154,7 +13899,7 @@ Skenario wajib:
 
 1. **Baca dulu**: bab spec terkait task, register (§2), kode yang sudah ada di package yang disentuh, `go.mod`, migration terkait, test yang ada. Jangan menimpa implementasi tanpa memahaminya.
 2. **Satu task pada satu waktu**; perubahan di luar task hanya bila dependensi kecil yang wajib (sebut di laporan).
-3. **Tempatkan kode sesuai layout per fitur** (D-005, §2.2): tipe domain, `Service`, dan interface port di `internal/<fitur>/` (port didefinisikan di paket pemakai, sekecil mungkin); implementasi repository di `internal/postgres/<fitur>_repo.go` (+ query `db/queries/<fitur>.sql` → `internal/postgres/sqlcgen`); adapter Redis/RabbitMQ/S3/email di `internal/redisstore`, `internal/amqp`, `internal/objectstore`, `internal/mailer`; adapter vendor di `internal/provider/<vendor>`; handler REST di `internal/httpapi/<fitur>_handler.go`; WebSocket di `internal/wsgateway`; job terjadwal di `internal/jobs/<job>.go`; consumer RabbitMQ di `internal/<fitur>/consumer.go`; wiring hanya di `cmd/*/main.go`. Ketergantungan antar paket fitur mengikuti arah §2.2 aturan 3 (asiklik). Paket fitur baru → tambahkan ke daftar `files` aturan depguard §14.9.5 di PR yang sama.
+3. **Tempatkan kode sesuai layout per fitur** (D-005, §2.2): tipe domain, `Service`, dan interface port di `internal/<fitur>/` (port didefinisikan di paket pemakai, sekecil mungkin); implementasi repository di `internal/postgres/<fitur>_repo.go` (+ query `db/queries/<fitur>.sql` → `internal/postgres/sqlcgen`); adapter Redis/RabbitMQ/email di `internal/redisstore`, `internal/amqp`, `internal/mailer`; adapter vendor di `internal/provider/<vendor>`; handler REST di `internal/httpapi/<fitur>_handler.go`; WebSocket di `internal/wsgateway`; job terjadwal di `internal/jobs/<job>.go`; consumer RabbitMQ di `internal/<fitur>/consumer.go`; wiring hanya di `cmd/*/main.go`. Ketergantungan antar paket fitur mengikuti arah §2.2 aturan 3 (asiklik). Paket fitur baru → tambahkan ke daftar `files` aturan depguard §14.9.5 di PR yang sama.
 4. **TDD**: tulis test yang gagal (red) untuk perilaku task → implementasi minimal (green) → refactor dengan test tetap hijau. Untuk bug: test reproduksi dulu. Perilaku dari spec (angka, transisi, kode error) MUST punya test yang menyebut ID keputusan di nama test atau komentar (mis. `// D-077`).
 5. Commit kecil per langkah bermakna, format Conventional Commits (scope = nama paket): `feat(session): …`, `fix(conversation): …`, `test(balance): …`, `chore(ci): …`.
 
@@ -14163,7 +13908,7 @@ Skenario wajib:
 - [ ] `go build ./...` sukses; `make arch-check` sukses (`CGO_ENABLED=0 go build ./cmd/api ./cmd/worker` + graf impor `cmd/api`/`cmd/worker` bebas `internal/conversation/audio` dan library cgo, §14.9.5).
 - [ ] `go vet ./...` bersih.
 - [ ] `golangci-lint run` 0 issue (konfigurasi §14.9.5, termasuk aturan layout `depguard`). `//nolint` hanya dengan nama linter dan alasan: `//nolint:gosec // G404: jitter non-kriptografis`.
-- [ ] `make test` hijau (dengan `-race`). `make test-integration` hijau bila menyentuh `internal/postgres`, `internal/redisstore`, `internal/amqp`, `internal/objectstore`, `internal/mailer`, `internal/testutil/repotest`, migration, consumer (`<fitur>/consumer.go`), atau `internal/jobs`. `make test-e2e` hijau bila menyentuh `internal/conversation/...`, `internal/provider/...`, `internal/wsgateway`, consumer, `internal/jobs`, atau wiring `cmd/*`.
+- [ ] `make test` hijau (dengan `-race`). `make test-integration` hijau bila menyentuh `internal/postgres`, `internal/redisstore`, `internal/amqp`, `internal/mailer`, `internal/testutil/repotest`, migration, consumer (`<fitur>/consumer.go`), atau `internal/jobs`. `make test-e2e` hijau bila menyentuh `internal/conversation/...`, `internal/provider/...`, `internal/wsgateway`, consumer, `internal/jobs`, atau wiring `cmd/*`.
 - [ ] Coverage memenuhi §14.8.
 - [ ] Endpoint REST baru: didaftarkan di `httpapi/{fitur}_routes.go` pada grup yang benar, memakai `Handle`/`HandleNoBody` dengan DTO bertipe di `{fitur}_dto.go`, `TestRouteTable` dan golden `testdata/api/rest/**` diperbarui (Bab 5 §5.8.6).
 - [ ] Tracing & error (§13.7.2.1–13.7.2.2): setiap method publik service/repository/adapter baru memanggil `otel.Start` + `defer otel.End(span, &err)`; error dari library luar dibungkus `errs.Wrap` di adapter; error bisnis dibuat `errs.New`; tidak ada log ganda di layer bawah.
@@ -14176,12 +13921,12 @@ Skenario wajib:
 
 #### 14.9.3 Larangan
 
-1. **Library**: hanya allowlist = D-003 sebagaimana diperbarui R-30: baseline D-003 (termasuk `go.opentelemetry.io/otel/...` SDK + OTLP exporter **untuk trace saja**, dan golang-migrate — boleh dipakai sebagai library `github.com/golang-migrate/migrate/v4` di migration test) + `github.com/prometheus/client_golang` (satu-satunya library metrik), `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp`, `golang.org/x/sync` (errgroup, semaphore), `github.com/pgvector/pgvector-go`, modul `github.com/testcontainers/testcontainers-go/modules/{postgres,redis,rabbitmq,minio}`. **SDK vendor provider dilarang** — adapter Bab 8 memakai HTTP/WebSocket langsung (R-30). Library lain **dilarang** sebelum register diperbarui.
+1. **Library**: hanya allowlist = D-003 sebagaimana diperbarui R-30: baseline D-003 (termasuk `go.opentelemetry.io/otel/...` SDK + OTLP exporter **untuk trace saja**, dan golang-migrate — boleh dipakai sebagai library `github.com/golang-migrate/migrate/v4` di migration test) + `github.com/prometheus/client_golang` (satu-satunya library metrik), `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp`, `golang.org/x/sync` (errgroup, semaphore), `github.com/pgvector/pgvector-go`, modul `github.com/testcontainers/testcontainers-go/modules/{postgres,redis,rabbitmq}`. **SDK vendor provider dilarang** — adapter Bab 8 memakai HTTP/WebSocket langsung (R-30). Library lain **dilarang** sebelum register diperbarui.
 2. Tidak boleh hardcode secret, API key, nama model, voice ID, atau URL webhook. Model & voice hanya dari config/DB. CI `make modelname-check` gagal bila literal string di `internal/`/`cmd/` (non-test, non-testdata) cocok dengan `(gpt-|o[0-9]-|deepseek-|claude-|eleven_|scribe|ink-|sonic|text-embedding-)`, kecuali nilai default model di `internal/platform/config` yang ditetapkan Bab 8 §8.5.1 (placeholder sampai benchmark) dan `deploy/config/provider-profile.env`.
 3. Tidak boleh `os.Getenv` di luar `internal/platform/config` dan `internal/testutil`; `time.Now()` di paket fitur (`internal/<fitur>`, kecuali adapter vendor `internal/provider/<vendor>`; pakai `clock.Clock`); `fmt.Print*`/`log.*` untuk logging (pakai `slog`) di luar `cmd/` dan `test/`.
 4. **Aturan layout (D-005, §2.2; ditegakkan `depguard` §14.9.5 + `make arch-check`)**:
-   - Paket fitur (`auth`, `balance`, `session`, `content`, `conversation`, `prompt`, `provider` (port, router, breaker, `fake`, `pricing`), `evaluation`, `memory`, `learner`, `summary`, `admin`, `events`) tidak boleh mengimpor paket adapter/handler (`internal/postgres`, `internal/redisstore`, `internal/amqp`, `internal/objectstore`, `internal/mailer`, `internal/httpapi`, `internal/wsgateway`, `internal/jobs`, `internal/provider/{elevenlabs,cartesia,openai,deepseek,azure}`) maupun library infrastruktur (`chi`, `pgx`, `pgvector-go`, `go-redis`, `amqp091`, `coder/websocket`, `aws-sdk-go-v2`). Tipe pgvector/pgx hanya hidup di `internal/postgres` (memory memakai `[]float32`).
-   - Handler (`httpapi`, `wsgateway`) hanya decode → panggil `Service` → encode: tidak mengimpor `pgx`, `go-redis`, `amqp091`, `aws-sdk`, maupun paket adapter penyimpanan; dependensi lewat port.
+   - Paket fitur (`auth`, `balance`, `session`, `content`, `conversation`, `prompt`, `provider` (port, router, breaker, `fake`, `pricing`), `evaluation`, `memory`, `learner`, `summary`, `admin`, `events`) tidak boleh mengimpor paket adapter/handler (`internal/postgres`, `internal/redisstore`, `internal/amqp`, `internal/mailer`, `internal/httpapi`, `internal/wsgateway`, `internal/jobs`, `internal/provider/{elevenlabs,cartesia,openai,deepseek}`) maupun library infrastruktur (`chi`, `pgx`, `pgvector-go`, `go-redis`, `amqp091`, `coder/websocket`). Tipe pgvector/pgx hanya hidup di `internal/postgres` (memory memakai `[]float32`).
+   - Handler (`httpapi`, `wsgateway`) hanya decode → panggil `Service` → encode: tidak mengimpor `pgx`, `go-redis`, `amqp091`, maupun paket adapter penyimpanan; dependensi lewat port.
    - Adapter tidak mengimpor handler atau `jobs`.
    - Hanya `internal/conversation/audio` yang mengimpor library cgo (`gopkg.in/hraban/opus.v2`, `github.com/maxhawkins/go-webrtcvad`); `internal/conversation/audio` hanya boleh diimpor dari graf realtime (`cmd/realtime`, `cmd/kotoki-cli`, `internal/conversation/...`, `internal/wsgateway`, `internal/kotokiclient/...`). Adapter vendor `internal/provider/<vendor>` MUST NOT mengimpornya (adapter ikut di-link ke `cmd/worker`); resample PCM memakai util Go murni `internal/provider/pcm.go` (Bab 8) dan dari test. `cmd/api` & `cmd/worker` MUST dapat di-build `CGO_ENABLED=0` (§2.2 aturan 5).
    - Kode non-test tidak mengimpor `internal/testutil/...`, `testify`, atau `testcontainers-go`.
@@ -14273,7 +14018,6 @@ linters:
             - "**/internal/provider/**"
             - "!**/internal/provider/openai/**"
             - "!**/internal/provider/deepseek/**"
-            - "!**/internal/provider/azure/**"
             - "**/internal/evaluation/**"
             - "**/internal/memory/**"
             - "**/internal/learner/**"
@@ -14287,11 +14031,9 @@ linters:
             - {pkg: "github.com/redis/go-redis/v9", desc: "D-005: Redis hanya di internal/redisstore"}
             - {pkg: "github.com/rabbitmq/amqp091-go", desc: "D-005: RabbitMQ hanya di internal/amqp"}
             - {pkg: "github.com/coder/websocket", desc: "D-005: WebSocket hanya di wsgateway, provider/<vendor>, kotokiclient"}
-            - {pkg: "github.com/aws/aws-sdk-go-v2", desc: "D-005: S3 hanya di internal/objectstore"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/postgres", desc: "D-005: pakai port Repository/Store milik fitur"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/redisstore", desc: "D-005: pakai port milik fitur"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/amqp", desc: "D-005: pakai events.OutboxWriter"}
-            - {pkg: "github.com/nabePi/kotoki-backend/internal/objectstore", desc: "D-005: pakai port milik fitur"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/mailer", desc: "D-005: pakai auth.Mailer"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/httpapi", desc: "D-005: handler bergantung ke fitur, bukan sebaliknya"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/wsgateway", desc: "D-005: handler bergantung ke fitur, bukan sebaliknya"}
@@ -14300,7 +14042,6 @@ linters:
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/cartesia", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/openai", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/deepseek", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
-            - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/azure", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
         # 2. Handler: decode → Service → encode; tanpa akses langsung ke penyimpanan/broker.
         handler-thin:
           list-mode: lax
@@ -14310,11 +14051,9 @@ linters:
             - {pkg: "github.com/pgvector/pgvector-go", desc: "§2.2 aturan 1"}
             - {pkg: "github.com/redis/go-redis/v9", desc: "§2.2 aturan 1: lewat port (mis. Limiter)"}
             - {pkg: "github.com/rabbitmq/amqp091-go", desc: "§2.2 aturan 1"}
-            - {pkg: "github.com/aws/aws-sdk-go-v2", desc: "§2.2 aturan 1"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/postgres", desc: "§2.2 aturan 1: handler tanpa SQL"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/redisstore", desc: "§2.2 aturan 1: lewat port"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/amqp", desc: "§2.2 aturan 1"}
-            - {pkg: "github.com/nabePi/kotoki-backend/internal/objectstore", desc: "§2.2 aturan 1"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/jobs", desc: "§2.2 aturan 1"}
         # 3. Adapter tidak bergantung pada handler/entrypoint.
         adapter-no-handler:
@@ -14323,13 +14062,11 @@ linters:
             - "**/internal/postgres/**"
             - "**/internal/redisstore/**"
             - "**/internal/amqp/**"
-            - "**/internal/objectstore/**"
             - "**/internal/mailer/**"
             - "**/internal/provider/elevenlabs/**"
             - "**/internal/provider/cartesia/**"
             - "**/internal/provider/openai/**"
             - "**/internal/provider/deepseek/**"
-            - "**/internal/provider/azure/**"
           deny:
             - {pkg: "github.com/nabePi/kotoki-backend/internal/httpapi", desc: "D-005"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/wsgateway", desc: "D-005"}
@@ -14385,7 +14122,7 @@ linters:
       - path-except: 'internal/(auth|balance|session|content|conversation|prompt|provider|evaluation|memory|learner|summary|admin|events)/'
         linters: [forbidigo]
         text: 'time\.Now'
-      - path: 'internal/provider/(elevenlabs|cartesia|openai|deepseek|azure)/'
+      - path: 'internal/provider/(elevenlabs|cartesia|openai|deepseek)/'
         linters: [forbidigo]
         text: 'time\.Now'
       - path-except: 'internal/(auth|balance|session|content|conversation|prompt|provider|evaluation|memory|learner|summary|admin|events)/'
@@ -14464,35 +14201,6 @@ services:
       timeout: 5s
       retries: 30
 
-  minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    command: ["server", "/data", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: kotoki
-      MINIO_ROOT_PASSWORD: kotoki-minio-secret
-    ports:
-      - "9000:9000"     # S3 API
-      - "9001:9001"     # console
-    volumes: ["miniodata:/data"]
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
-  minio-init:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z   # image server juga berisi mc
-    depends_on:
-      minio: {condition: service_healthy}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >
-        mc alias set local http://minio:9000 kotoki kotoki-minio-secret &&
-        mc mb --ignore-existing local/kotoki-audio-local &&
-        (mc ilm rule ls local/kotoki-audio-local | grep -q audio/tmp ||
-         mc ilm rule add --expire-days 1 --prefix audio/tmp/ local/kotoki-audio-local)
-    restart: "no"
-
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.120.0
     profiles: ["observability"]
@@ -14514,11 +14222,10 @@ services:
 volumes:
   pgdata:
   rabbitmqdata:
-  miniodata:
   lgtmdata:
 ```
 
-Image MinIO dipin ke tag RELEASE; bila tag tidak tersedia saat bootstrap, pin ke tag RELEASE terakhir yang dapat di-pull dan catat di `docs/implementation-deviations.md` (D-NEW-13-20). Aplikasi tidak dijalankan di compose; dijalankan di host via `make run-*` agar iterasi cepat.
+Aplikasi tidak dijalankan di compose; dijalankan di host via `make run-*` agar iterasi cepat.
 
 `deploy/docker/otel-collector.yaml`:
 
@@ -14577,14 +14284,6 @@ DB_URL=postgres://kotoki:kotoki@localhost:5432/kotoki?sslmode=disable
 REDIS_URL=redis://localhost:6379/0
 RABBITMQ_URL=amqp://kotoki:kotoki@localhost:5672/
 
-S3_ENDPOINT=http://localhost:9000
-S3_REGION=us-east-1
-S3_BUCKET_AUDIO=kotoki-audio-local
-S3_ACCESS_KEY_ID=kotoki
-S3_SECRET_ACCESS_KEY=kotoki-minio-secret
-S3_USE_PATH_STYLE=true
-S3_SSE=
-
 # ---- Auth & akun ----
 AUTH_JWT_SECRET=local-dev-only-0123456789abcdef0123456789abcdef
 AUTH_REFRESH_COOKIE_SECURE=false
@@ -14611,8 +14310,6 @@ FAKE_PRIMARY_TTS_LATENCY_MS=300
 # CARTESIA_API_KEY=
 # CARTESIA_BASE_URL=
 # CARTESIA_VERSION=
-# AZURE_SPEECH_KEY=
-# AZURE_SPEECH_ENDPOINT=https://<resource>.cognitiveservices.azure.com
 # Sakelar vendor (Bab 13 §13.2.8): STT tepat satu true; LLM tepat satu true; TTS minimal satu true.
 # OPENAI_STT_ENABLED=true
 # ELEVENLABS_STT_ENABLED=false
@@ -14631,7 +14328,6 @@ FAKE_PRIMARY_TTS_LATENCY_MS=300
 # DEEPSEEK_EVALUATION_MODEL=
 # OPENAI_EMBEDDING_MODEL=
 # OPENAI_EMBEDDING_ENABLED=true          # wajib true; OPENAI_API_KEY selalu wajib di mode real (embedding)
-# AZURE_PRONUNCIATION_ENABLED=true
 # LLM_MAX_OUTPUT_TOKENS=300
 # LLM_TEMPERATURE=0.8
 
@@ -14783,7 +14479,7 @@ pkg-config --modversion opus opusfile   # libopus & libopusfile terpasang
 make env              # .env dari .env.example (PROVIDER_MODE=fake, INITIAL_BALANCE_SECONDS=3600)
 
 # 3. dependency
-make up               # postgres, redis, rabbitmq, minio (+ bucket & lifecycle) sampai healthy
+make up               # postgres, redis, rabbitmq sampai healthy
 
 # 4. skema & konten
 make migrate-up
@@ -14796,7 +14492,7 @@ make run-worker       # ops :9092
 
 # 6. akun & percakapan
 make cli
-./bin/kotoki-cli register --email dev@example.test --password 'dev-password-123' --audio-consent
+./bin/kotoki-cli register --email dev@example.test --password 'dev-password-123'
 ./bin/kotoki-cli login    --email dev@example.test --password 'dev-password-123'
 ./bin/kotoki-cli converse --duration 300 --start-mode USER_FIRST \
     --wav testdata/audio/ja_self_intro.wav,testdata/audio/ja_question.wav \
@@ -14809,7 +14505,7 @@ ls out/first-run                      # turn-001-gen-1.wav, turn-002-gen-2.wav, 
 
 Kriteria "berhasil": langkah 6 mencetak event server berurutan, ringkasan latensi per turn, file WAV balasan berisi audio fake TTS, sesi berakhir `COMPLETED`, dan langkah 7 menampilkan evaluasi `COMPLETED`. Total waktu dari clone ≤ 15 menit pada mesin dengan image Docker belum ter-cache.
 
-Pemeriksaan cepat bila gagal: `curl localhost:9090/readyz` (api), `:9091/readyz` (realtime), `:9092/readyz` (worker); UI RabbitMQ `http://localhost:15672`; MinIO console `http://localhost:9001`; trace (Tempo), metrik (Prometheus) dan dashboard (bila `make up-obs` + `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317`) di Grafana `http://localhost:3000` → Explore.
+Pemeriksaan cepat bila gagal: `curl localhost:9090/readyz` (api), `:9091/readyz` (realtime), `:9092/readyz` (worker); UI RabbitMQ `http://localhost:15672`; trace (Tempo), metrik (Prometheus) dan dashboard (bila `make up-obs` + `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317`) di Grafana `http://localhost:3000` → Explore.
 
 ### 14.11 `cmd/kotoki-cli`
 
@@ -14885,7 +14581,7 @@ Flag global (juga dari env): `--api-url` (`KOTOKI_CLI_API_URL`, default `http://
 
 | Subcommand | Flag | Fungsi |
 |---|---|---|
-| `register` | `--email`, `--password`, `--display-name`, `--audio-consent` (bool, default `false`), `--terms-version` (default: diambil dari `GET /api/v1/auth/terms`) | Registrasi (menyetujui terms versi saat ini) |
+| `register` | `--email`, `--password`, `--display-name`, `--terms-version` (default: diambil dari `GET /api/v1/auth/terms`) | Registrasi (menyetujui terms versi saat ini) |
 | `login` | `--email`, `--password` | Login, simpan token & cookie refresh |
 | `catalog` | — | Daftar karakter & scenario aktif (ID, nama) |
 | `balance` | — | Saldo |
@@ -15058,7 +14754,7 @@ Branch protection `main`: wajib lulus `lint`, `unit`, `integration`, `e2e`, `bui
 
 ### Keputusan bab ini
 
-- D-NEW-14-1: Allowlist library = D-003 yang diperbarui R-30 (`prometheus/client_golang`, `otelhttp`, `golang.org/x/sync`, `pgvector-go`, modul testcontainers postgres/redis/rabbitmq/minio) + golang-migrate sebagai library di migration test; layout §2.2 (`internal/kotokiclient/`, `internal/testutil/fakes/`, `internal/testutil/repotest/`, `testdata/audio/`, `testdata/api/`, `test/e2e/`, `test/chaos/`, `test/tools/`). Tanpa SDK vendor, tanpa mock generator, tanpa library CLI, tanpa library rekam HTTP.
+- D-NEW-14-1: Allowlist library = D-003 yang diperbarui R-30 (`prometheus/client_golang`, `otelhttp`, `golang.org/x/sync`, `pgvector-go`, modul testcontainers postgres/redis/rabbitmq) + golang-migrate sebagai library di migration test; layout §2.2 (`internal/kotokiclient/`, `internal/testutil/fakes/`, `internal/testutil/repotest/`, `testdata/audio/`, `testdata/api/`, `test/e2e/`, `test/chaos/`, `test/tools/`). Tanpa SDK vendor, tanpa mock generator, tanpa library CLI, tanpa library rekam HTTP.
 - D-NEW-14-2: Library klien uji `internal/kotokiclient` (REST + WS + audio + pacer + skrip percakapan), dipakai `cmd/kotoki-cli`, `test/e2e`, dan `test/load`; client memakai tipe dari `internal/conversation/protocol`.
 - D-NEW-14-3: `kotoki-cli` tidak punya mode input teks (protokol hanya audio); uji tanpa mikrofon memakai fixture WAV 48 kHz mono di `testdata/audio` dengan pasangan `.txt` dan opsional `.partials.json`.
 - D-NEW-14-4: Build tag test: `integration`, `e2e`, `live`; `-race` wajib di semua run; ambang coverage §14.8.
@@ -15087,7 +14783,7 @@ File di `migrations/` memakai format golang-migrate `NNNNNN_name.up.sql` / `.dow
 | No | Nama file | Tabel / objek | DDL di |
 |---|---|---|---|
 | 000001 | `extensions` | `CREATE EXTENSION vector`, `citext` | §15.1 (dua baris) |
-| 000002 | `users` | `users` (termasuk kolom consent & deletion, R-19) | Bab 3 §3.3 |
+| 000002 | `users` | `users` (termasuk kolom terms & deletion) | Bab 3 §3.3 |
 | 000003 | `auth_tokens` | `refresh_tokens`, `password_reset_tokens` | Bab 3 §3.3 |
 | 000004 | `balance_accounts` | `balance_accounts` | Bab 4 §4.3 |
 | 000005 | `topics` | `topics` | Bab 6 §6.4 |
@@ -15140,8 +14836,8 @@ Butir-butir ini dipilih saat merapikan dokumen dan sudah dipakai di seluruh spec
 
 1. **Aturan charge sesi gagal (D-036).** Jika sesi berakhir karena kegagalan provider/server: aktif < 60 detik → gratis; selain itu tagihan dikurangi 30 detik.
 2. **Timer tetap berjalan saat disconnect (D-055)**, tetapi detik disconnect tidak ditagih. Reconnect window 30 detik.
-3. **Retensi data (R-21, D-099).** Transcript 180 hari, log event sesi 365 hari, audio sementara ≤ 24 jam dan hanya dengan `audio_consent`.
-4. **Pronunciation memakai Azure Speech (D-040).** Butuh akun Azure dan biaya tambahan. Tanpa Azure, skor pronunciation selalu `UNAVAILABLE`, tetapi fitur lain tetap berjalan.
+3. **Retensi data (R-21, D-099).** Transcript 180 hari, log event sesi 365 hari, user audio tidak pernah disimpan.
+4. Dihapus dari v1 (pronunciation ditunda ke pasca-v1).
 5. **Region deployment Jakarta, fallback Singapura (D-NEW-13-17).**
 6. **Satu sesi aktif per user (D-NEW-5-1).**
 7. **Login hanya email + password (D-020).** Belum ada login sosial atau OTP telepon.
@@ -15164,7 +14860,7 @@ Butir-butir ini dipilih saat merapikan dokumen dan sudah dipakai di seluruh spec
 | 10 | Post-Session Evaluation | `internal/evaluation` |
 | 11 | Memory | `internal/memory` |
 | 12 | Learner Profile, Proficiency & Adaptive Difficulty | `internal/learner` |
-| 13 | Infrastructure, Security, Privacy & Operations (**katalog env var**, k8s, load test) | `internal/platform`, `internal/objectstore`, `deploy/`, `test/load`, `test/chaos` |
+| 13 | Infrastructure, Security, Privacy & Operations (**katalog env var**, k8s, load test) | `internal/platform`, `deploy/`, `test/load`, `test/chaos` |
 | 14 | Testing Strategy, Local Dev & Tooling (aturan agent AI coding, **depguard layout**, CI) | `internal/testutil` (+ `fakes`, `repotest`), `internal/kotokiclient`, `cmd/kotoki-cli`, `testdata/`, `test/e2e`, `test/tools` |
 | 15 | Urutan migration, status keputusan, indeks | `migrations/`, `internal/postgres` (+ `sqlcgen`), `db/queries/` |
 
