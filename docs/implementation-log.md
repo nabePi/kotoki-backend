@@ -443,3 +443,11 @@ Tanggal: 2026-10-14
 - go test -tags integration ./internal/postgres -run 'PGAudit|PGAdmin|PGSessionGate|PGTicket' (Podman) — PASS: suite audit, append-only (23001), grant + audit atomik (audit ditolak DB → saldo kembali), alur hapus akun (status DELETED, token terhapus, account & ledger utuh, reconcile kosong), gate tanpa sesi, stub CancelReserved, reader `ErrSessionNotFound`
 ### Sisa (M3)
 - Task M3 wajib mengganti isi `CancelReserved` dengan `session.Service.CancelInTx` dan membalik `TestPGSessionGateCancelReservedNotWired`
+
+## M2-T19 — platform/ratelimit: Policy, Catalog, limiter lokal
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/platform/ratelimit`: `Policy` (+ `RatePerMs`), `Decision`, port `Limiter`, `Catalog` 15 policy (13 dari M2 + `ws_connect_ip`, `ws_attach_user` untuk M5, semuanya dari §13.4.3), `Get` (panic bila nama tak dikenal), `SubjectEmail`/`SubjectIP`, `Local` (token bucket in-memory + LRU, jam dari `clock.Clock`)
+### Test
+- go test ./internal/platform/ratelimit -race — PASS
