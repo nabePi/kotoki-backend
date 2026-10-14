@@ -39,3 +39,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - Rotasi koneksi STT membuka koneksi baru tanpa melewati breaker/semaphore lagi (sesi tetap memegang satu slot semaphore dan satu keputusan breaker dari `Open` awal); pseudocode §8.5.8 menulis "breaker+semaphore" untuk `Open` rotasi. Kegagalan `Open` rotasi tetap menjadi `STTError` dan masuk hitungan breaker lewat `ReportFinal`/`Record` hanya bila berupa ERROR vendor.
 - `fake`: `CapConfig.HangAfter` / `FAKE_<INST>_<CAP>_HANG_AFTER` / fault `after_events` ditambahkan agar skenario S-7 (macet setelah N delta) bisa diuji.
 - Wiring `RouterConfig`/`fake.Config` ke `platform/config` dan `cmd/*`, handler `GET /internal/providers` (hanya `HealthSnapshot` yang ada), serta observasi `kotoki_session_cost_usd` saat sesi terminal menjadi tugas M5/M6/M7.
+
+## M3-T7 — validator konten
+- Key prompt tanpa versi `PUBLISHED` di `ValidateCatalog`: ERROR hanya untuk `CONVERSATION`; WARNING `missing_published_prompt` untuk `OPENING`, `SUMMARY`, `EVALUATION`, `MEMORY_EXTRACTION` (versi SUMMARY/EVALUATION/MEMORY_EXTRACTION dan fixture-nya ditambahkan M7/M8; OPENING boleh tidak ada karena fallback `opening_line`, S-2).
+- `provider_not_configured` (karakter `ACTIVE` dengan vendor TTS tidak enabled) berlaku di mode fake maupun real, mengikuti brief plan (spec §6.10.1 menyebut hanya mode real).
+- Normalisasi huruf besar nama vendor diekspos sebagai `content.NormalizeCharacter` (validator mengembalikan daftar isu, bukan nilai); `ParseVoice` dan `ParseLLMParams` memeriksa key tak dikenal dari JSON mentah (`voice.providers`, `model` di `llm_params`, dst.) karena tipe Go tidak bisa memuat key asing.

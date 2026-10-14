@@ -816,3 +816,12 @@ Tanggal: 2026-10-14
 - `internal/content/{types,character}.go`: tipe §6.5 (Topic, Scenario, ScenarioVersion, PromptVersion + `Template()`, Character/Voice/TTSBinding, CharacterSnapshot/SessionSnapshot), `ScenarioFormality`, `DifficultyBand`, `DefaultStyle`, `SpeakingRate` (clamp 0,80–1,05), `NormalizeProviderName`, `MarshalJSONB`/`ParseSnapshot` (key tak dikenal ditolak); `content` hanya mengimpor `prompt`
 ### Test
 - `types_test.go` — PASS; `make arch-check` bersih
+
+## M3-T7 — `content.Validator`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/content/validator.go`: `Issue`, `Validator` (`ValidateDraft`/`ValidatePublish`/`ValidateCharacter`/`ValidateCatalog`), aturan scenario/karakter/prompt §6.10.1 (dry-run render semua fixture, JSON Schema 2020-12 via `jsonschema/v6`, batas render 12.000 karakter), `NormalizeCharacter`, `ParseVoice`, `ParseLLMParams`, `Observer`/`NopObserver`, `ReportCatalog`
+- `internal/platform/metrics/content.go`: `metrics.Content` (`kotoki_content_resolve_errors_total{code}`, `kotoki_content_voice_fallback_missing_total{character}`, `kotoki_content_validation_issues{severity}`)
+### Test
+- `validator_test.go` (satu kasus per aturan), `metrics/content_test.go` — PASS
