@@ -4476,7 +4476,7 @@ COMMIT
 invalidate cache lokal
 ```
 
-`PATCH` karakter: satu transaksi `SELECT … FOR UPDATE` → merge field → `ValidateCharacter` (ERROR → ROLLBACK, 422) → `UPDATE characters … updated_at = now()` → `admin_audit_logs` (`CONTENT_CHARACTER_UPDATED`, `metadata={changed_fields:[…]}` — nilai `voice_id` tidak dicatat) → COMMIT → invalidasi cache.
+`PATCH` karakter: satu transaksi `SELECT … FOR UPDATE` → merge field → `ValidateCharacter` (ERROR → ROLLBACK, 422) → `UPDATE characters … updated_at = now()` → `admin_audit_logs` (`CHARACTER_UPDATED`, `metadata={changed_fields:[…]}` — nilai `voice_id` tidak dicatat) → COMMIT → invalidasi cache.
 
 Audit action lain: `CONTENT_VERSION_CREATED`, `CONTENT_VERSION_RETIRED`, `CONTENT_VERSION_DELETED`, `CONTENT_STATUS_CHANGED`.
 
