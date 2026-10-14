@@ -166,6 +166,9 @@ func TestBalanceLedgerShapes(t *testing.T) {
 		_, err = e.pool.Exec(ctx, `DELETE FROM balance_ledger WHERE id=$1`, r["id"])
 		testutil.RequirePgErr(t, err, "23001", "")
 		require.True(t, strings.Contains(err.Error(), "append-only"))
+		_, err = e.pool.Exec(ctx, `TRUNCATE balance_ledger`)
+		testutil.RequirePgErr(t, err, "23001", "")
+		require.Contains(t, err.Error(), "append-only")
 	})
 }
 

@@ -22,6 +22,7 @@ const (
 	pgDeadlock      = "40P01"
 	pgSerialization = "40001"
 	pgLockTimeout   = "55P03"
+	pgStatementTO   = "57014" // query_canceled, raised by statement_timeout
 )
 
 // Store owns the pool and runs business transactions. Per-feature views
@@ -132,10 +133,19 @@ func retryable(err error) bool {
 
 // WithinTx runs fn in a READ COMMITTED transaction with SET LOCAL timeouts. It
 // rolls back on error or panic (the panic propagates) and retries the whole
-// transaction on deadlock (40P01) or serialization failure (40001).
+// transaction on deadlock (40P01) or serialization failure (40001). Because fn can run
+// more than once, it must be idempotent in memory: reset any state it captures from the
+// outside at the top of the closure. Contention that outlasts the retries, lock timeouts
+// and statement timeouts surface as SERVICE_UNAVAILABLE (transient), not INTERNAL_ERROR.
 func (s *Store) WithinTx(ctx context.Context, fn func(ctx context.Context, tx *Tx) error) (err error) {
 	ctx, span := otel.Start(ctx, "db.tx")
 	defer otel.End(span, &err)
+	defer func() {
+		if r := recover(); r != nil {
+			err = errs.New(errs.CodeInternalError, "panic inside transaction") // so the span ends as an error
+			panic(r)
+		}
+	}()
 
 	for attempt := 0; ; attempt++ {
 		err = s.runOnce(ctx, fn)
@@ -144,7 +154,7 @@ func (s *Store) WithinTx(ctx context.Context, fn func(ctx context.Context, tx *T
 		}
 		if attempt >= len(s.backoff) {
 			if errs.CodeOf(err) == "" {
-				err = errs.Wrap(err, errs.CodeInternalError, "transaction retries exhausted")
+				err = errs.Wrap(err, errs.CodeServiceUnavailable, "transaction retries exhausted")
 			}
 			break
 		}
@@ -154,8 +164,8 @@ func (s *Store) WithinTx(ctx context.Context, fn func(ctx context.Context, tx *T
 			break
 		}
 	}
-	if pgCode(err) == pgLockTimeout && errs.CodeOf(err) == "" {
-		err = errs.Wrap(err, errs.CodeServiceUnavailable, "lock timeout")
+	if c := pgCode(err); (c == pgLockTimeout || c == pgStatementTO) && errs.CodeOf(err) == "" {
+		err = errs.Wrap(err, errs.CodeServiceUnavailable, "database timeout")
 	}
 	return err
 }

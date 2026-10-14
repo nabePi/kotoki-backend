@@ -57,18 +57,59 @@ func (h *traceHook) fail(cmd redis.Cmder, err error) error {
 			h.m.PoolTimeout()
 		}
 	}
-	wrapped := errs.Wrap(err, errs.CodeServiceUnavailable, "redis command failed")
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err // the caller gave up; not a Redis failure
+	}
+	code := errs.CodeServiceUnavailable
+	if isServerError(err) && !isAvailabilityError(err) {
+		code = errs.CodeInternalError // WRONGTYPE, script errors: a bug on our side, not an outage
+	}
+	wrapped := errs.Wrap(err, code, "redis command failed")
 	cmd.SetErr(wrapped)
 	return wrapped
+}
+
+func isServerError(err error) bool {
+	var re redis.Error
+	return errors.As(err, &re)
+}
+
+// isAvailabilityError reports server replies that mean "retry later" rather than "bad command".
+func isAvailabilityError(err error) bool {
+	msg := err.Error()
+	for _, p := range []string{"LOADING", "READONLY", "CLUSTERDOWN", "TRYAGAIN", "MASTERDOWN", "BUSY", "NOREPLICAS", "MOVED", "ASK"} {
+		if strings.HasPrefix(msg, p+" ") || msg == p {
+			return true
+		}
+	}
+	return false
+}
+
+// commandKey returns the first key of cmd; EVAL/EVALSHA carry it after the script and numkeys.
+func commandKey(cmd redis.Cmder) (string, bool) {
+	args := cmd.Args()
+	switch strings.ToLower(cmd.Name()) {
+	case "eval", "evalsha", "eval_ro", "evalsha_ro":
+		if len(args) > 3 {
+			if n, ok := args[2].(int); ok && n > 0 {
+				key, ok := args[3].(string)
+				return key, ok
+			}
+		}
+		return "", false
+	}
+	if len(args) > 1 {
+		key, ok := args[1].(string)
+		return key, ok
+	}
+	return "", false
 }
 
 func (h *traceHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
 		attrs := []attribute.KeyValue{attribute.String("db.system", "redis")}
-		if args := cmd.Args(); len(args) > 1 {
-			if key, ok := args[1].(string); ok {
-				attrs = append(attrs, attribute.String("kotoki.redis.key_prefix", KeyPrefix(key)))
-			}
+		if key, ok := commandKey(cmd); ok {
+			attrs = append(attrs, attribute.String("kotoki.redis.key_prefix", KeyPrefix(key)))
 		}
 		ctx, span := otel.Start(ctx, "redis."+strings.ToUpper(cmd.Name()), attrs...)
 		err := h.fail(cmd, next(ctx, cmd))

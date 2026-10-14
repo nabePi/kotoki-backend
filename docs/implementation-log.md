@@ -529,3 +529,18 @@ Tanggal: 2026-10-14
 - `httpapi.ClientIP`: semua baris header `X-Forwarded-For` digabung sebelum ditelusuri dari kanan
 ### Test
 - RED→GREEN: `TestLoginRacingPasswordReset`, `TestLoginRacingSuspension`, `TestAuthConfigValidate` (2 kasus prod), `TestClientIP` (multi-baris), `TestDispatcherCloseHonoursDeadline`
+
+## M1-minors — Catatan minor M1 yang ditunda
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `health.Ops.RunStartupChecks`: cek yang gagal diulang dengan backoff (200 ms → 2 s) sampai ctx habis; `cmd/api`: listener ops memakai konteks sendiri dan berhenti paling akhir (`/readyz` = draining terlihat), error `Serve` ops ikut dipantau
+- `config`: staging/prod hanya menerima `sslmode=verify-full|verify-ca` (hilang/prefer/require ditolak)
+- `migcheck`: deteksi migrasi yang dihapus/di-rename (`--diff-filter=MD --no-renames`)
+- `redisstore`: ctx cancel diteruskan apa adanya; error server (WRONGTYPE, Lua) → `INTERNAL_ERROR`, hanya LOADING/READONLY/dst. → `SERVICE_UNAVAILABLE`; `key_prefix` EVAL/EVALSHA dari key pertama; `DisableIdentity`
+- `postgres`: pelanggaran constraint (23xxx) tidak lagi jadi span error; retry habis, `lock_timeout`, `statement_timeout` → `SERVICE_UNAVAILABLE`; panic menandai span `db.tx`; dokumentasi bahwa `fn` bisa dijalankan ulang; `WithTimeouts` kini dipasang dari `DB_LOCK_TIMEOUT`/`DB_STATEMENT_TIMEOUT` di `cmd/api`
+- Migrasi 000013/000018: trigger `BEFORE TRUNCATE` pada `balance_ledger` dan `admin_audit_logs`
+### Penyimpangan
+- Migrasi 000013/000018 diubah di tempat (belum ada tag v0.1.0, `migcheck` lulus); golden skema diperbarui
+- Tidak dikerjakan: REVOKE ulang untuk role yang dibuat setelah migrasi (sudah dijadwalkan M10) dan penggantian error 40001 saat ctx dibatalkan di tengah backoff (mengembalikan error ctx dinilai benar)
+- Tanpa tes otomatis: urutan shutdown ops (draining tidak teramati pada shutdown cepat) dan span panic

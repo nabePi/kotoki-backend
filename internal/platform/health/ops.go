@@ -30,6 +30,9 @@ type OpsOptions struct {
 	MetricsEnabled bool
 	PprofEnabled   bool
 	Checks         []Check
+	// StartupBackoff is the first wait between failed startup rounds (default 200 ms,
+	// doubling up to 2 s).
+	StartupBackoff time.Duration
 	Logger         *slog.Logger
 }
 
@@ -53,8 +56,30 @@ func NewOps(o OpsOptions) *Ops {
 	return &Ops{opts: o, results: map[string]string{}}
 }
 
-// RunStartupChecks runs every check; all succeeding marks the service ready.
+// RunStartupChecks runs every check; all succeeding marks the service ready. Failed
+// checks are retried with backoff until ctx ends, so a dependency that comes up a few
+// seconds late does not crash-loop the process.
 func (o *Ops) RunStartupChecks(ctx context.Context) error {
+	wait := o.opts.StartupBackoff
+	if wait <= 0 {
+		wait = 200 * time.Millisecond
+	}
+	for {
+		err := o.runChecksOnce(ctx)
+		if err == nil {
+			o.ready.Store(true)
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(wait):
+		}
+		wait = min(wait*2, 2*time.Second)
+	}
+}
+
+func (o *Ops) runChecksOnce(ctx context.Context) error {
 	res := make(map[string]string, len(o.opts.Checks))
 	var errs []error
 	for _, c := range o.opts.Checks {
@@ -69,11 +94,7 @@ func (o *Ops) RunStartupChecks(ctx context.Context) error {
 	o.mu.Lock()
 	o.results = res
 	o.mu.Unlock()
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	o.ready.Store(true)
-	return nil
+	return errors.Join(errs...)
 }
 
 // SetDraining makes /readyz return 503 draining.

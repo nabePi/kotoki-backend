@@ -63,6 +63,11 @@ CREATE TRIGGER trg_balance_ledger_append_only
     BEFORE UPDATE OR DELETE ON balance_ledger
     FOR EACH ROW EXECUTE FUNCTION reject_mutation();
 
+-- TRUNCATE tidak memicu trigger baris; blokir juga di level statement.
+CREATE TRIGGER trg_balance_ledger_no_truncate
+    BEFORE TRUNCATE ON balance_ledger
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_mutation();
+
 -- Append-only juga di level privilege (D-032): hanya dijalankan bila role aplikasi ada (lokal: dilewati).
 DO $$
 DECLARE r TEXT;

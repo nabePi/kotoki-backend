@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -49,4 +53,37 @@ func TestModifiedGuard(t *testing.T) {
 	require.NoError(t, modifiedGuard(false, []string{"migrations/000002_users.up.sql"}))
 	require.Error(t, modifiedGuard(true, []string{"migrations/000002_users.up.sql"}))
 	require.NoError(t, modifiedGuard(true, nil))
+}
+
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.test"}, args...)...)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+}
+
+// Deleting or renaming an applied migration is as destructive as editing it.
+func TestChangedMigrationsSeesDeleteAndRename(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	mig := filepath.Join(dir, "migrations")
+	require.NoError(t, os.Mkdir(mig, 0o750))
+	for _, f := range []string{"000001_a.up.sql", "000002_b.up.sql", "000003_c.up.sql"} {
+		require.NoError(t, os.WriteFile(filepath.Join(mig, f), []byte("select 1;\n"), 0o600))
+	}
+	gitIn(t, dir, "add", ".")
+	gitIn(t, dir, "commit", "-q", "-m", "base")
+
+	require.NoError(t, os.Remove(filepath.Join(mig, "000001_a.up.sql")))
+	require.NoError(t, os.Rename(filepath.Join(mig, "000002_b.up.sql"), filepath.Join(mig, "000002_renamed.up.sql")))
+	require.NoError(t, os.WriteFile(filepath.Join(mig, "000003_c.up.sql"), []byte("select 2;\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(mig, "000004_d.up.sql"), []byte("select 1;\n"), 0o600))
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-q", "-m", "change")
+
+	got, err := changedMigrations(dir, "HEAD~1", "migrations")
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{
+		"migrations/000001_a.up.sql", "migrations/000002_b.up.sql", "migrations/000003_c.up.sql",
+	}, got, "deleted, renamed-away and edited files count; the new files do not")
 }

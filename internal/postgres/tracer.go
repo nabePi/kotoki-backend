@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -56,6 +57,15 @@ func (t *queryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.T
 	if t.metrics != nil {
 		t.metrics.ObserveQuery(st.name, time.Since(st.start))
 	}
-	err := data.Err
+	err := spanError(data.Err)
 	otel.End(st.span, &err)
+}
+
+// spanError hides integrity-constraint violations (class 23) from the span: repositories
+// translate them into domain errors, so exporting them as exceptions skews error dashboards.
+func spanError(err error) error {
+	if strings.HasPrefix(pgCode(err), "23") {
+		return nil
+	}
+	return err
 }
