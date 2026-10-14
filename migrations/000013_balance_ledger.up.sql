@@ -62,3 +62,14 @@ CREATE INDEX idx_balance_ledger_reservation ON balance_ledger (reservation_id) W
 CREATE TRIGGER trg_balance_ledger_append_only
     BEFORE UPDATE OR DELETE ON balance_ledger
     FOR EACH ROW EXECUTE FUNCTION reject_mutation();
+
+-- Append-only juga di level privilege (D-032): hanya dijalankan bila role aplikasi ada (lokal: dilewati).
+DO $$
+DECLARE r TEXT;
+BEGIN
+  FOREACH r IN ARRAY ARRAY['kotoki_api', 'kotoki_realtime', 'kotoki_worker'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+      EXECUTE format('REVOKE UPDATE, DELETE ON balance_ledger FROM %I', r);
+    END IF;
+  END LOOP;
+END $$;

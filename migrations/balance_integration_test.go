@@ -168,3 +168,31 @@ func TestBalanceLedgerShapes(t *testing.T) {
 		require.True(t, strings.Contains(err.Error(), "append-only"))
 	})
 }
+
+func TestAppendOnlyRevokedFromAppRoles(t *testing.T) {
+	dsn := testutil.NewEmptyPostgresDSN(t)
+	ctx := context.Background()
+	conn, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	defer conn.Close()
+	for _, stmt := range []string{
+		`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='kotoki_api') THEN CREATE ROLE kotoki_api NOLOGIN; END IF; END $$`,
+		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO kotoki_api`,
+	} {
+		_, err := conn.Exec(ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
+	require.NoError(t, newMigrator(t, dsn).Up())
+	priv := func(table, p string) bool {
+		var ok bool
+		require.NoError(t, conn.QueryRow(ctx, `SELECT has_table_privilege('kotoki_api', $1, $2)`, table, p).Scan(&ok))
+		return ok
+	}
+	for _, table := range []string{"balance_ledger", "admin_audit_logs"} {
+		require.True(t, priv(table, "SELECT"), table)
+		require.True(t, priv(table, "INSERT"), table)
+		require.False(t, priv(table, "UPDATE"), table)
+		require.False(t, priv(table, "DELETE"), table)
+	}
+	require.True(t, priv("users", "UPDATE"))
+}
