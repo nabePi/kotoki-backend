@@ -16,6 +16,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/metrics"
 	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
+	"github.com/nabePi/kotoki-backend/internal/session"
 )
 
 // CookieConfig describes the refresh-token cookie.
@@ -92,6 +93,24 @@ type contentAdminService interface {
 	ValidationReport(context.Context) (errs, warns []content.Issue, err error)
 }
 
+// sessionService is what the session handlers write through; *session.Service satisfies it.
+type sessionService interface {
+	Create(ctx context.Context, in session.CreateSessionInput) (session.CreateSessionResult, error)
+	Cancel(ctx context.Context, userID, sessionID uuid.UUID) (session.Session, error)
+}
+
+// sessionQueryService is the read side; *session.QueryService satisfies it.
+type sessionQueryService interface {
+	Get(ctx context.Context, userID, id uuid.UUID) (session.View, error)
+	List(ctx context.Context, userID uuid.UUID, statuses []session.Status, after *uuid.UUID, limit int) ([]session.View, error)
+	Turns(ctx context.Context, userID, id uuid.UUID, afterSeq *int, limit int) ([]session.TurnRecord, error)
+}
+
+// ticketService issues WebSocket tickets; *auth.TicketService satisfies it.
+type ticketService interface {
+	Issue(ctx context.Context, userID, sessionID uuid.UUID) (auth.TicketResult, error)
+}
+
 // Deps are the collaborators of NewRouter, wired by hand in cmd/api.
 type Deps struct {
 	Log       *slog.Logger
@@ -108,4 +127,8 @@ type Deps struct {
 
 	Content      contentCatalogService
 	ContentAdmin contentAdminService
+
+	Session      sessionService
+	SessionQuery sessionQueryService
+	Tickets      ticketService
 }

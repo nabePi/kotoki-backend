@@ -47,12 +47,12 @@ var routeTable = []routeRow{
 	{"GET", "/scenarios/{scenario_id}", grpUser, []string{"api_user_default"}, true, ""},
 	{"GET", "/characters", grpUser, []string{"api_user_default"}, true, ""},
 	{"GET", "/characters/{character_id}", grpUser, []string{"api_user_default"}, true, ""},
-	{"POST", "/sessions", grpUser, []string{"session_create_user"}, false, ""},
-	{"GET", "/sessions", grpUser, []string{"api_user_default"}, false, ""},
-	{"GET", "/sessions/{session_id}", grpUser, []string{"api_user_default"}, false, ""},
-	{"POST", "/sessions/{session_id}/cancel", grpUser, []string{"api_user_default"}, false, ""},
-	{"POST", "/sessions/{session_id}/realtime-ticket", grpUser, []string{"ticket_user"}, false, ""},
-	{"GET", "/sessions/{session_id}/turns", grpUser, []string{"api_user_default"}, false, ""},
+	{"POST", "/sessions", grpUser, []string{"session_create_user"}, true, ""},
+	{"GET", "/sessions", grpUser, []string{"api_user_default"}, true, ""},
+	{"GET", "/sessions/{session_id}", grpUser, []string{"api_user_default"}, true, ""},
+	{"POST", "/sessions/{session_id}/cancel", grpUser, []string{"api_user_default"}, true, ""},
+	{"POST", "/sessions/{session_id}/realtime-ticket", grpUser, []string{"ticket_user"}, true, ""},
+	{"GET", "/sessions/{session_id}/turns", grpUser, []string{"api_user_default"}, true, ""},
 	{"GET", "/sessions/{session_id}/evaluation", grpUser, []string{"api_user_default"}, false, ""},
 	{"GET", "/balance", grpUser, []string{"api_user_default"}, true, ""},
 	{"GET", "/balance/transactions", grpUser, []string{"api_user_default"}, true, ""},
@@ -180,4 +180,34 @@ func codeOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
 	return out.Error.Code
+}
+
+// TestRouteTableUserGroupPrefixes: everything registered under the session and catalog prefixes is a
+// User-group row of the table, and nothing else lives there (no conversation styles, D-014).
+func TestRouteTableUserGroupPrefixes(t *testing.T) {
+	e := newAPI(t)
+	var got []string
+	require.NoError(t, chi.Walk(e.handler.(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		for _, p := range []string{"/api/v1/sessions", "/api/v1/topics", "/api/v1/scenarios", "/api/v1/characters", "/api/v1/conversation-styles", "/api/v1/expression-profiles"} {
+			if strings.HasPrefix(route, p) {
+				got = append(got, method+" "+strings.TrimPrefix(route, "/api/v1"))
+			}
+		}
+		return nil
+	}))
+	var want []string
+	for _, r := range routeTable {
+		for _, p := range []string{"/sessions", "/topics", "/scenarios", "/characters"} {
+			if strings.HasPrefix(r.Path, p) {
+				require.Equal(t, grpUser, r.Group, r.Path)
+				if r.Ready { // later milestones add /sessions/{id}/evaluation and friends
+					want = append(want, r.Method+" "+r.Path)
+				}
+			}
+		}
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	require.Equal(t, want, got)
+	require.Len(t, got, 11)
 }

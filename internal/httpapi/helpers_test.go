@@ -24,6 +24,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/idgen"
 	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
+	"github.com/nabePi/kotoki-backend/internal/session"
 	"github.com/nabePi/kotoki-backend/internal/testutil/fakes"
 )
 
@@ -84,6 +85,11 @@ type apiEnv struct {
 
 	content      *fakes.ContentRepo
 	contentStore *fakes.ContentStore
+
+	sessions      *fakes.SessionStore
+	ticketTargets *fakes.TicketSessionReader
+	gate          *fakes.UserGate
+	sessionSvc    *session.Service
 }
 
 const apiTerms = "2026-10-01"
@@ -119,7 +125,18 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 	contentAdmin := content.NewAdminService(content.AdminDeps{Store: contentStore, Clock: clk, IDs: ids,
 		Validator: content.ValidatorConfig{TTSEnabled: func(string) bool { return true }}})
 
+	sessStore := fakes.NewSessionStore(bal)
+	gate := fakes.NewUserGate(session.UserGateInfo{Status: "ACTIVE", TermsVersion: apiTerms})
+	sessSvc := session.NewService(session.Deps{
+		Store: sessStore, Reader: sessStore.Reader(), Balance: balSvc,
+		Resolver: content.NewResolver(contentRepo, content.ResolverConfig{TTSMode: "fake", LLMConfigured: true}, nil),
+		Adaptive: fakes.NewAdaptive(""), Users: gate, OpeningPrompts: &fakes.OpeningSource{}, Clock: clk, IDs: ids, TermsVersion: apiTerms, ServiceName: "api",
+	})
+	ticketTargets := fakes.NewTicketSessionReader()
+	ticketSvc := auth.NewTicketService(store, ticketTargets, fakes.NewTicketStore(), clk, auth.TicketConfig{TTL: 30 * time.Second, RealtimeURL: "https://realtime.example"})
+
 	deps := httpapi.Deps{
+		Session: sessSvc, SessionQuery: session.NewQueryService(fakes.NewSessionViews(sessStore, contentRepo), sessStore.TurnReader(), clk, 180), Tickets: ticketSvc,
 		Content: catalog, ContentAdmin: contentAdmin,
 		Log: log, Limiter: limiter, Tokens: tokens, Clock: clk, Auth: svc, Users: users, Balance: balSvc, Admin: adminSvc, AdminGate: allowAdmin{},
 		Cfg: httpapi.Config{
@@ -131,7 +148,8 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 		m(&deps)
 	}
 	return &apiEnv{handler: httpapi.NewRouter(deps), limiter: limiter, clk: clk, store: store, bal: bal, mail: fm, deleter: deleter,
-		tokens: tokens, logs: logs, svc: svc, users: users, deps: deps, content: contentRepo, contentStore: contentStore}
+		tokens: tokens, logs: logs, svc: svc, users: users, deps: deps, content: contentRepo, contentStore: contentStore,
+		sessions: sessStore, ticketTargets: ticketTargets, gate: gate, sessionSvc: sessSvc}
 }
 
 type allowAdmin struct{}

@@ -59,6 +59,16 @@ func (r Request[B]) PathUUID(name string) (uuid.UUID, error) {
 	return id, nil
 }
 
+// PathUUIDOr is PathUUID with the error code of the resource: an invalid id of a session is
+// SESSION_NOT_FOUND, not a generic NOT_FOUND.
+func (r Request[B]) PathUUIDOr(name string, code errs.Code) (uuid.UUID, error) {
+	id, err := uuid.Parse(chi.URLParam(r.raw, name))
+	if err != nil {
+		return uuid.Nil, errs.New(code, "invalid path parameter "+name)
+	}
+	return id, nil
+}
+
 // PathParam returns a path parameter as it appears in the URL.
 func (r Request[B]) PathParam(name string) string { return chi.URLParam(r.raw, name) }
 
