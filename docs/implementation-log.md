@@ -608,3 +608,14 @@ Tanggal: 2026-10-14
 - `internal/provider/pricer.go`: port `PriceTable`, `ModelRef`; `internal/provider/pricing/{pricing.go,prices.yaml}`: loader YAML ketat (`KnownFields`, UPPERCASE, duplikat/negatif ditolak), `LLM`/`TTS`/`Audio` (wildcard `*`, harga cache-hit), `Missing` (tanpa entri atau harga 0); semua harga 0 sampai benchmark
 ### Test
 - `pricing/pricing_test.go` — PASS (race)
+
+## M4-T8 — Fake: konfigurasi, keputusan gagal, fault set, poller
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/fake/config.go`: `Config` (env `FAKE_*`), `CapConfig` + `LoadCapConfig` (`FAKE_<PRIMARY|FALLBACK>_<CAP>_*`, FALLBACK hanya TTS, galat menyebut nama env), `Deps`
+- `internal/provider/fake/faults.go`: `Fault`/`FaultSet`/`FaultSource`/`NoFaults`, `ParseFaultSet` (until, kombinasi mode/kapabilitas, status→kind), `decider` deterministik (every-N atau hash seed|instance|capability|counter), `Poller` (snapshot atomik; galat fetch → pertahankan ≤ 10 s lalu kosongkan; WARN ≤ 1×/menit)
+### Test
+- `faults_test.go`, `config_env_test.go` — PASS (race); termasuk `TestPollerClearsAfterStaleWindow` (review focus 5)
+### Penyimpangan
+- Hash keputusan = FNV-64a + finalizer splitmix64 (FNV saja bias pada bit tinggi untuk counter berurutan)
