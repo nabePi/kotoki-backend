@@ -714,3 +714,11 @@ Tanggal: 2026-10-14
 - `internal/provider/httpx/{client,classify,sse}.go`: `NewClient` (HTTP/2, pool 256/host, idle 90 s, TLS 3 s, tanpa timeout respons), `ClassifyHTTP` (tabel §8.3, `Retry-After` detik atau HTTP-date relatif header `Date`, kuota habis tidak retryable, pesan ≤ 512 byte dan disamarkan), `Redact`, `ClassifyBody`, `ClassifyError`, `ClassifyWSClose`, `SSEReader`
 ### Test
 - `httpx_test.go` — PASS (race)
+
+## M4-T20 — `prompt`: estimator, budget, tipe data
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/prompt/{tokens,budget,learner_context,data,text}.go`: `EstimateTokens` (aritmetika integer `(77·cjk + 20·other)/70` dibulatkan ke atas, bebas drift float), `ItemOverheadTokens`, `Budget`/`DefaultBudget` (total 6.450), `LearnerContext`, `VocabHint`, `PromptData`/`OpeningPromptData` (tanpa style/ekspresi/identitas user), `NormalizeSpeakable` (diekspor di `prompt`, dipakai M5)
+### Test
+- `tokens_test.go`, `budget_test.go`, `data_test.go` — PASS (race); aturan impor `prompt` (tanpa paket fitur) lulus
