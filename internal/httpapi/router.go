@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
+	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
 )
 
 // NewRouter builds the public API: three route groups (public, user, admin) under
@@ -29,6 +30,11 @@ func NewRouter(d Deps) http.Handler {
 		user := api.With(Authn(d.Tokens, d.Clock))
 		registerAuthRoutes(pub, user, &authHandler{svc: d.Auth, users: d.Users, limiter: d.Limiter, log: d.Log, cfg: d.Cfg})
 		registerMeRoutes(user, &meHandler{svc: d.Users, limiter: d.Limiter, log: d.Log, cfg: d.Cfg})
+		registerBalanceRoutes(user, &balanceHandler{svc: d.Balance, limiter: d.Limiter, log: d.Log})
+		adminGroup := user.With(
+			RateLimit(d.Limiter, ratelimit.Get("admin_user"), UserSubject, d.Log),
+			RequireAdmin(d.AdminGate, d.Log))
+		registerAdminRoutes(adminGroup, &adminHandler{svc: d.Admin, clk: d.Clock})
 	})
 	return r
 }

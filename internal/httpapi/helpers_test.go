@@ -15,7 +15,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/nabePi/kotoki-backend/internal/admin"
 	"github.com/nabePi/kotoki-backend/internal/auth"
+	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/httpapi"
 	"github.com/nabePi/kotoki-backend/internal/mailer"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
@@ -104,9 +106,11 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 	deleter := &fakeAccountDeleter{}
 	users := auth.NewUserService(store, hasher, deleter, clk, log, apiTerms)
 	limiter := &recordingLimiter{deny: map[string]bool{}}
+	balSvc := balance.NewService(bal, clk, ids)
+	adminSvc := admin.NewService(fakes.NewAdminStore(store, bal), balSvc, clk, ids, log)
 
 	deps := httpapi.Deps{
-		Log: log, Limiter: limiter, Tokens: tokens, Clock: clk, Auth: svc, Users: users, AdminGate: allowAdmin{},
+		Log: log, Limiter: limiter, Tokens: tokens, Clock: clk, Auth: svc, Users: users, Balance: balSvc, Admin: adminSvc, AdminGate: allowAdmin{},
 		Cfg: httpapi.Config{
 			CORSOrigins: []string{"http://localhost:3000"}, BodyLimit: 64 << 10,
 			Cookie: httpapi.CookieConfig{Secure: true, MaxAge: 720 * time.Hour},
@@ -184,4 +188,39 @@ func (e *apiEnv) userID(t *testing.T) uuid.UUID {
 	toks := e.store.RefreshTokens()
 	require.NotEmpty(t, toks)
 	return toks[0].UserID
+}
+
+// adminAuthz registers admin@example.com, promotes it in the store and logs in so the
+// access token carries the ADMIN claim.
+func (e *apiEnv) adminAuthz(t *testing.T) (string, uuid.UUID) {
+	t.Helper()
+	reg := e.register(t, "admin@example.com")
+	_ = reg
+	id := e.userByEmail(t, "admin@example.com").ID
+	e.store.MutateUser(id, func(u *auth.User) { u.Role = auth.RoleAdmin })
+	login := e.do(http.MethodPost, "/api/v1/auth/login", `{"email":"admin@example.com","password":"correct horse battery"}`)
+	require.Equal(t, http.StatusOK, login.Code, login.Body.String())
+	return bearerOf(t, login), id
+}
+
+func (e *apiEnv) allUsers(t *testing.T) []auth.User {
+	t.Helper()
+	var out []auth.User
+	require.NoError(t, e.store.WithinTx(context.Background(), func(ctx context.Context, tx auth.Tx) error {
+		var err error
+		out, err = tx.Users().List(ctx, auth.UserFilter{}, nil, 100)
+		return err
+	}))
+	return out
+}
+
+func (e *apiEnv) userByEmail(t *testing.T, email string) auth.User {
+	t.Helper()
+	for _, u := range e.allUsers(t) {
+		if u.Email == email {
+			return u
+		}
+	}
+	t.Fatalf("user %s not found", email)
+	return auth.User{}
 }

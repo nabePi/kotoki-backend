@@ -494,3 +494,14 @@ Tanggal: 2026-10-14
 - go test ./internal/httpapi -race — PASS: `TestRouteTable` (rute terdaftar == baris Ready; grup & policy dibuktikan lewat perilaku), `TestInternalPathsNotServed`, alur register→login→refresh→409→logout→401, origin check, rate limit email, forgot identik, reset, terms, cookie `Secure=false`
 ### Penyimpangan
 - Atribut `Set-Cookie` diverifikasi sebagai himpunan (Path, HttpOnly, Secure, SameSite=Strict, Max-Age=2592000), bukan urutan teks: `net/http` selalu menulis `Max-Age` sebelum `HttpOnly`
+
+## M2-T24 — Rute admin & balance user
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/httpapi/{balance,admin}_{routes,handler,dto}.go`: `GET /balance` (`allowed_durations`), `GET /balance/transactions` (filter `entry_type`, cursor UUID, tepat 9 field user: tanpa `reason`/`admin_user_id`/`idempotency_key`); admin: `GET /admin/users` (validasi `email` ≥ 3, `status`, `role`), `GET|PATCH /admin/users/{user_id}`, `POST …/balance-grants`, `POST …/balance-adjustments` (header `Idempotency-Key` UUID; replay → 200 + `Idempotent-Replayed: true`), `GET …/balance/transactions` (bentuk ledger admin), `GET /admin/audit-logs`; grup admin = `Authn` → rate limit `admin_user` → `RequireAdmin`; `PATCH`/grant/adjust meneruskan `RequestMeta{RequestID, ClientIP, UserAgent}`
+- `TestRouteTable`: baris balance + admin M2 berstatus `Ready`; golden `testdata/api/rest/{admin/grant_201,balance/balance_200}.json`
+### Test
+- go test ./internal/httpapi -race — PASS
+### Penyimpangan
+- Rate limit `admin_user` dipasang sebelum `RequireAdmin` (bukan sesudahnya) agar token USER tidak memicu query DB per request

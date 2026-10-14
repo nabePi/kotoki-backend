@@ -8,7 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nabePi/kotoki-backend/internal/admin"
 	"github.com/nabePi/kotoki-backend/internal/auth"
+	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/metrics"
 	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
@@ -48,6 +50,23 @@ type userService interface {
 	CurrentTermsVersion() string
 }
 
+// balanceService is what the user balance handlers need; *balance.Service satisfies it.
+type balanceService interface {
+	GetBalance(context.Context, uuid.UUID) (balance.BalanceView, error)
+	ListTransactions(ctx context.Context, userID uuid.UUID, types []balance.EntryType, after *uuid.UUID, limit int) ([]balance.LedgerEntry, *uuid.UUID, error)
+}
+
+// adminService is what the admin handlers need; *admin.Service satisfies it.
+type adminService interface {
+	ListUsers(ctx context.Context, f auth.UserFilter, after *uuid.UUID, limit int) ([]admin.UserView, *uuid.UUID, error)
+	GetUser(context.Context, uuid.UUID) (admin.UserDetail, error)
+	ChangeStatus(context.Context, admin.ChangeStatusInput) (admin.UserView, error)
+	Grant(context.Context, admin.GrantRequest) (balance.MovementResult, error)
+	Adjust(context.Context, admin.AdjustRequest) (balance.MovementResult, error)
+	ListTransactions(ctx context.Context, userID uuid.UUID, types []balance.EntryType, after *uuid.UUID, limit int) ([]balance.LedgerEntry, *uuid.UUID, error)
+	ListAudit(ctx context.Context, f admin.AuditFilter, after *uuid.UUID, limit int) ([]admin.AuditLog, *uuid.UUID, error)
+}
+
 // Deps are the collaborators of NewRouter, wired by hand in cmd/api.
 type Deps struct {
 	Log       *slog.Logger
@@ -58,5 +77,7 @@ type Deps struct {
 	Metrics   *metrics.HTTP // optional
 	Auth      authService
 	Users     userService
+	Balance   balanceService
+	Admin     adminService
 	AdminGate AdminGate
 }
