@@ -772,3 +772,11 @@ Tanggal: 2026-10-14
 - Tes karakterisasi: `internal/platform/errs/m3codes_test.go` (23 kode M3: pesan tidak kosong + status HTTP; 3 kode yang dihapus tidak ada; total 67), `internal/m3preflight_test.go` (kompilasi simbol M1/M2/M4 yang dipakai M3)
 ### Test
 - `go test ./internal/... -run 'TestM3|TestPreflight'` — PASS langsung (kontrak sesuai)
+
+## M3-T2 — `BillableEnd` dan `ComputeCharge`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/balance/charge.go`: rumus §4.5 apa adanya (satu-satunya tempat)
+### Test
+- `charge_test.go`: 11 contoh §4.5 (billable end + charged) dan batas (59.999/60.000 ms untuk kegagalan, clamp ke reservasi, ending_at ± expires_at, disconnected > aktif) — PASS
