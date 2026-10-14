@@ -49,7 +49,7 @@ func TestSessionControlPublish(t *testing.T) {
 	ctx := context.Background()
 	id := uuid.Must(uuid.NewV7())
 	sub := rdb.Subscribe(ctx, redisstore.ControlChannel(id))
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 	_, err := sub.Receive(ctx) // the subscription is confirmed
 	require.NoError(t, err)
 
