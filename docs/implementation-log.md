@@ -271,3 +271,261 @@ Tanggal: 2026-10-14
 - `make vuln` → "No vulnerabilities found" (menutup GO-2026-6629 x/text dan temuan stdlib net/http)
 ### Test
 - make lint 0 issue, make test, make test-integration (podman, -p 1), make test-cover, arch/sqlc/migrations/modelname/tidy check — PASS
+## M2-T1 — Auth domain, port, normalisasi input, password policy
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth`: `user.go` (User, Role, status, repo port), `auth.go` (Principal, port hasher/token/mailer/ticket/opener/deleter, `AccessSubject`, `Claims`), `tx.go`, `errors.go`, `normalize.go`, `password.go`
+- `common_passwords.txt`: 10.000 password umum dari danielmiessler/SecLists `Passwords/Common-Credentials/10k-most-common.txt` (MIT), lowercase + dedupe, di-embed
+### Test
+- go test ./internal/auth/... -race -cover — PASS (93%)
+### Penyimpangan
+- `AccessSubject`/`Claims` dideklarasikan di `auth.go` (bukan `jwt.go`) agar port `TokenIssuer` bisa dikompilasi di Task 1
+
+## M2-T2 — Argon2id hasher
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth/argon2.go`: `Argon2Hasher` (PHC `$argon2id$v=19$m,t,p$salt$hash`, salt 16 B, key 32 B), semaphore `MaxConcurrent` dengan tunggu `MaxWait` lalu `SERVICE_UNAVAILABLE`, `NeedsRehash`; hash dengan parameter berbeda tetap diverifikasi memakai parameter yang tersimpan
+### Test
+- go test ./internal/auth -race -run Argon2 — PASS (4 test)
+
+## M2-T3 — JWT TokenIssuer
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth/jwt.go`: `JWTIssuer` HS256 dengan header `kid` (8 hex pertama sha256 secret), claims iss/aud/sub/role/fam/jti/iat/nbf/exp, leeway 30 s, `PreviousSecret` hanya untuk verifikasi, secret < 32 byte ditolak; `exp`/`ExpiresAt` dikembalikan dalam UTC
+- Dependensi baru: `github.com/golang-jwt/jwt/v5 v5.3.0` (go 1.25 tetap)
+### Test
+- go test ./internal/auth -race -cover — PASS (21 test)
+
+## M2-T4 — Mailer adapters
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/mailer`: `New(Config, *slog.Logger)` (log ditolak di staging/prod, smtp wajib host), `LogMailer` (`mail.sent`), `SMTPMailer` (STARTTLS wajib, PlainAuth bila username, header RFC 2047), `FakeMailer`
+### Test
+- go test ./internal/mailer/... -race (+ `-tags integration`: `TestSMTPRequiresSTARTTLS` dengan server SMTP loopback tanpa STARTTLS, body tidak terkirim) — PASS
+- Pengiriman SMTP nyata tidak diuji otomatis
+
+## M2-T5 — Mail dispatcher & template reset password
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth/dispatcher.go`: `MailDispatcher` (buffer 1000, 4 worker, timeout kirim 10 s, retry 3× 1 s/5 s/15 s, `Enqueue` tidak pernah memblok; buffer penuh → ERROR `mail.queue_full`; gagal permanen → ERROR `mail.dropped` dengan email di-mask), `Close(ctx)` menguras antrean, `RenderPasswordReset` + `templates/password_reset.txt` (go:embed)
+### Test
+- go test ./internal/auth -race — PASS (dispatcher: deliver, retry, timeout, buffer penuh; render)
+### Penyimpangan
+- `TestDispatcherBufferFull`: pesan 1 diambil worker, pesan 2 masuk buffer, pesan 3 ditolak (brief menyebut "kedua"; urutan ini deterministik)
+
+## M2-T6 — Balance domain, port, OpenAccount, pembacaan saldo (+ fake & contract suite)
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/balance`: `Account`, `LedgerEntry`, `Movement`, `EntryType`, `ReferenceType`, port `Repository` (Lock/Get/InsertAccount, `ApplyMovement`, `FindLedgerByIdempotencyKey`, `ListLedger` dengan filter tipe + cursor), `Store`/`Tx`, `OpenAccount`, `Service.GetBalance` (`AllowedDurations` ≤ saldo), `Service.ListTransactions` (limit+1), `Description` (§4.7)
+- `fakes.BalanceStore` (rollback snapshot saat fn error, `FailNext`, `WithBalanceIDs`), `repotest.BalanceRepoSuite`
+### Test
+- go test ./internal/balance/... ./internal/testutil/... -race — PASS
+### Penyimpangan
+- Suite menerima `BalanceHarness{Store, SeedUser}` (bukan hanya `newStore`) karena store PostgreSQL butuh baris `users` nyata (Task 17)
+- `GetBalance` untuk user tanpa account → `USER_NOT_FOUND`
+
+## M2-T7 — Grant & Adjust (idempotent)
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `balance.Service`: `GrantTx`/`AdjustTx` (lock account → cek key `grant:`/`adjust:` → replay bila user, tipe, delta sama, selain itu `IDEMPOTENCY_KEY_REUSED` → `ApplyMovement`), `Grant`/`Adjust` mandiri (retry sekali bila `ErrDuplicateMovement`), `ValidateAdminIdempotencyKey`, `MovementResult`
+- Validasi: `seconds` 1–360000, `|seconds_delta|` 1–360000, `reason` 3–500 rune; adjustment negatif → `BALANCE_ADJUSTMENT_NEGATIVE` dengan `details {available_seconds, seconds_delta}`; audit sengaja bukan di sini (Task 14)
+### Test
+- go test ./internal/balance -race — PASS
+
+## M2-T8 — Fake & contract suite repository auth
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `fakes.AuthStore` (`auth.Store`): transaksi menyarang `BalanceStore.WithinTx` sehingga rollback membatalkan user + account sekaligus; `FailNext`, accessor `User`/`RefreshTokens`; `Accounts()` memanggil `balance.OpenAccount`
+- `repotest.{UserRepoSuite,RefreshTokenRepoSuite,PasswordResetRepoSuite}` (+ `NewUser`); hanya mengimpor `auth` dan testify, siap dipakai ulang oleh repo PostgreSQL (Task 16)
+### Test
+- go test ./internal/testutil/... -race — PASS (3 suite + rollback/commit/FailNext)
+
+## M2-T9 — auth.Service: Register & Login
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth/service.go`: `Config`, `Events`, `NewService` (dummy hash untuk menyamakan timing login), `Register` (hash di luar tx; tx: Insert user → `OpenAccount` → refresh family; `ErrEmailTaken`/`ErrPhoneTaken` → 409), `Login` (email tak dikenal / DELETED → `Verify(dummy)` tepat 1× → `INVALID_CREDENTIALS`; SUSPENDED hanya setelah password benar; rehash best-effort tanpa mengubah `password_changed_at`), audit log `audit=true` (`register`, `login_succeeded`, `login_failed`) tanpa email/password mentah
+- `internal/platform/metrics/auth.go`: `kotoki_auth_events_total{event,result}`; nilai di luar daftar di-ignore
+### Test
+- go test ./internal/auth ./internal/platform/metrics -race — PASS
+
+## M2-T10 — auth.Service: Refresh rotation, reuse detection, Logout
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `Refresh` (spec 3.8.3): `LockByHash` → grace 10 s inklusif (`revoked_at >= now − grace`, penggantinya belum revoked → 409 `REFRESH_TOKEN_ROTATED`, rollback) → selain itu reuse: `RevokeFamily(REUSE_DETECTED)` **di-commit** lalu 401 (pola commit-then-error), log WARN `refresh_reuse_detected` tanpa token; expired (`expires_at <= now`) → 401; user non-ACTIVE → revoke `USER_STATUS_CHANGED` di-commit + 401; sukses → token baru (family sama, `ParentID`), role dari DB
+- `Logout`: idempoten, token tak valid → nil; audit `logout`
+- Event metrik: `refresh` success/failure; reuse di luar grace → `refresh_reuse` failure
+- `fakes.AuthStore.MutateUser` untuk setup test
+### Test
+- go test ./internal/auth -race — PASS (12 test refresh/logout termasuk konkurensi 2 goroutine)
+
+## M2-T11 — auth.Service: Forgot & Reset password
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `ForgotPassword`: email invalid → `VALIDATION_FAILED`; selain itu selalu nil (limiter email, user tak dikenal/non-ACTIVE → tanpa token & mail); user ACTIVE → tx (invalidate token terbuka + insert token TTL 15 m, hash SHA-256) lalu `Enqueue` mail; audit `password_reset_requested`
+- `ResetPassword`: decode token → `FindByHash` → `ValidatePassword` (token tidak terpakai bila lemah) → `Hash` di luar tx → tx `LockByHash` re-check → ganti password (`password_changed_at = now`), `MarkUsed`, `InvalidateOthers`, revoke semua refresh `PASSWORD_RESET`; `expires_at <= now` → invalid; event metrik `password_reset`; audit `password_reset_completed`
+- `fakes.AuthStore.ResetTokens` untuk test
+### Test
+- go test ./internal/auth -race — PASS (12 test forgot/reset)
+
+## M2-T12 — auth.UserService (Me, consents, hapus akun)
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth/user_service.go`: `Me`, `RequireActive` (SUSPENDED dan DELETED → `ACCOUNT_SUSPENDED`), `UpdateConsents` (versi ≠ terkini → `VALIDATION_FAILED not_current`; versi sama tidak mengubah `terms_accepted_at`; non-ACTIVE → 403; audit `consent_updated`), `DeleteAccount` (langkah 1 & 5 §3.13.3: status ACTIVE, `Verify` password, lalu `AccountDeleter`; error `ErrAccountHasActiveSession` diteruskan; audit `account_deletion_requested`), `CurrentTermsVersion`
+- Kontrak repo diperketat: `UpdateConsents` hanya menggeser `terms_accepted_at` bila versi berubah (`repotest` kasus baru; fake diperbaiki)
+### Test
+- go test ./internal/auth ./internal/testutil/... -race — PASS
+
+## M2-T13 — TicketService + redisstore.TicketStore
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `auth.TicketService.Issue` (§3.11): user ACTIVE (terms usang tetap boleh), sesi RESERVED sebelum deadline / STARTING / ACTIVE, selain itu `SESSION_START_DEADLINE_PASSED` / `SESSION_NOT_CONNECTABLE {status}`; error store → `SERVICE_UNAVAILABLE`; `realtime_url` = `REALTIME_PUBLIC_URL` + `/api/v1/realtime`
+- `redisstore.TicketStore`: key `kotoki:ws_ticket:{hex sha256(ticket)}`, `SET NX EX`, ulang sekali bila tabrakan, `GETDEL` untuk Consume; `fakes.TicketSessionReader`/`fakes.TicketStore`
+### Test
+- go test ./internal/auth -run Ticket; `-tags integration ./internal/redisstore -run Ticket` (Podman) — PASS (single-use konkuren, expiry, Redis down)
+
+## M2-T14 — admin: port, Grant/Adjust dengan audit, daftar audit
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/admin`: `AuditLog`/`AuditFilter`/`AuditRepository`, `RequestMeta`, `SessionGate`, `Tx` (= `auth.Tx` + `balance.Tx` + `Audit()` + `SessionGate()`), `Store`; `Service.Grant`/`Adjust` (satu tx: user ada → `GrantTx`/`AdjustTx` → audit `BALANCE_GRANT`/`BALANCE_ADJUSTMENT` hanya bila bukan replay; retry sekali bila `ErrDuplicateMovement`; span `admin.Grant`/`admin.Adjust`), `ListTransactions`, `ListAudit`, `IsActiveAdmin`
+- Fake: `fakes.AdminStore` (tx bersarang di AuthStore → BalanceStore; rollback juga untuk audit & gate), `fakes.SessionGate`, `fakes.CallRecorder` (urutan lock lintas repo); `repotest.AuditRepoSuite`
+### Test
+- go test ./internal/admin ./internal/testutil/... -race — PASS (audit gagal → saldo & ledger kembali)
+
+## M2-T15 — admin: daftar/detail user, ubah status, DeleteAccount
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `admin.Service`: `ListUsers`/`GetUser` (`UserView`, `UserDetail` dengan sesi terbuka & jumlah refresh token aktif), `ChangeStatus` (ACTIVE↔SUSPENDED, → DELETED final; DELETED→apa pun = `INVALID_USER_STATUS_TRANSITION`; diri sendiri = `CANNOT_MODIFY_SELF`; status sama = 200 tanpa audit; SUSPENDED merevoke refresh `USER_STATUS_CHANGED`; audit `USER_STATUS_CHANGE {from,to,revoked_refresh_tokens}`), `DeleteAccount` (memenuhi `auth.AccountDeleter`; urutan lock account → user → sesi; STARTING/ACTIVE/ENDING → 409 `ACCOUNT_HAS_ACTIVE_SESSION {session_id}` tanpa perubahan; RESERVED dibatalkan lewat `SessionGate`; refresh & reset token dihapus) lewat `deleteAccountTx`
+### Test
+- go test ./internal/admin -race — PASS
+### Penyimpangan
+- `auth.PasswordResetRepository` mendapat method `DeleteAllForUser` (Task 1 tidak memuatnya padahal §3.13.3 langkah 4 menghapus `password_reset_tokens`); fake + `repotest` ditambah
+
+## M2-T17 — postgres: repo balance (account & ledger) + BalanceStore
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `db/queries/balance.sql` + sqlc; `internal/postgres/balance_repo.go` (`(*Tx).Balance()`; `ApplyMovement` = `UPDATE balance_accounts … RETURNING` lalu `INSERT balance_ledger` dengan `*_after`; `ux_balance_ledger_idempotency` → `ErrDuplicateMovement`; lainnya `INTERNAL_ERROR`), `convert.go`, `store_views.go` (`BalanceStore()`); `testutil.AssertReconciled` (R1–R5 §4.8 verbatim)
+### Test
+- go test -tags integration ./internal/postgres -run 'PGBalance|PGLedger|PGGrant|PGAdjust' (Podman) — PASS: suite repo, ledger append-only (23001), 20 goroutine key sama → 1 ledger + 19 replay, 20 user key sama → 1 sukses + 19 `IDEMPOTENCY_KEY_REUSED`, adjust negatif ditolak; reconcile R1–R5 kosong di akhir tiap test
+### Penyimpangan
+- Dikerjakan sebelum Task 16 (Task 16 membutuhkan `Balance()` untuk `Accounts()`)
+- Suite kontrak diperbaiki agar bentuk movement sah menurut `chk_ledger_shape` (adjustment membawa admin & reason) — ketahuan oleh PostgreSQL, fake tidak menegakkannya
+
+## M2-T16 — postgres: repo users, refresh token, password reset, AuthStore
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `db/queries/{users,refresh_tokens,password_resets}.sql` + sqlc; `internal/postgres/{user_repo,refresh_token_repo,password_reset_repo}.go` (`ux_users_email`/`ux_users_phone` → `ErrEmailTaken`/`ErrPhoneTaken`, `ErrNoRows` → sentinel, `FOR UPDATE` untuk `LockByID`/`LockByHash`, waktu selalu dari parameter, filter list memakai `starts_with(lower(email), …)`); `(*Tx).Accounts()` menjembatani ke `balance.OpenAccount`; `(*Store).AuthStore()`
+### Test
+- go test -tags integration ./internal/postgres -run 'PGUser|PGRefresh|PGPassword|PGRegister|PGCount' (Podman) — PASS: ketiga suite `repotest` di PostgreSQL, DELETE satu statement untuk rantai self-FK, register atomik (rollback user+account+ledger), reuse refresh di PG commit revoke, `CountActive` batas `expires_at == now`
+
+## M2-T18 — postgres: audit repo, SessionGate, TicketSessionReader, AdminStore
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `db/queries/{admin_audit,session_gate}.sql`; `internal/postgres/{admin_audit_repo,session_gate}.go`: `(*Tx).Audit()` (details JSONB), `(*Tx).SessionGate()` (`OpenSessions` = sesi RESERVED/STARTING/ACTIVE/ENDING; **`CancelReserved` stub** → `INTERNAL_ERROR "session cancel not wired before M3"`), `postgres.NewTicketSessionReader` (JOIN sessions × balance_reservations), `(*Store).AdminStore()`; `*Tx` memenuhi `admin.Tx`
+### Test
+- go test -tags integration ./internal/postgres -run 'PGAudit|PGAdmin|PGSessionGate|PGTicket' (Podman) — PASS: suite audit, append-only (23001), grant + audit atomik (audit ditolak DB → saldo kembali), alur hapus akun (status DELETED, token terhapus, account & ledger utuh, reconcile kosong), gate tanpa sesi, stub CancelReserved, reader `ErrSessionNotFound`
+### Sisa (M3)
+- Task M3 wajib mengganti isi `CancelReserved` dengan `session.Service.CancelInTx` dan membalik `TestPGSessionGateCancelReservedNotWired`
+
+## M2-T19 — platform/ratelimit: Policy, Catalog, limiter lokal
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/platform/ratelimit`: `Policy` (+ `RatePerMs`), `Decision`, port `Limiter`, `Catalog` 15 policy (13 dari M2 + `ws_connect_ip`, `ws_attach_user` untuk M5, semuanya dari §13.4.3), `Get` (panic bila nama tak dikenal), `SubjectEmail`/`SubjectIP`, `Local` (token bucket in-memory + LRU, jam dari `clock.Clock`)
+### Test
+- go test ./internal/platform/ratelimit -race — PASS
+
+## M2-T20 — redisstore.RateLimiter (Lua + fallback)
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `redisstore.RateLimiter`: script Lua §13.4.3 verbatim (`redis.NewScript` → EVALSHA, fallback EVAL otomatis), key `kotoki:ratelimit:{policy}:{subject}` dengan `PEXPIRE`, waktu dari `redis.call('TIME')`; Redis error → limiter lokal (fail-open), `kotoki_ratelimit_backend_errors_total`, log warn maksimal 1×/10 s (jam dari `clock.Clock`); `metrics.RateLimit` (`kotoki_ratelimit_rejected_total{policy}`, `kotoki_ratelimit_backend_errors_total`)
+### Test
+- go test ./internal/platform/metrics -run RateLimit; go test -tags integration ./internal/redisstore -run RedisLimiter (Podman) — PASS (burst, refill, TTL, isolasi subject, fallback saat Redis mati)
+
+## M2-T21 — httpapi fondasi: Handle, Page, WriteError, cursor, golden error
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/httpapi`: `Handle`/`HandleNoBody` (Content-Type wajib `application/json` → 415, `DisallowUnknownFields` → `unknown_field`, tipe salah → `invalid_type`, JSON rusak/sisa data → `INVALID_JSON`, > 64 KiB → 413, `Validate()`), `Request[B]` (+ `PathUUID`, `Query`, `Cookie`, `SetCookie`, `SetHeader`, `SetStatus`, `ClientIP`, `UserAgent`; efek diterapkan di jalur sukses dan error), `NoContent` → 204, `WriteError` (kode dikenal → status §5.10; kode tak dikenal → 500 `INTERNAL_ERROR` tanpa bocor details; error internal di-log ERROR sekali dengan `error_code` + `error_location`; `Retry-After: 1` untuk 503 kecuali sudah diset), `WriteJSON`, `StatusOf`, `FieldError`, `Page`/`NewPage`, `EncodeCursor`/`DecodeCursor`, `ParseLimit`; konteks `WithRequestID`/`WithLogger`/`WithClientIP`
+- Golden `testdata/api/rest/errors/<KODE>.json` untuk 50 kode katalog REST
+- Dependensi baru: `github.com/go-chi/chi/v5`
+### Test
+- go test ./internal/httpapi -race — PASS (74 test)
+### Penyimpangan
+- 17 kode yang hanya ada di katalog WebSocket tidak punya status REST; bila bocor ke `WriteError` diperlakukan seperti kode tak dikenal (500 `INTERNAL_ERROR`) — test `TestWriteErrorUnknownAndWSOnlyCodes`
+
+## M2-T22 — httpapi middleware
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/httpapi/middleware*.go`: `RequestID` (UUID valid dipakai, selain itu UUIDv7), `Recoverer` (panic → 500, satu log ERROR dengan `error_location`), `AccessLog` (route pattern, status, `duration_ms`; tanpa path mentah/query sehingga `?ticket=` tak bocor), `CORS` (tanpa library), `BodyLimit` (413), `SecurityHeaders` (+ `no-store` untuk `/auth/*` dan `/me*`), `ClientIP`/`ClientIPMiddleware` (XFF dari kanan melewati proxy tepercaya), `RateLimit` (fail-open, `RateLimit-Remaining`, `Retry-After` dibulatkan ke atas) dengan `IPSubject`/`UserSubject`, `Authn`, `RequireAdmin` (claim lalu DB; audit `admin_access_denied`), `OriginCheck`, `Telemetry` (span `HTTP {method} {route}`, 5xx = Error), `HTTPMetrics`
+- `metrics.NewHTTP`: `kotoki_http_requests_total` dan `kotoki_http_request_duration_seconds`; rute tak cocok → `route="unmatched"`; `/healthz`, `/readyz`, `/metrics` tidak dihitung
+### Test
+- go test ./internal/httpapi ./internal/platform/metrics -race — PASS
+### Penyimpangan
+- `Telemetry` ditulis sendiri di atas `platform/otel` (bukan `otelhttp`) supaya nama span memakai pola chi yang baru diketahui setelah routing; propagasi W3C tetap di-extract dari header
+
+## M2-T23 — Router, empat grup, rute auth & me, TestRouteTable
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/httpapi/{router,deps}.go`: `NewRouter(Deps)` (RequestID → ClientIP → Recoverer → AccessLog → HTTPMetrics → Telemetry → SecurityHeaders → CORS → BodyLimit; grup publik/user; 404 `NOT_FOUND`, 405 `METHOD_NOT_ALLOWED` lewat `WriteError`; `/healthz` dst. tidak dilayani), interface layanan kecil (`authService`, `userService`)
+- `auth_{routes,handler,dto}.go`: register 201, login 200, refresh (cookie; hapus cookie hanya pada `REFRESH_TOKEN_INVALID`, 409 tidak menyentuh cookie), logout 204 (selalu hapus cookie), forgot 202 generik, reset 204, terms 200; policy IP di rute, policy email (`auth_login_email`, `auth_forgot_email`) di handler setelah decode; `me_{routes,handler,dto}.go`: `GET /me`, `PUT /me/consents`, `DELETE /me` 202 + hapus cookie
+- Golden: `testdata/api/rest/auth/{register_201,terms_200}.json`, `me/me_200.json`
+### Test
+- go test ./internal/httpapi -race — PASS: `TestRouteTable` (rute terdaftar == baris Ready; grup & policy dibuktikan lewat perilaku), `TestInternalPathsNotServed`, alur register→login→refresh→409→logout→401, origin check, rate limit email, forgot identik, reset, terms, cookie `Secure=false`
+### Penyimpangan
+- Atribut `Set-Cookie` diverifikasi sebagai himpunan (Path, HttpOnly, Secure, SameSite=Strict, Max-Age=2592000), bukan urutan teks: `net/http` selalu menulis `Max-Age` sebelum `HttpOnly`
+
+## M2-T24 — Rute admin & balance user
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/httpapi/{balance,admin}_{routes,handler,dto}.go`: `GET /balance` (`allowed_durations`), `GET /balance/transactions` (filter `entry_type`, cursor UUID, tepat 9 field user: tanpa `reason`/`admin_user_id`/`idempotency_key`); admin: `GET /admin/users` (validasi `email` ≥ 3, `status`, `role`), `GET|PATCH /admin/users/{user_id}`, `POST …/balance-grants`, `POST …/balance-adjustments` (header `Idempotency-Key` UUID; replay → 200 + `Idempotent-Replayed: true`), `GET …/balance/transactions` (bentuk ledger admin), `GET /admin/audit-logs`; grup admin = `Authn` → rate limit `admin_user` → `RequireAdmin`; `PATCH`/grant/adjust meneruskan `RequestMeta{RequestID, ClientIP, UserAgent}`
+- `TestRouteTable`: baris balance + admin M2 berstatus `Ready`; golden `testdata/api/rest/{admin/grant_201,balance/balance_200}.json`
+### Test
+- go test ./internal/httpapi -race — PASS
+### Penyimpangan
+- Rate limit `admin_user` dipasang sebelum `RequireAdmin` (bukan sesudahnya) agar token USER tidak memicu query DB per request
+
+## M2-T25 — Konfigurasi auth, wiring `cmd/api`, gerbang integrasi M2
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/platform/config/auth.go`: struct `Auth` (JWT, TTL, argon2, mail, cookie, trusted proxy) di-embed ke `API`; default §13.2.7; rahasia JWT tidak pernah tercetak; validasi lintas-field
+- `cmd/api/main.go`: `buildAPI` merakit store, JWT, argon2, mailer + dispatcher, balance/admin/auth/user service, rate limiter Redis+Local, router; listener publik di-bind sebelum startup check, `Serve` sesudahnya; `http.Server` dengan timeout; shutdown mengikuti `SHUTDOWN_TIMEOUT`
+- `Makefile promote-admin` + `test/arch/promote_admin_test.go`
+### Test
+- `cmd/api/m2_gate_integration_test.go` (komponen nyata, PG+Redis, jam palsu): `TestM2GateAuthFlow`, `RefreshReuse`, `ResetFlow`, `Consent`, `AdminGrant`, `DeleteAccount`, `TicketTTL`; tiap tes diakhiri `AssertReconciled`
+- `go test -tags integration -p 1 ./cmd/api`, `go test ./internal/platform/config -race`, `go test ./test/arch` — PASS
+### Penyimpangan
+- Tes gerbang ditempatkan di `cmd/api` (bukan `internal/httpapi`) karena depguard `handler-thin` melarang paket httpapi mengimpor postgres/redisstore/pgx
+
+## M2-Final — Perbaikan hasil review seluruh branch
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `auth.Service.Login`: transaksi penerbitan sesi mengunci baris user (`LockByID`) dan memeriksa ulang `password_hash` + status; rehash dipindah ke dalam transaksi itu dan hanya berlaku bila hash tidak berubah (reset/suspend/hapus yang commit di antara verifikasi dan sesi kini menang)
+- `cmd/api`: penutupan dispatcher dibatasi `SHUTDOWN_TIMEOUT`
+- `config`: `PASSWORD_RESET_URL_BASE` wajib https mutlak (bukan default localhost) di staging/prod
+- `httpapi.ClientIP`: semua baris header `X-Forwarded-For` digabung sebelum ditelusuri dari kanan
+### Test
+- RED→GREEN: `TestLoginRacingPasswordReset`, `TestLoginRacingSuspension`, `TestAuthConfigValidate` (2 kasus prod), `TestClientIP` (multi-baris), `TestDispatcherCloseHonoursDeadline`
