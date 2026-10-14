@@ -425,3 +425,11 @@ Tanggal: 2026-10-14
 ### Penyimpangan
 - Dikerjakan sebelum Task 16 (Task 16 membutuhkan `Balance()` untuk `Accounts()`)
 - Suite kontrak diperbaiki agar bentuk movement sah menurut `chk_ledger_shape` (adjustment membawa admin & reason) — ketahuan oleh PostgreSQL, fake tidak menegakkannya
+
+## M2-T16 — postgres: repo users, refresh token, password reset, AuthStore
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `db/queries/{users,refresh_tokens,password_resets}.sql` + sqlc; `internal/postgres/{user_repo,refresh_token_repo,password_reset_repo}.go` (`ux_users_email`/`ux_users_phone` → `ErrEmailTaken`/`ErrPhoneTaken`, `ErrNoRows` → sentinel, `FOR UPDATE` untuk `LockByID`/`LockByHash`, waktu selalu dari parameter, filter list memakai `starts_with(lower(email), …)`); `(*Tx).Accounts()` menjembatani ke `balance.OpenAccount`; `(*Store).AuthStore()`
+### Test
+- go test -tags integration ./internal/postgres -run 'PGUser|PGRefresh|PGPassword|PGRegister|PGCount' (Podman) — PASS: ketiga suite `repotest` di PostgreSQL, DELETE satu statement untuk rantai self-FK, register atomik (rollback user+account+ledger), reuse refresh di PG commit revoke, `CountActive` batas `expires_at == now`

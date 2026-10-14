@@ -45,3 +45,18 @@ func fromNullUUID(id uuid.NullUUID) *uuid.UUID {
 	v := id.UUID
 	return &v
 }
+
+func tszPtr(t *time.Time) pgtype.Timestamptz {
+	if t == nil {
+		return pgtype.Timestamptz{}
+	}
+	return tsz(*t)
+}
+
+func fromTszPtr(t pgtype.Timestamptz) *time.Time {
+	if !t.Valid {
+		return nil
+	}
+	v := t.Time.UTC()
+	return &v
+}
