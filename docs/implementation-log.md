@@ -298,3 +298,12 @@ Tanggal: 2026-10-14
 - Dependensi baru: `github.com/golang-jwt/jwt/v5 v5.3.0` (go 1.25 tetap)
 ### Test
 - go test ./internal/auth -race -cover — PASS (21 test)
+
+## M2-T4 — Mailer adapters
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/mailer`: `New(Config, *slog.Logger)` (log ditolak di staging/prod, smtp wajib host), `LogMailer` (`mail.sent`), `SMTPMailer` (STARTTLS wajib, PlainAuth bila username, header RFC 2047), `FakeMailer`
+### Test
+- go test ./internal/mailer/... -race (+ `-tags integration`: `TestSMTPRequiresSTARTTLS` dengan server SMTP loopback tanpa STARTTLS, body tidak terkirim) — PASS
+- Pengiriman SMTP nyata tidak diuji otomatis
