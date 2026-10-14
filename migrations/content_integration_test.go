@@ -145,11 +145,15 @@ func TestContentChecks(t *testing.T) {
 		state, con string
 	}{
 		{"topic code", func() error { return ins("topics", testutil.TopicRow(testutil.Row{"code": "lower"})) }, "23514", "chk_topics_code"},
-		{"difficulty", func() error { return ins("scenario_versions", testutil.ScenarioVersionRow(sid, 1, testutil.Row{"difficulty_level": 6})) }, "23514", "chk_scenario_versions_difficulty"},
+		{"difficulty", func() error {
+			return ins("scenario_versions", testutil.ScenarioVersionRow(sid, 1, testutil.Row{"difficulty_level": 6}))
+		}, "23514", "chk_scenario_versions_difficulty"},
 		{"levels", func() error {
 			return ins("scenario_versions", testutil.ScenarioVersionRow(sid, 1, testutil.Row{"recommended_level_min": 4.0, "recommended_level_max": 2.0}))
 		}, "23514", "chk_scenario_versions_levels"},
-		{"formality", func() error { return ins("scenario_versions", testutil.ScenarioVersionRow(sid, 1, testutil.Row{"formality": "LOUD"})) }, "23514", "chk_scenario_versions_formality"},
+		{"formality", func() error {
+			return ins("scenario_versions", testutil.ScenarioVersionRow(sid, 1, testutil.Row{"formality": "LOUD"}))
+		}, "23514", "chk_scenario_versions_formality"},
 		{"prompt key", func() error { return ins("prompt_configs", testutil.PromptConfigRow("X", nil)) }, "23514", "chk_prompt_configs_key"},
 	}
 	for _, c := range cases {
@@ -168,7 +172,9 @@ func TestContentChecks(t *testing.T) {
 func TestCharacterChecks(t *testing.T) {
 	pool := testutil.NewPostgres(t)
 	ctx := context.Background()
-	ch := func(o testutil.Row) error { return testutil.TryInsert(ctx, pool, "characters", testutil.CharacterRow(o)) }
+	ch := func(o testutil.Row) error {
+		return testutil.TryInsert(ctx, pool, "characters", testutil.CharacterRow(o))
+	}
 	voice := func(o map[string]any) testutil.Row { return testutil.Row{"voice": testutil.ValidVoiceJSON(o)} }
 	bad := func(name string, err func() error, state, con string) {
 		t.Run(name, func(t *testing.T) { testutil.RequirePgErr(t, err(), state, con) })

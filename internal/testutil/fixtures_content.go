@@ -35,7 +35,9 @@ func ValidVoiceJSON(o ...map[string]any) []byte {
 
 func newID() uuid.UUID { return uuid.Must(uuid.NewV7()) }
 
-func short(id uuid.UUID) string { return strings.ToUpper(strings.ReplaceAll(id.String(), "-", ""))[20:] }
+func short(id uuid.UUID) string {
+	return strings.ToUpper(strings.ReplaceAll(id.String(), "-", ""))[20:]
+}
 
 // TopicRow returns a valid topics row.
 func TopicRow(o Row) Row {
