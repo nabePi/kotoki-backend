@@ -143,3 +143,20 @@ func TestRenderPasswordReset(t *testing.T) {
 	require.Contains(t, m.TextBody, "https://app.example/reset-password?token=abc")
 	require.Contains(t, m.TextBody, "15 menit")
 }
+
+type ctxBlockedMailer struct{}
+
+func (*ctxBlockedMailer) Send(ctx context.Context, _ auth.MailMessage) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestDispatcherCloseHonoursDeadline(t *testing.T) {
+	d := auth.NewMailDispatcher(&ctxBlockedMailer{}, logTo(&bytes.Buffer{}), auth.DispatcherOptions{})
+	require.True(t, d.Enqueue(msg("a@x.id")))
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	require.ErrorIs(t, d.Close(ctx), context.DeadlineExceeded)
+	require.Less(t, time.Since(start), 2*time.Second)
+}

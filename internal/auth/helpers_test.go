@@ -49,13 +49,18 @@ type countingHasher struct {
 	mu          sync.Mutex
 	verifies    int
 	forceRehash bool
+	afterVerify func() // runs after each Verify, to interleave a concurrent writer
 }
 
 func (h *countingHasher) Verify(ctx context.Context, pw, enc string) (bool, error) {
 	h.mu.Lock()
 	h.verifies++
 	h.mu.Unlock()
-	return h.PasswordHasher.Verify(ctx, pw, enc)
+	ok, err := h.PasswordHasher.Verify(ctx, pw, enc)
+	if h.afterVerify != nil {
+		h.afterVerify()
+	}
+	return ok, err
 }
 
 func (h *countingHasher) NeedsRehash(enc string) bool {

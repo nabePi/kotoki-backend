@@ -518,3 +518,14 @@ Tanggal: 2026-10-14
 - `go test -tags integration -p 1 ./cmd/api`, `go test ./internal/platform/config -race`, `go test ./test/arch` — PASS
 ### Penyimpangan
 - Tes gerbang ditempatkan di `cmd/api` (bukan `internal/httpapi`) karena depguard `handler-thin` melarang paket httpapi mengimpor postgres/redisstore/pgx
+
+## M2-Final — Perbaikan hasil review seluruh branch
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `auth.Service.Login`: transaksi penerbitan sesi mengunci baris user (`LockByID`) dan memeriksa ulang `password_hash` + status; rehash dipindah ke dalam transaksi itu dan hanya berlaku bila hash tidak berubah (reset/suspend/hapus yang commit di antara verifikasi dan sesi kini menang)
+- `cmd/api`: penutupan dispatcher dibatasi `SHUTDOWN_TIMEOUT`
+- `config`: `PASSWORD_RESET_URL_BASE` wajib https mutlak (bukan default localhost) di staging/prod
+- `httpapi.ClientIP`: semua baris header `X-Forwarded-For` digabung sebelum ditelusuri dari kanan
+### Test
+- RED→GREEN: `TestLoginRacingPasswordReset`, `TestLoginRacingSuspension`, `TestAuthConfigValidate` (2 kasus prod), `TestClientIP` (multi-baris), `TestDispatcherCloseHonoursDeadline`

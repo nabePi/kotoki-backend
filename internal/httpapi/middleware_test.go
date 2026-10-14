@@ -150,6 +150,11 @@ func TestClientIP(t *testing.T) {
 	require.Equal(t, "198.51.100.1", httpapi.ClientIP(mk("198.51.100.1:5555", "1.2.3.4"), nil).String(), "no trusted proxies: RemoteAddr")
 	require.Equal(t, "203.0.113.5", httpapi.ClientIP(mk("10.0.0.9:1", "spoof, 203.0.113.5"), trusted).String(), "the right-most untrusted hop wins")
 
+	multi := mk("10.0.0.9:1", "")
+	multi.Header.Add("X-Forwarded-For", "1.2.3.4") // client-supplied
+	multi.Header.Add("X-Forwarded-For", "203.0.113.5")
+	require.Equal(t, "203.0.113.5", httpapi.ClientIP(multi, trusted).String(), "every XFF header line counts, the proxy's last line wins")
+
 	var seen netip.Addr
 	h := httpapi.ClientIPMiddleware(trusted)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen, _ = httpapi.ClientIPFrom(r.Context())

@@ -110,7 +110,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = dispatcher.Close(context.WithoutCancel(ctx)) }()
+	// Bounded by the shutdown budget: with SMTP down an unbounded drain would outlive SIGKILL.
+	defer func() {
+		closeCtx, stopClose := context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
+		defer stopClose()
+		_ = dispatcher.Close(closeCtx)
+	}()
 	// Bind the public port before readiness flips so that a ready pod is always reachable;
 	// connections queue in the backlog until Serve starts right after the startup checks.
 	apiLn, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.HTTPAddr)

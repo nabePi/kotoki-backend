@@ -77,6 +77,8 @@ func TestAuthConfigValidate(t *testing.T) {
 		{"prod log mail", map[string]string{"APP_ENV": "prod", "MAIL_MODE": "log"}, "MAIL_MODE"},
 		{"staging insecure cookie", map[string]string{"APP_ENV": "staging", "AUTH_REFRESH_COOKIE_SECURE": "false"}, "AUTH_REFRESH_COOKIE_SECURE"},
 		{"dev insecure cookie", map[string]string{"APP_ENV": "dev", "AUTH_REFRESH_COOKIE_SECURE": "false"}, "AUTH_REFRESH_COOKIE_SECURE"},
+		{"prod reset url default", map[string]string{"APP_ENV": "prod", "MAIL_MODE": "smtp", "SMTP_HOST": "smtp.x", "PASSWORD_RESET_URL_BASE": ""}, "PASSWORD_RESET_URL_BASE"},
+		{"prod reset url http", map[string]string{"APP_ENV": "prod", "MAIL_MODE": "smtp", "SMTP_HOST": "smtp.x", "PASSWORD_RESET_URL_BASE": "http://app.kotoki.id/reset"}, "PASSWORD_RESET_URL_BASE"},
 		{"unknown mail mode", map[string]string{"MAIL_MODE": "pigeon"}, "MAIL_MODE"},
 		{"smtp without host", map[string]string{"MAIL_MODE": "smtp"}, "SMTP_HOST"},
 		{"bad trusted cidr", map[string]string{"TRUSTED_PROXY_CIDRS": "10.0.0.0/8,nope"}, "TRUSTED_PROXY_CIDRS"},

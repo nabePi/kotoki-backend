@@ -285,10 +285,40 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (res AuthResult, err
 		return AuthResult{}, errs.New(errs.CodeAccountSuspended, "account suspended")
 	}
 
+	// Hash outside the transaction (it is slow); it is applied only if the stored hash is unchanged.
+	var newHash string
+	if s.hasher.NeedsRehash(user.PasswordHash) {
+		h, herr := s.hasher.Hash(ctx, in.Password)
+		if herr != nil {
+			s.log.WarnContext(ctx, "password rehash failed", "user_id", user.ID.String(), "error_code", string(errs.CodeOf(herr)))
+		} else {
+			newHash = h
+		}
+	}
 	now := s.clk.Now()
 	var raw string
 	var tok RefreshToken
 	err = s.store.WithinTx(ctx, func(ctx context.Context, tx Tx) error {
+		// Re-check under the row lock: a reset, suspension or deletion committed since the
+		// verification must not be followed by a fresh session or a stale rehash.
+		locked, lerr := tx.Users().LockByID(ctx, user.ID)
+		if lerr != nil {
+			if errors.Is(lerr, ErrUserNotFound) {
+				return errs.New(errs.CodeInvalidCredentials, "invalid credentials")
+			}
+			return lerr
+		}
+		switch {
+		case locked.PasswordHash != user.PasswordHash || locked.Status == UserStatusDeleted:
+			return errs.New(errs.CodeInvalidCredentials, "invalid credentials")
+		case locked.Status == UserStatusSuspended:
+			return errs.New(errs.CodeAccountSuspended, "account suspended")
+		}
+		if newHash != "" {
+			if err := tx.Users().SetPasswordHash(ctx, user.ID, newHash, nil); err != nil {
+				return err
+			}
+		}
 		if err := tx.Users().UpdateLastLogin(ctx, user.ID, now); err != nil {
 			return err
 		}
@@ -299,28 +329,12 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (res AuthResult, err
 	if err != nil {
 		return AuthResult{}, err
 	}
-	if s.hasher.NeedsRehash(user.PasswordHash) {
-		s.rehash(ctx, user.ID, in.Password)
-	}
 	user.LastLoginAt = &now
 	access, expiresIn, err := s.accessFor(user, tok.FamilyID, now)
 	if err != nil {
 		return AuthResult{}, err
 	}
 	return AuthResult{AccessToken: access, ExpiresIn: expiresIn, RefreshToken: raw, RefreshExpiresAt: tok.ExpiresAt, User: user}, nil
-}
-
-// rehash upgrades the stored hash after a successful login; failures are only logged.
-func (s *Service) rehash(ctx context.Context, userID uuid.UUID, password string) {
-	hash, err := s.hasher.Hash(ctx, password)
-	if err == nil {
-		err = s.store.WithinTx(ctx, func(ctx context.Context, tx Tx) error {
-			return tx.Users().SetPasswordHash(ctx, userID, hash, nil)
-		})
-	}
-	if err != nil {
-		s.log.WarnContext(ctx, "password rehash failed", "user_id", userID.String(), "error_code", string(errs.CodeOf(err)))
-	}
 }
 
 // decodeToken validates the shape of a client token and returns its SHA-256.

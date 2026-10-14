@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -50,13 +51,13 @@ type Auth struct {
 }
 
 func defaultAuth() Auth {
-	return Auth{ //nolint:gosec // G101 false positive: issuer/audience/URL defaults, no credential
+	return Auth{
 		JWTIssuer: "kotoki-api", JWTAudience: "kotoki",
 		AccessTokenTTL: 15 * time.Minute, RefreshTokenTTL: 720 * time.Hour, RefreshReuseGrace: 10 * time.Second,
 		RefreshCookieSecure: true, PasswordResetTTL: 15 * time.Minute,
 		Argon2:      Argon2{MemoryKiB: 19456, Iterations: 2, Parallelism: 1, MaxConcurrent: 8},
 		WSTicketTTL: 30 * time.Second, RealtimePublicURL: "ws://localhost:8081",
-		PasswordResetURLBase: "http://localhost:3000/reset-password",
+		PasswordResetURLBase: defaultResetURLBase,
 		Mail:                 Mail{Mode: "log", From: "Kotoki <no-reply@localhost>", SMTPPort: 587},
 	}
 }
@@ -92,6 +93,8 @@ func (a Auth) TrustedProxyPrefixes() []netip.Prefix {
 	}
 	return out
 }
+
+const defaultResetURLBase = "http://localhost:3000/reset-password"
 
 var termsVersionRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,32}$`)
 
@@ -130,6 +133,15 @@ func (a Auth) validate(v *validator, c Common) {
 		}
 	default:
 		v.fail("MAIL_MODE", "must be log or smtp, got %q", a.Mail.Mode)
+	}
+	if c.strict() {
+		u, err := url.Parse(a.PasswordResetURLBase)
+		switch {
+		case a.PasswordResetURLBase == defaultResetURLBase:
+			v.fail("PASSWORD_RESET_URL_BASE", "required when APP_ENV is staging or prod (the localhost default is rejected)")
+		case err != nil || u.Scheme != "https" || u.Host == "":
+			v.fail("PASSWORD_RESET_URL_BASE", "must be an absolute https URL when APP_ENV is staging or prod")
+		}
 	}
 	for _, cidr := range a.TrustedProxyCIDRs {
 		if _, err := netip.ParsePrefix(strings.TrimSpace(cidr)); err != nil {
