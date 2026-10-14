@@ -563,3 +563,13 @@ Tanggal: 2026-10-14
 - `internal/provider/pcm.go`: `EncodeWAV`/`DecodeWAV`/`WAVDurationMs`, `ResamplePCM16` (linear), `RMSdBFS`, `pcmRing` (posisi logis absolut)
 ### Test
 - `text_test.go`, `pcm_test.go`, `pcm_internal_test.go` — PASS (race)
+
+## M4-T3 — `RouterConfig` dan `Validate()`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/config.go`: `RouterConfig` (tag `env`/`envDefault` sesuai §8.5.1, D-017), `ConcurrencyConfig` + `Limit`, `ModeFor`, `ActiveSTT`/`ActiveLLM`/`TTSVendors`/`STTModel`/`LLMModel`/`EvaluationModel`, `Validate` (flag/key/model hanya untuk kapabilitas mode `real`; semua pesan menyebut nama env), `Secret` untuk API key (tidak tercetak)
+### Test
+- `config_test.go`, `config_env_test.go`: satu kasus per aturan §8.5.1, default env, override env, tidak ada seleksi vendor/profil TTS — PASS
+### Penyimpangan
+- Galat parse bool menyebut nama field Go (bukan nama env); pemetaan nama env dilakukan saat `platform/config` menanam `RouterConfig`
