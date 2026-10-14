@@ -317,3 +317,15 @@ Tanggal: 2026-10-14
 - go test ./internal/auth -race — PASS (dispatcher: deliver, retry, timeout, buffer penuh; render)
 ### Penyimpangan
 - `TestDispatcherBufferFull`: pesan 1 diambil worker, pesan 2 masuk buffer, pesan 3 ditolak (brief menyebut "kedua"; urutan ini deterministik)
+
+## M2-T6 — Balance domain, port, OpenAccount, pembacaan saldo (+ fake & contract suite)
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/balance`: `Account`, `LedgerEntry`, `Movement`, `EntryType`, `ReferenceType`, port `Repository` (Lock/Get/InsertAccount, `ApplyMovement`, `FindLedgerByIdempotencyKey`, `ListLedger` dengan filter tipe + cursor), `Store`/`Tx`, `OpenAccount`, `Service.GetBalance` (`AllowedDurations` ≤ saldo), `Service.ListTransactions` (limit+1), `Description` (§4.7)
+- `fakes.BalanceStore` (rollback snapshot saat fn error, `FailNext`, `WithBalanceIDs`), `repotest.BalanceRepoSuite`
+### Test
+- go test ./internal/balance/... ./internal/testutil/... -race — PASS
+### Penyimpangan
+- Suite menerima `BalanceHarness{Store, SeedUser}` (bukan hanya `newStore`) karena store PostgreSQL butuh baris `users` nyata (Task 17)
+- `GetBalance` untuk user tanpa account → `USER_NOT_FOUND`
