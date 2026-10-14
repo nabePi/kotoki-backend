@@ -108,6 +108,11 @@ func check(profile, thresholds, baseline io.Reader) ([]string, error) {
 		}
 		f := strings.Fields(line)
 		total := f[0] == "TOTAL"
+		var except []string
+		if total && len(f) == 4 && strings.HasPrefix(f[3], "except=") {
+			except = strings.Split(strings.TrimPrefix(f[3], "except="), ",")
+			f = f[:3]
+		}
 		if (total && len(f) != 3) || (!total && len(f) != 2) {
 			return nil, fmt.Errorf("bad threshold line %q", line)
 		}
@@ -121,7 +126,17 @@ func check(profile, thresholds, baseline io.Reader) ([]string, error) {
 		}
 		var ex func(string) bool
 		if total {
-			ex = excludedFromTotal
+			ex = func(dir string) bool {
+				if excludedFromTotal(dir) {
+					return true
+				}
+				for _, e := range except {
+					if underPrefix(dir, e) {
+						return true
+					}
+				}
+				return false
+			}
 		}
 		agg, seen := aggregate(pkgs, prefix, ex)
 		if !seen {

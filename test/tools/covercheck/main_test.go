@@ -61,3 +61,14 @@ func TestTotalExcludesSqlcgenAndTestutil(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, fails)
 }
+
+func TestTotalExceptList(t *testing.T) {
+	p := profile("internal/balance", 100, 95) + strings.TrimPrefix(profile("internal/postgres", 1000, 0), "mode: atomic\n")
+	fails, err := check(strings.NewReader(p), strings.NewReader("TOTAL internal 75\n"), nil)
+	require.NoError(t, err)
+	require.Len(t, fails, 1, "adapter package drags TOTAL down when not excluded")
+
+	fails, err = check(strings.NewReader(p), strings.NewReader("TOTAL internal 75 except=internal/postgres,internal/redisstore\n"), nil)
+	require.NoError(t, err)
+	require.Empty(t, fails)
+}

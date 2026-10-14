@@ -22,7 +22,7 @@ N               ?= 1
 
 .PHONY: env up up-obs down reset migrate-up migrate-down migrate-create seed promote-admin \
         sqlc sqlc-check tidy-check migrations-check modelname-check arch-check \
-        test test-cover test-integration test-e2e test-live lint vuln \
+        test test-cover test-cover-integration test-integration test-e2e test-live lint vuln \
         run-api run-realtime run-worker build cli docker-build load
 
 env:            ## salin .env.example → .env (tidak menimpa)
@@ -88,6 +88,11 @@ test:           ## unit + contract + component, race
 test-cover:
 	$(GO) test -race -short -count=1 -coverprofile=coverage.out ./...
 	$(GO) run ./test/tools/covercheck -profile coverage.out -thresholds test/tools/covercheck/thresholds.txt
+
+test-cover-integration: ## cakupan adapter (postgres, redisstore, amqp) dari run integration, spec §14.8
+	@pkgs=""; for p in postgres redisstore amqp; do [ -d internal/$$p ] && pkgs="$$pkgs ./internal/$$p/..."; done; \
+	$(GO) test -race -count=1 -p 1 -tags=integration -timeout 20m -coverprofile=coverage.integration.out $$pkgs
+	$(GO) run ./test/tools/covercheck -profile coverage.integration.out -thresholds test/tools/covercheck/thresholds.integration.txt
 
 test-integration:
 	$(GO) test -race -count=1 -p 1 -tags=integration -timeout 20m ./...

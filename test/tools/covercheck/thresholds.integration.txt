@@ -1,0 +1,4 @@
+# Ambang adapter dari run integration (make test-cover-integration), spec §14.8.
+internal/postgres 70
+internal/redisstore 70
+internal/amqp 70
