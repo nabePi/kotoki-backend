@@ -414,3 +414,14 @@ Tanggal: 2026-10-14
 - go test ./internal/admin -race — PASS
 ### Penyimpangan
 - `auth.PasswordResetRepository` mendapat method `DeleteAllForUser` (Task 1 tidak memuatnya padahal §3.13.3 langkah 4 menghapus `password_reset_tokens`); fake + `repotest` ditambah
+
+## M2-T17 — postgres: repo balance (account & ledger) + BalanceStore
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `db/queries/balance.sql` + sqlc; `internal/postgres/balance_repo.go` (`(*Tx).Balance()`; `ApplyMovement` = `UPDATE balance_accounts … RETURNING` lalu `INSERT balance_ledger` dengan `*_after`; `ux_balance_ledger_idempotency` → `ErrDuplicateMovement`; lainnya `INTERNAL_ERROR`), `convert.go`, `store_views.go` (`BalanceStore()`); `testutil.AssertReconciled` (R1–R5 §4.8 verbatim)
+### Test
+- go test -tags integration ./internal/postgres -run 'PGBalance|PGLedger|PGGrant|PGAdjust' (Podman) — PASS: suite repo, ledger append-only (23001), 20 goroutine key sama → 1 ledger + 19 replay, 20 user key sama → 1 sukses + 19 `IDEMPOTENCY_KEY_REUSED`, adjust negatif ditolak; reconcile R1–R5 kosong di akhir tiap test
+### Penyimpangan
+- Dikerjakan sebelum Task 16 (Task 16 membutuhkan `Balance()` untuk `Accounts()`)
+- Suite kontrak diperbaiki agar bentuk movement sah menurut `chk_ledger_shape` (adjustment membawa admin & reason) — ketahuan oleh PostgreSQL, fake tidak menegakkannya

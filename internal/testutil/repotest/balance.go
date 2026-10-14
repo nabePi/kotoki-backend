@@ -116,6 +116,7 @@ func BalanceRepoSuite(t *testing.T, newHarness func(t *testing.T) BalanceHarness
 		}},
 		Case[BalanceHarness]{Name: "ListLedgerOrderFilterCursor", Run: func(t *testing.T, h BalanceHarness) {
 			uid := openAccount(t, h)
+			adminID, reason := h.SeedUser(t), "manual fix"
 			var ids []uuid.UUID
 			require.NoError(t, h.Store.WithinTx(context.Background(), func(ctx context.Context, tx balance.Tx) error {
 				for _, k := range []string{"grant:a", "grant:b", "grant:c"} {
@@ -129,7 +130,7 @@ func BalanceRepoSuite(t *testing.T, newHarness func(t *testing.T) BalanceHarness
 				require.NoError(t, err)
 				_, err = tx.Balance().ApplyMovement(ctx, acc, balance.Movement{
 					EntryType: balance.EntryAdjustment, AvailableDelta: 10, ReferenceType: balance.RefAdmin,
-					IdempotencyKey: "adjust:x", At: at})
+					AdminUserID: &adminID, Reason: &reason, IdempotencyKey: "adjust:x", At: at})
 				return err
 			}))
 			require.NoError(t, h.Store.WithinTx(context.Background(), func(ctx context.Context, tx balance.Tx) error {
