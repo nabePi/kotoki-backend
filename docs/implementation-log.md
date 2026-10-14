@@ -764,3 +764,11 @@ Tanggal: 2026-10-14
 - STT: ERROR vendor tidak lagi dihitung/diteruskan dua kali dan `Close` normal tidak menghitung kegagalan (flag `ending`); rotasi diset sinkron di `handle` (audio tidak pernah ditolak), Finalize yang belum dijawab diulang di koneksi baru, FINAL koneksi lama dibuang, trigger saat replay memicu rotasi ulang, `AudioMsSent` tidak ganda, titik replay dijepit ke audio yang tertulis, `ReportFinalTimeout` setelah close diabaikan
 - TTS: slot yang tak terdaftar tidak lagi menyebabkan nil-pointer; `audioSent` dicek ulang di bawah `g.mu` saat switch; memilih voice + mendaftarkan stream satu critical section; stream yang ditutup/deadline pemanggil tidak memicu switch
 - Router: menunggu slot semaphore bukan vonis breaker; `INVALID_RESPONSE` diulang sekali; `httpx` tidak lagi menggaungkan body mentah dan menyamarkan `sk_…`; `ttsCandidates` (kode mati) dihapus
+
+## M3-T1 — Preflight kontrak M1/M2/M4 dan kode error
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- Tes karakterisasi: `internal/platform/errs/m3codes_test.go` (23 kode M3: pesan tidak kosong + status HTTP; 3 kode yang dihapus tidak ada; total 67), `internal/m3preflight_test.go` (kompilasi simbol M1/M2/M4 yang dipakai M3)
+### Test
+- `go test ./internal/... -run 'TestM3|TestPreflight'` — PASS langsung (kontrak sesuai)
