@@ -33,9 +33,12 @@ type Fault struct {
 	Mode    string
 	Rate    float64
 	AfterMs int64
-	Status  int
-	Kind    provider.ErrorKind
-	DelayMs int
+	// AfterEvents: for LLM/TTS "timeout" faults, the number of DELTA/chunk events delivered
+	// before the stream hangs (0 = hang before the first one).
+	AfterEvents int
+	Status      int
+	Kind        provider.ErrorKind
+	DelayMs     int
 }
 
 // FaultSet is an immutable set of runtime faults keyed by capability and instance.
@@ -78,6 +81,7 @@ type faultJSON struct {
 	Mode    string             `json:"mode"`
 	Rate    *float64           `json:"rate"`
 	AfterMs int64              `json:"after_ms"`
+	AfterEv int                `json:"after_events"`
 	Status  int                `json:"status"`
 	Kind    provider.ErrorKind `json:"kind"`
 	DelayMs int                `json:"delay_ms"`
@@ -166,7 +170,7 @@ func ParseFaultSet(b []byte, now time.Time, warn func(string)) *FaultSet {
 			warn(fmt.Sprintf("fake faults: rate out of range, entry %q ignored", key))
 			continue
 		}
-		f := &Fault{Mode: fj.Mode, Rate: rate, AfterMs: fj.AfterMs, Status: fj.Status, DelayMs: fj.DelayMs}
+		f := &Fault{Mode: fj.Mode, Rate: rate, AfterMs: fj.AfterMs, AfterEvents: max(fj.AfterEv, 0), Status: fj.Status, DelayMs: fj.DelayMs}
 		switch {
 		case fj.Kind != "":
 			if !validKinds[fj.Kind] {
@@ -190,6 +194,7 @@ type failPlan struct {
 	Kind         provider.ErrorKind
 	Phase        string
 	After        int   // events/chunks (STT: seconds) before a mid failure
+	HangAfter    int   // events/chunks delivered before a hang
 	AfterMs      int64 // STT audio position for runtime timeout/disconnect faults
 	ExtraDelayMs int   // "slow" fault: added latency (not a failure)
 }
@@ -238,7 +243,7 @@ func (d *decider) next(f *Fault) (fail bool, plan failPlan) {
 		p := failPlan{Mode: f.Mode, Kind: f.Kind, AfterMs: f.AfterMs, Phase: PhaseStart}
 		switch f.Mode {
 		case ModeTimeout:
-			p.Phase = PhaseHang
+			p.Phase, p.HangAfter = PhaseHang, f.AfterEvents
 		case ModeFailAfterFirstAudio:
 			p.Phase, p.After, p.Kind = PhaseMid, 1, provider.KindUnavailable
 		case ModeDisconnectMidStream:
@@ -263,7 +268,7 @@ func (d *decider) next(f *Fault) (fail bool, plan failPlan) {
 	if kind == "" {
 		kind = provider.KindUnavailable
 	}
-	return true, failPlan{Kind: kind, Phase: phase, After: d.cfg.FailAfter}
+	return true, failPlan{Kind: kind, Phase: phase, After: d.cfg.FailAfter, HangAfter: d.cfg.HangAfter}
 }
 
 // Poller refreshes the fault snapshot from a fetch function (the Redis GET lives in

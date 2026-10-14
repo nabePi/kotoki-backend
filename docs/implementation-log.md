@@ -673,3 +673,12 @@ Tanggal: 2026-10-14
 - `router_test.go`, `router_helpers_test.go` (+ `export_test.go`) — PASS (race)
 ### Penyimpangan
 - Asersi `var _ RealtimeRouter/AsyncRouter` dipindah ke Task 18 (method lain menyusul di T15–T18)
+
+## M4-T15 — `Generation`: LLM satu vendor
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/provider/generation.go`: `Router.NewGeneration`, `StreamLLM` (breaker + semaphore, model/default dari config, first-token timer, `LLM_TOTAL`, `DONE{TRUNCATED}` setelah `MarkAudioSent` (deadline sesi tidak dihitung breaker, `LLM_TOTAL` dihitung), `CONTENT_FILTERED` tidak dihitung breaker dan diteruskan, cancel → `DONE{CANCELLED}`, usage estimasi saat gagal, metrik/biaya/health, log DEBUG tanpa teks), `Summary`, `MarkAudioSent`, `TTSEpochChanged`; `generation_tts.go` berisi stub `Synthesize` sampai T16
+- `fake`: `HangAfter` (`FAKE_<INST>_<CAP>_HANG_AFTER`, fault `after_events`) agar stream bisa macet setelah N delta
+### Test
+- `generation_llm_test.go` (13 tes) — PASS (race, count=5)

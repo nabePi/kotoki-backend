@@ -178,7 +178,7 @@ func (l *LLM) run(ctx context.Context, s *llmStream, req provider.LLMRequest, fa
 		}
 	}
 
-	if fail && plan.Phase == PhaseHang {
+	if fail && plan.Phase == PhaseHang && plan.HangAfter == 0 {
 		<-ctx.Done()
 		cancelDone()
 		return
@@ -198,6 +198,11 @@ func (l *LLM) run(ctx context.Context, s *llmStream, req provider.LLMRequest, fa
 	for i := 0; i < len(runes); i += deltaRunes {
 		if fail && plan.Phase == PhaseMid && deltas >= plan.After {
 			send(provider.LLMEvent{Type: provider.LLMError, Err: errorFor(l.name, provider.CapLLM, plan.Kind)})
+			return
+		}
+		if fail && plan.Phase == PhaseHang && deltas >= plan.HangAfter { // S-7: stall after some output
+			<-ctx.Done()
+			cancelDone()
 			return
 		}
 		if deltas > 0 && !sleep(ctx, interval) {

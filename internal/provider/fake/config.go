@@ -49,6 +49,7 @@ type CapConfig struct {
 	FailureKind  provider.ErrorKind
 	FailurePhase string
 	FailAfter    int
+	HangAfter    int // events/chunks delivered before a "hang" phase starts (0 = hang at once)
 	ConnectMS    int // STT only
 }
 
@@ -136,7 +137,7 @@ func LoadCapConfig(lookup func(string) (string, bool), inst provider.Name, c pro
 	for _, f := range []struct {
 		suffix string
 		dst    *int
-	}{{"LATENCY_MS", &cfg.LatencyMS}, {"JITTER_MS", &cfg.JitterMS}, {"FAIL_EVERY_N", &cfg.FailEveryN}, {"FAIL_AFTER", &cfg.FailAfter}} {
+	}{{"LATENCY_MS", &cfg.LatencyMS}, {"JITTER_MS", &cfg.JitterMS}, {"FAIL_EVERY_N", &cfg.FailEveryN}, {"FAIL_AFTER", &cfg.FailAfter}, {"HANG_AFTER", &cfg.HangAfter}} {
 		if err := getInt(f.suffix, f.dst, 0); err != nil {
 			return CapConfig{}, err
 		}

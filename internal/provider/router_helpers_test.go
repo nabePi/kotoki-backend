@@ -45,6 +45,8 @@ type testOpt func(*testEnv, *testBuild)
 type testBuild struct {
 	ttsNames []provider.Name
 	llmName  provider.Name
+	llmCap   fake.CapConfig
+	llm      provider.LLMProvider // replaces the fake LLM when set
 }
 
 func withCfg(f func(*provider.RouterConfig)) testOpt {
@@ -54,6 +56,12 @@ func withCfg(f func(*provider.RouterConfig)) testOpt {
 func withTTSVendors(names ...provider.Name) testOpt {
 	return func(_ *testEnv, b *testBuild) { b.ttsNames = names }
 }
+
+// withLLMCap configures the fake LLM's failure behaviour.
+func withLLMCap(c fake.CapConfig) testOpt { return func(_ *testEnv, b *testBuild) { b.llmCap = c } }
+
+// withLLM replaces the LLM adapter (scripted stubs).
+func withLLM(p provider.LLMProvider) testOpt { return func(_ *testEnv, b *testBuild) { b.llm = p } }
 
 func withLLMName(n provider.Name) testOpt { return func(_ *testEnv, b *testBuild) { b.llmName = n } }
 
@@ -85,8 +93,12 @@ func newTestRouter(t *testing.T, opts ...testOpt) (*provider.Router, *testEnv) {
 	for _, n := range build.ttsNames {
 		tts[n] = fake.NewTTS(n, fake.CapConfig{}, fcfg, fd)
 	}
+	var llm provider.LLMProvider = namedLLM{fake.NewLLM(provider.FakePrimary, build.llmCap, fcfg, fd), build.llmName}
+	if build.llm != nil {
+		llm = build.llm
+	}
 	env.Deps = provider.RouterDeps{
-		STT: stt, LLM: namedLLM{fake.NewLLM(provider.FakePrimary, fake.CapConfig{}, fcfg, fd), build.llmName},
+		STT: stt, LLM: llm,
 		Evaluation: fake.NewEvaluation(provider.FakePrimary, fake.CapConfig{}, fcfg, fd),
 		TTS:        tts, Embedding: fake.NewEmbedding(provider.FakePrimary, fake.CapConfig{}, fcfg, fd),
 		Clock: env.Clock, Log: log, Role: provider.RoleRealtime, Metrics: provider.NewMetrics(env.Reg),

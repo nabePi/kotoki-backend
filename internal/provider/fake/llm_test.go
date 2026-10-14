@@ -166,6 +166,35 @@ func TestFakeLLMFailurePhases(t *testing.T) {
 	})
 }
 
+func TestFakeLLMHangAfterSomeDeltas(t *testing.T) {
+	l := newTestLLM(t, CapConfig{FailEveryN: 1, FailurePhase: PhaseHang, HangAfter: 2})
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	s, err := l.Stream(ctx, provider.LLMRequest{Messages: user("a")})
+	require.NoError(t, err)
+	var types []provider.LLMEventType
+	for ev := range s.Events() {
+		types = append(types, ev.Type)
+	}
+	require.Equal(t, []provider.LLMEventType{provider.LLMDelta, provider.LLMDelta, provider.LLMDone}, types, "two deltas, then silence until ctx ended")
+
+	faults := faultsFn(func() *FaultSet {
+		return ParseFaultSet([]byte(`{"LLM.FAKE_PRIMARY":{"mode":"timeout","rate":1,"after_events":1}}`), t0, nil)
+	})
+	l2 := newTestLLMWith(CapConfig{}, Config{}, Deps{Faults: faults})
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel2()
+	s2, err := l2.Stream(ctx2, provider.LLMRequest{Messages: user("a")})
+	require.NoError(t, err)
+	n := 0
+	for ev := range s2.Events() {
+		if ev.Type == provider.LLMDelta {
+			n++
+		}
+	}
+	require.Equal(t, 1, n, "the runtime timeout fault honours after_events")
+}
+
 func TestFakeLLMRuntimeSlowFault(t *testing.T) {
 	faults := faultsFn(func() *FaultSet {
 		return ParseFaultSet([]byte(`{"LLM.FAKE_PRIMARY":{"mode":"slow","delay_ms":60}}`), t0, nil)
