@@ -59,6 +59,9 @@ func (r Request[B]) PathUUID(name string) (uuid.UUID, error) {
 	return id, nil
 }
 
+// PathParam returns a path parameter as it appears in the URL.
+func (r Request[B]) PathParam(name string) string { return chi.URLParam(r.raw, name) }
+
 // Query returns the URL query.
 func (r Request[B]) Query() url.Values { return r.raw.URL.Query() }
 

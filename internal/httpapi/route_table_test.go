@@ -42,11 +42,11 @@ var routeTable = []routeRow{
 	{"PUT", "/me/consents", grpUser, []string{"api_user_default"}, true, `{"terms_version":"` + apiTerms + `"}`},
 	{"DELETE", "/me", grpUser, []string{"account_delete_user"}, true, `{"password":"wrong password!!"}`},
 
-	{"GET", "/topics", grpUser, []string{"api_user_default"}, false, ""},
-	{"GET", "/scenarios", grpUser, []string{"api_user_default"}, false, ""},
-	{"GET", "/scenarios/{scenario_id}", grpUser, []string{"api_user_default"}, false, ""},
-	{"GET", "/characters", grpUser, []string{"api_user_default"}, false, ""},
-	{"GET", "/characters/{character_id}", grpUser, []string{"api_user_default"}, false, ""},
+	{"GET", "/topics", grpUser, []string{"api_user_default"}, true, ""},
+	{"GET", "/scenarios", grpUser, []string{"api_user_default"}, true, ""},
+	{"GET", "/scenarios/{scenario_id}", grpUser, []string{"api_user_default"}, true, ""},
+	{"GET", "/characters", grpUser, []string{"api_user_default"}, true, ""},
+	{"GET", "/characters/{character_id}", grpUser, []string{"api_user_default"}, true, ""},
 	{"POST", "/sessions", grpUser, []string{"session_create_user"}, false, ""},
 	{"GET", "/sessions", grpUser, []string{"api_user_default"}, false, ""},
 	{"GET", "/sessions/{session_id}", grpUser, []string{"api_user_default"}, false, ""},
@@ -75,6 +75,16 @@ var routeTable = []routeRow{
 	{"GET", "/admin/sessions/{session_id}/turns", grpAdmin, []string{"admin_user"}, false, ""},
 	{"GET", "/admin/sessions/{session_id}/events", grpAdmin, []string{"admin_user"}, false, ""},
 	{"GET", "/admin/audit-logs", grpAdmin, []string{"admin_user"}, true, ""},
+	{"GET", "/admin/content/validation-report", grpAdmin, []string{"admin_user"}, true, ""},
+	{"GET", "/admin/content/characters/{id}", grpAdmin, []string{"admin_user"}, true, ""},
+	{"PATCH", "/admin/content/characters/{id}", grpAdmin, []string{"admin_user"}, true, `{}`},
+	{"GET", "/admin/content/{family}/{parent}/versions", grpAdmin, []string{"admin_user"}, true, ""},
+	{"POST", "/admin/content/{family}/{parent}/versions", grpAdmin, []string{"admin_user"}, true, `{}`},
+	{"GET", "/admin/content/{family}/{parent}/versions/{version_id}", grpAdmin, []string{"admin_user"}, true, ""},
+	{"POST", "/admin/content/{family}/{parent}/versions/{version_id}/publish", grpAdmin, []string{"admin_user"}, true, ""},
+	{"POST", "/admin/content/{family}/{parent}/versions/{version_id}/retire", grpAdmin, []string{"admin_user"}, true, ""},
+	{"DELETE", "/admin/content/{family}/{parent}/versions/{version_id}", grpAdmin, []string{"admin_user"}, true, ""},
+	{"PATCH", "/admin/content/{entity}/{id}/status", grpAdmin, []string{"admin_user"}, true, `{"status":"DISABLED"}`},
 }
 
 func concrete(path string) string {

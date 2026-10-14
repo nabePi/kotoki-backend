@@ -18,6 +18,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/admin"
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/balance"
+	"github.com/nabePi/kotoki-backend/internal/content"
 	"github.com/nabePi/kotoki-backend/internal/httpapi"
 	"github.com/nabePi/kotoki-backend/internal/mailer"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
@@ -80,6 +81,9 @@ type apiEnv struct {
 	svc     *auth.Service
 	users   *auth.UserService
 	deps    httpapi.Deps
+
+	content      *fakes.ContentRepo
+	contentStore *fakes.ContentStore
 }
 
 const apiTerms = "2026-10-01"
@@ -109,7 +113,14 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 	balSvc := balance.NewService(bal, clk, ids)
 	adminSvc := admin.NewService(fakes.NewAdminStore(store, bal), balSvc, clk, ids, log)
 
+	contentRepo := fakes.NewContentRepo()
+	contentStore := fakes.NewContentStore(contentRepo)
+	catalog := content.NewCatalogService(contentRepo, content.ResolverConfig{TTSMode: "fake", LLMConfigured: true})
+	contentAdmin := content.NewAdminService(content.AdminDeps{Store: contentStore, Clock: clk, IDs: ids,
+		Validator: content.ValidatorConfig{TTSEnabled: func(string) bool { return true }}})
+
 	deps := httpapi.Deps{
+		Content: catalog, ContentAdmin: contentAdmin,
 		Log: log, Limiter: limiter, Tokens: tokens, Clock: clk, Auth: svc, Users: users, Balance: balSvc, Admin: adminSvc, AdminGate: allowAdmin{},
 		Cfg: httpapi.Config{
 			CORSOrigins: []string{"http://localhost:3000"}, BodyLimit: 64 << 10,
@@ -120,7 +131,7 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 		m(&deps)
 	}
 	return &apiEnv{handler: httpapi.NewRouter(deps), limiter: limiter, clk: clk, store: store, bal: bal, mail: fm, deleter: deleter,
-		tokens: tokens, logs: logs, svc: svc, users: users, deps: deps}
+		tokens: tokens, logs: logs, svc: svc, users: users, deps: deps, content: contentRepo, contentStore: contentStore}
 }
 
 type allowAdmin struct{}

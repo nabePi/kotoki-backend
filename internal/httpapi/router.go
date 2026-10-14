@@ -31,10 +31,12 @@ func NewRouter(d Deps) http.Handler {
 		registerAuthRoutes(pub, user, &authHandler{svc: d.Auth, users: d.Users, limiter: d.Limiter, log: d.Log, cfg: d.Cfg})
 		registerMeRoutes(user, &meHandler{svc: d.Users, limiter: d.Limiter, log: d.Log, cfg: d.Cfg})
 		registerBalanceRoutes(user, &balanceHandler{svc: d.Balance, limiter: d.Limiter, log: d.Log})
+		registerContentRoutes(user, &contentHandler{svc: d.Content, limiter: d.Limiter, log: d.Log})
 		adminGroup := user.With(
 			RateLimit(d.Limiter, ratelimit.Get("admin_user"), UserSubject, d.Log),
 			RequireAdmin(d.AdminGate, d.Log))
 		registerAdminRoutes(adminGroup, &adminHandler{svc: d.Admin, clk: d.Clock})
+		registerAdminContentRoutes(adminGroup, &adminContentHandler{svc: d.ContentAdmin})
 	})
 	return r
 }

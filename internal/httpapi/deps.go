@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/netip"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/admin"
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/balance"
+	"github.com/nabePi/kotoki-backend/internal/content"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/metrics"
 	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
@@ -67,6 +69,29 @@ type adminService interface {
 	ListAudit(ctx context.Context, f admin.AuditFilter, after *uuid.UUID, limit int) ([]admin.AuditLog, *uuid.UUID, error)
 }
 
+// contentCatalogService is what the public catalog handlers need; *content.CatalogService satisfies it.
+type contentCatalogService interface {
+	Topics(context.Context) ([]content.TopicView, error)
+	Scenarios(ctx context.Context, topicID *uuid.UUID) ([]content.ScenarioView, error)
+	Scenario(context.Context, uuid.UUID) (content.ScenarioView, error)
+	Characters(context.Context) ([]content.CharacterView, error)
+	Character(context.Context, uuid.UUID) (content.CharacterView, error)
+}
+
+// contentAdminService is what the admin content handlers need; *content.AdminService satisfies it.
+type contentAdminService interface {
+	ListVersions(ctx context.Context, fam content.Family, parent string) ([]content.VersionView, error)
+	GetVersion(ctx context.Context, fam content.Family, parent string, id uuid.UUID) (content.VersionView, error)
+	CreateDraft(ctx context.Context, actor uuid.UUID, fam content.Family, parent string, body json.RawMessage, copyFrom *uuid.UUID) (content.VersionView, error)
+	Publish(ctx context.Context, actor uuid.UUID, fam content.Family, parent string, id uuid.UUID) (content.PublishResult, error)
+	Retire(ctx context.Context, actor uuid.UUID, fam content.Family, parent string, id uuid.UUID) (content.RetireResult, error)
+	DeleteDraft(ctx context.Context, actor uuid.UUID, fam content.Family, parent string, id uuid.UUID) error
+	SetStatus(ctx context.Context, actor uuid.UUID, entity string, id uuid.UUID, to content.EntityStatus) (content.EntityView, error)
+	GetCharacter(context.Context, uuid.UUID) (content.Character, error)
+	UpdateCharacter(ctx context.Context, actor, id uuid.UUID, p content.CharacterPatch) (content.CharacterUpdateResult, error)
+	ValidationReport(context.Context) (errs, warns []content.Issue, err error)
+}
+
 // Deps are the collaborators of NewRouter, wired by hand in cmd/api.
 type Deps struct {
 	Log       *slog.Logger
@@ -80,4 +105,7 @@ type Deps struct {
 	Balance   balanceService
 	Admin     adminService
 	AdminGate AdminGate
+
+	Content      contentCatalogService
+	ContentAdmin contentAdminService
 }
