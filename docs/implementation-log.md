@@ -865,3 +865,7 @@ Tanggal: 2026-10-14
 - Ruling: `TurnRepository` tidak memuat `SetUserAudioKey` (signature §7.13.1 menyebutnya, tetapi §5.3.2/D-099: audio user tidak pernah disimpan dan `session_turns` tidak punya kolom referensi audio). Biaya bila salah: satu method tambahan di M5.
 - Ruling: `internal/events/outbox.go` (`Event`, `OutboxWriter`) dimajukan dari Task 14 karena `session.Tx.Outbox()` membutuhkannya; Task 14 menambah `types.go`, builder dan writer Postgres.
 - Ruling: bentuk field `TurnStart/TurnUser/TurnFinal/TurnRecord/Patch/ListFilter/ActiveRef` ditetapkan dari kolom DDL §5.3.2 dan transisi §5.4–5.6 (spec hanya memberi nama tipe); `CreatedAt` turn ikut dibawa untuk partition pruning.
+
+## M3-T14 — Paket `events` + outbox writer
+- `internal/events/types.go` (`SessionCompletedPayload` v1 dengan timestamp milidetik UTC, `NewSessionCompleted`, `ActiveSeconds`), `postgres.Tx.Outbox()` (INSERT `event_outbox`, traceparent/tracestate dari propagator ctx), `db/queries/outbox.sql`, `fakes.Outbox`.
+- Tes: golden payload, floor active_seconds, 16 key; integrasi `TestOutboxWriterInsertsPendingRow`, `TestOutboxWriterRollsBackWithTx`.
