@@ -137,6 +137,7 @@ func (c API) Validate() error {
 	c.DB.validate(v, c.Common)
 	c.Redis.validate(v, c.Common)
 	validateOrigins(v, "CORS_ALLOWED_ORIGINS", c.CORSAllowedOrigins, c.Common)
+	c.Auth.validate(v, c.Common)
 	v.positive("SHUTDOWN_TIMEOUT", c.ShutdownTimeout)
 	if c.HTTPMaxBodyBytes <= 0 {
 		v.fail("HTTP_MAX_BODY_BYTES", "must be > 0, got %d", c.HTTPMaxBodyBytes)

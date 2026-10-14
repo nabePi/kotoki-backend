@@ -505,3 +505,16 @@ Tanggal: 2026-10-14
 - go test ./internal/httpapi -race — PASS
 ### Penyimpangan
 - Rate limit `admin_user` dipasang sebelum `RequireAdmin` (bukan sesudahnya) agar token USER tidak memicu query DB per request
+
+## M2-T25 — Konfigurasi auth, wiring `cmd/api`, gerbang integrasi M2
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/platform/config/auth.go`: struct `Auth` (JWT, TTL, argon2, mail, cookie, trusted proxy) di-embed ke `API`; default §13.2.7; rahasia JWT tidak pernah tercetak; validasi lintas-field
+- `cmd/api/main.go`: `buildAPI` merakit store, JWT, argon2, mailer + dispatcher, balance/admin/auth/user service, rate limiter Redis+Local, router; listener publik di-bind sebelum startup check, `Serve` sesudahnya; `http.Server` dengan timeout; shutdown mengikuti `SHUTDOWN_TIMEOUT`
+- `Makefile promote-admin` + `test/arch/promote_admin_test.go`
+### Test
+- `cmd/api/m2_gate_integration_test.go` (komponen nyata, PG+Redis, jam palsu): `TestM2GateAuthFlow`, `RefreshReuse`, `ResetFlow`, `Consent`, `AdminGrant`, `DeleteAccount`, `TicketTTL`; tiap tes diakhiri `AssertReconciled`
+- `go test -tags integration -p 1 ./cmd/api`, `go test ./internal/platform/config -race`, `go test ./test/arch` — PASS
+### Penyimpangan
+- Tes gerbang ditempatkan di `cmd/api` (bukan `internal/httpapi`) karena depguard `handler-thin` melarang paket httpapi mengimpor postgres/redisstore/pgx

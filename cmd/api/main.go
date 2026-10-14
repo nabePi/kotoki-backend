@@ -8,19 +8,30 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/redis/go-redis/v9"
 
+	"github.com/nabePi/kotoki-backend/internal/admin"
+	"github.com/nabePi/kotoki-backend/internal/auth"
+	"github.com/nabePi/kotoki-backend/internal/balance"
+	"github.com/nabePi/kotoki-backend/internal/httpapi"
+	"github.com/nabePi/kotoki-backend/internal/mailer"
 	"github.com/nabePi/kotoki-backend/internal/platform/buildinfo"
+	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/config"
 	"github.com/nabePi/kotoki-backend/internal/platform/health"
+	"github.com/nabePi/kotoki-backend/internal/platform/idgen"
 	"github.com/nabePi/kotoki-backend/internal/platform/logging"
 	"github.com/nabePi/kotoki-backend/internal/platform/metrics"
 	"github.com/nabePi/kotoki-backend/internal/platform/otel"
+	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
 	"github.com/nabePi/kotoki-backend/internal/postgres"
 	"github.com/nabePi/kotoki-backend/internal/redisstore"
 )
@@ -95,18 +106,106 @@ func run(ctx context.Context) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- ops.Serve(ctx, ln) }()
 
+	router, dispatcher, err := buildAPI(cfg, logger, pool, rdb, reg) //nolint:contextcheck // wiring only; the dispatcher owns its own lifecycle
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dispatcher.Close(context.WithoutCancel(ctx)) }()
+	// Bind the public port before readiness flips so that a ready pod is always reachable;
+	// connections queue in the backlog until Serve starts right after the startup checks.
+	apiLn, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.HTTPAddr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = apiLn.Close() }()
+	apiSrv := &http.Server{
+		Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
+		WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 16 << 10,
+	}
+
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := ops.RunStartupChecks(checkCtx); err != nil {
 		return err
 	}
-	logger.InfoContext(ctx, "ready", "ops_addr", ln.Addr().String())
+	apiErr := make(chan error, 1)
+	go func() { apiErr <- apiSrv.Serve(apiLn) }()
+	logger.InfoContext(ctx, "ready", "ops_addr", ln.Addr().String(), "http_addr", apiLn.Addr().String())
 
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case err := <-apiErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+	}
 	ops.SetDraining()
+	shutdownCtx, stopShutdown := context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
+	defer stopShutdown()
+	if err := apiSrv.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
 	if err := <-serveErr; err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	logger.InfoContext(context.WithoutCancel(ctx), "stopped")
 	return nil
+}
+
+// buildAPI wires the M2 components by hand (D-004) and returns the public router
+// plus the mail dispatcher the caller must close on shutdown.
+func buildAPI(cfg config.API, logger *slog.Logger, pool *pgxpool.Pool, rdb redis.UniversalClient, reg *prometheus.Registry) (http.Handler, *auth.MailDispatcher, error) {
+	ids, clk := idgen.NewV7(), clock.System{}
+	store := postgres.NewStore(pool, postgres.WithIDs(ids), postgres.WithClock(clk))
+
+	secret, err := cfg.JWTSecretBytes()
+	if err != nil {
+		return nil, nil, err
+	}
+	previous, err := cfg.JWTPreviousSecretBytes()
+	if err != nil {
+		return nil, nil, err
+	}
+	tokens, err := auth.NewJWTIssuer(auth.JWTConfig{
+		Secret: secret, PreviousSecret: previous, Issuer: cfg.JWTIssuer, Audience: cfg.JWTAudience, TTL: cfg.AccessTokenTTL,
+	}, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	hasher := auth.NewArgon2Hasher(auth.Argon2Config{
+		MemoryKiB: cfg.Argon2.MemoryKiB, Iterations: cfg.Argon2.Iterations, Parallelism: cfg.Argon2.Parallelism,
+		MaxConcurrent: cfg.Argon2.MaxConcurrent, MaxWait: 2 * time.Second,
+	})
+	sender, err := mailer.New(mailer.Config{
+		Mode: cfg.Mail.Mode, AppEnv: cfg.AppEnv, From: cfg.Mail.From, SMTPHost: cfg.Mail.SMTPHost, SMTPPort: cfg.Mail.SMTPPort,
+		SMTPUsername: cfg.Mail.SMTPUsername, SMTPPassword: cfg.Mail.SMTPPassword.Reveal(),
+	}, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	dispatcher := auth.NewMailDispatcher(sender, logger, auth.DispatcherOptions{})
+
+	balanceSvc := balance.NewService(store.BalanceStore(), clk, ids)
+	adminSvc := admin.NewService(store.AdminStore(), balanceSvc, clk, ids, logger)
+	authSvc, err := auth.NewService(store.AuthStore(), hasher, tokens, dispatcher, clk, ids, logger, metrics.NewAuth(reg), auth.Config{
+		TermsVersion: cfg.PrivacyPolicyVersion, InitialBalanceSeconds: cfg.InitialBalanceSeconds, AccessTTL: cfg.AccessTokenTTL,
+		RefreshTTL: cfg.RefreshTokenTTL, RefreshReuseGrace: cfg.RefreshReuseGrace, ResetTTL: cfg.PasswordResetTTL,
+		ResetURLBase: cfg.PasswordResetURLBase,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	// admin.Service doubles as the AccountDeleter behind DELETE /me (spec 3.2).
+	userSvc := auth.NewUserService(store.AuthStore(), hasher, adminSvc, clk, logger, cfg.PrivacyPolicyVersion)
+
+	router := httpapi.NewRouter(httpapi.Deps{
+		Log: logger, Clock: clk, Tokens: tokens, Metrics: metrics.NewHTTP(reg, service),
+		Limiter: redisstore.NewRateLimiter(rdb, ratelimit.NewLocal(clk, 100000), clk, logger, metrics.NewRateLimit(reg)),
+		Cfg: httpapi.Config{
+			CORSOrigins: cfg.CORSAllowedOrigins, TrustedProxies: cfg.TrustedProxyPrefixes(), BodyLimit: cfg.HTTPMaxBodyBytes,
+			Cookie: httpapi.CookieConfig{Secure: cfg.RefreshCookieSecure, Domain: cfg.RefreshCookieDomain, MaxAge: cfg.RefreshTokenTTL},
+		},
+		Auth: authSvc, Users: userSvc, Balance: balanceSvc, Admin: adminSvc, AdminGate: adminSvc,
+	})
+	return router, dispatcher, nil
 }

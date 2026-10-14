@@ -58,7 +58,7 @@ seed:           ## jalankan seed/*.sql (idempoten) berurutan
 
 promote-admin:  ## make promote-admin EMAIL=dev@example.test
 	$(COMPOSE) exec -T postgres psql -U kotoki -d kotoki -v ON_ERROR_STOP=1 \
-	  -c "UPDATE users SET role='ADMIN' WHERE email='$(EMAIL)'"
+	  -c "UPDATE users SET role='ADMIN', updated_at=now() WHERE email='$(EMAIL)'"
 
 sqlc:
 	$(GO) tool sqlc generate

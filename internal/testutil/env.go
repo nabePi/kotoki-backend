@@ -14,6 +14,9 @@ func MinimalEnv(t testing.TB, overrides ...map[string]string) map[string]string 
 		"APP_ENV":   "local",
 		"DB_URL":    "postgres://u:p@localhost:5432/kotoki?sslmode=disable",
 		"REDIS_URL": "redis://localhost:6379/0",
+		// base64 of 32 bytes: a throwaway signing secret for tests
+		"AUTH_JWT_SECRET":        "dGVzdC1vbmx5LWp3dC1zZWNyZXQtMDEyMzQ1Njc4OWFi",
+		"PRIVACY_POLICY_VERSION": "2026-10-01",
 	}
 	for _, o := range overrides {
 		for k, v := range o {
