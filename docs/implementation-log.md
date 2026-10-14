@@ -471,3 +471,14 @@ Tanggal: 2026-10-14
 - go test ./internal/httpapi -race — PASS (74 test)
 ### Penyimpangan
 - 17 kode yang hanya ada di katalog WebSocket tidak punya status REST; bila bocor ke `WriteError` diperlakukan seperti kode tak dikenal (500 `INTERNAL_ERROR`) — test `TestWriteErrorUnknownAndWSOnlyCodes`
+
+## M2-T22 — httpapi middleware
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/httpapi/middleware*.go`: `RequestID` (UUID valid dipakai, selain itu UUIDv7), `Recoverer` (panic → 500, satu log ERROR dengan `error_location`), `AccessLog` (route pattern, status, `duration_ms`; tanpa path mentah/query sehingga `?ticket=` tak bocor), `CORS` (tanpa library), `BodyLimit` (413), `SecurityHeaders` (+ `no-store` untuk `/auth/*` dan `/me*`), `ClientIP`/`ClientIPMiddleware` (XFF dari kanan melewati proxy tepercaya), `RateLimit` (fail-open, `RateLimit-Remaining`, `Retry-After` dibulatkan ke atas) dengan `IPSubject`/`UserSubject`, `Authn`, `RequireAdmin` (claim lalu DB; audit `admin_access_denied`), `OriginCheck`, `Telemetry` (span `HTTP {method} {route}`, 5xx = Error), `HTTPMetrics`
+- `metrics.NewHTTP`: `kotoki_http_requests_total` dan `kotoki_http_request_duration_seconds`; rute tak cocok → `route="unmatched"`; `/healthz`, `/readyz`, `/metrics` tidak dihitung
+### Test
+- go test ./internal/httpapi ./internal/platform/metrics -race — PASS
+### Penyimpangan
+- `Telemetry` ditulis sendiri di atas `platform/otel` (bukan `otelhttp`) supaya nama span memakai pola chi yang baru diketahui setelah routing; propagasi W3C tetap di-extract dari header
