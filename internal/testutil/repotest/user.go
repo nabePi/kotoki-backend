@@ -87,6 +87,16 @@ func UserRepoSuite(t *testing.T, newStore func(t *testing.T) auth.Store) {
 				require.True(t, got.TermsAcceptedAt.Equal(now.Add(time.Hour)))
 			})
 		}},
+		Case[auth.Store]{Name: "UpdateConsentsKeepsAcceptedAtWhenVersionUnchanged", Run: func(t *testing.T, s auth.Store) {
+			u := NewUser("same@example.com")
+			insertUser(t, s, u)
+			inTx(t, s, func(ctx context.Context, tx auth.Tx) {
+				got, err := tx.Users().UpdateConsents(ctx, u.ID, u.TermsVersion, now.Add(time.Hour))
+				require.NoError(t, err)
+				require.True(t, got.TermsAcceptedAt.Equal(u.TermsAcceptedAt), "same version: terms_accepted_at unchanged")
+				require.True(t, got.UpdatedAt.Equal(now.Add(time.Hour)))
+			})
+		}},
 		Case[auth.Store]{Name: "UpdateStatusDeletedFillsDeletedAt", Run: func(t *testing.T, s auth.Store) {
 			u := NewUser("del@example.com")
 			insertUser(t, s, u)

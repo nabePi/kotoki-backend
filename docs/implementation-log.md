@@ -377,3 +377,12 @@ Tanggal: 2026-10-14
 - `fakes.AuthStore.ResetTokens` untuk test
 ### Test
 - go test ./internal/auth -race — PASS (12 test forgot/reset)
+
+## M2-T12 — auth.UserService (Me, consents, hapus akun)
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/auth/user_service.go`: `Me`, `RequireActive` (SUSPENDED dan DELETED → `ACCOUNT_SUSPENDED`), `UpdateConsents` (versi ≠ terkini → `VALIDATION_FAILED not_current`; versi sama tidak mengubah `terms_accepted_at`; non-ACTIVE → 403; audit `consent_updated`), `DeleteAccount` (langkah 1 & 5 §3.13.3: status ACTIVE, `Verify` password, lalu `AccountDeleter`; error `ErrAccountHasActiveSession` diteruskan; audit `account_deletion_requested`), `CurrentTermsVersion`
+- Kontrak repo diperketat: `UpdateConsents` hanya menggeser `terms_accepted_at` bila versi berubah (`repotest` kasus baru; fake diperbaiki)
+### Test
+- go test ./internal/auth ./internal/testutil/... -race — PASS

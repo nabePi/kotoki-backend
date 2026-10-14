@@ -187,7 +187,10 @@ func (r *userRepo) UpdateConsents(_ context.Context, id uuid.UUID, termsVersion 
 		if u.Status != auth.UserStatusActive {
 			return auth.ErrUserNotActive
 		}
-		u.TermsVersion, u.TermsAcceptedAt, u.UpdatedAt = termsVersion, at, at
+		if u.TermsVersion != termsVersion {
+			u.TermsAcceptedAt = at
+		}
+		u.TermsVersion, u.UpdatedAt = termsVersion, at
 		return nil
 	})
 }
