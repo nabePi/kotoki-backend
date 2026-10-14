@@ -1630,7 +1630,7 @@ Referensi: Spec §14.10.2 sampai §14.10.5, D-006.
 
 ```mermaid
 flowchart TD
-    A["git clone lalu cek go1.25 dan libopus"] --> B["make env<br/>(.env, PROVIDER_MODE=fake)"]
+    A["git clone lalu cek go1.27 dan libopus"] --> B["make env<br/>(.env, PROVIDER_MODE=fake)"]
     B --> C["make up<br/>docker compose: postgres pgvector pg17, redis 7.4, rabbitmq 4"]
     C --> D["make migrate-up<br/>(golang-migrate, 000001 sampai 000018)"]
     D --> E["make seed<br/>(topics, characters, scenarios, 5 prompt_configs)"]

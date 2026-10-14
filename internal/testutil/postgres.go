@@ -157,7 +157,7 @@ func PgDumpSchema(t testing.TB, dsn string) string {
 	db = strings.SplitN(db, "?", 2)[0]
 	args := []string{"pg_dump", "--schema-only", "--no-owner", "--no-privileges", "--no-comments", "-U", "kotoki", "-d", db}
 	if pg.container == nil {
-		out, err := exec.Command(args[0], append(args[1:len(args)-2], dsn)...).CombinedOutput() //nolint:gosec // test helper, args are fixed
+		out, err := exec.CommandContext(context.Background(), args[0], append(args[1:len(args)-2], dsn)...).CombinedOutput() //nolint:gosec // test helper, args are fixed
 		if err != nil {
 			t.Fatalf("testutil: pg_dump: %v\n%s", err, out)
 		}

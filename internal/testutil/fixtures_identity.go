@@ -20,7 +20,7 @@ func merge(base, o Row) Row {
 // UserRow returns a minimal valid users row with a unique email.
 func UserRow(o Row) Row {
 	id := uuid.Must(uuid.NewV7())
-	return merge(Row{
+	return merge(Row{ //nolint:gosec // G101: fixed fake argon2id hash for tests
 		"id":                id,
 		"email":             id.String() + "@example.test",
 		"full_name":         "Test User",

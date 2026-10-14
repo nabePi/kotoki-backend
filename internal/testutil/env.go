@@ -10,7 +10,7 @@ import (
 // are merged in order; an empty value deletes the key.
 func MinimalEnv(t testing.TB, overrides ...map[string]string) map[string]string {
 	t.Helper()
-	env := map[string]string{
+	env := map[string]string{ //nolint:gosec // G101: throwaway local credentials for tests
 		"APP_ENV":   "local",
 		"DB_URL":    "postgres://u:p@localhost:5432/kotoki?sslmode=disable",
 		"REDIS_URL": "redis://localhost:6379/0",

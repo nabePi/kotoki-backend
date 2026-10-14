@@ -30,7 +30,7 @@ func scan(roots []string) ([]string, error) {
 	var out []string
 	fset := token.NewFileSet()
 	for _, root := range roots {
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error { //nolint:gosec // dev CLI: roots are directories given on its own command line
 			if err != nil {
 				return err
 			}
@@ -72,7 +72,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	roots := args[:0:0]
 	for _, a := range args {
-		if _, err := os.Stat(a); err == nil {
+		if _, err := os.Stat(a); err == nil { //nolint:gosec // dev CLI: roots are directories given on its own command line
 			roots = append(roots, a)
 		}
 	}

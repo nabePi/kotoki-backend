@@ -6,7 +6,7 @@
 
 **Architecture:** Monolit modular Go dengan layout per-fitur (spec §2.2): paket fitur berisi domain + service + port; adapter (`postgres`, `redisstore`, `amqp`, `mailer`, `provider/<vendor>`) mengimplementasikan port; handler (`httpapi`, `wsgateway`) tipis; wiring manual di `cmd/*/main.go`. Tiga binary (`api`, `realtime`, `worker`) + `kotoki-cli`. PostgreSQL = sumber kebenaran, Redis = state runtime, RabbitMQ = pengiriman async via transactional outbox.
 
-**Tech Stack:** Go 1.25, chi, pgx + sqlc, golang-migrate, coder/websocket, go-redis v9, amqp091, golang-jwt, argon2id, hraban/opus (cgo), go-webrtcvad (cgo), OpenTelemetry (trace) + Prometheus client (metrik), caarlos0/env, testify, testcontainers. Daftar lengkap & versi: spec D-003 (allowlist; library di luar daftar = ubah register dulu).
+**Tech Stack:** Go 1.27, chi, pgx + sqlc, golang-migrate, coder/websocket, go-redis v9, amqp091, golang-jwt, argon2id, hraban/opus (cgo), go-webrtcvad (cgo), OpenTelemetry (trace) + Prometheus client (metrik), caarlos0/env, testify, testcontainers. Daftar lengkap & versi: spec D-003 (allowlist; library di luar daftar = ubah register dulu).
 
 **Spec (sumber kebenaran, wajib dibaca bersama rencana ini):** `docs/superpowers/specs/2026-10-12-kotoki-backend-design.md`. Rencana mengacu ke bab/§ spec (nomor § stabil; nomor baris tidak). Jika rencana dan spec berbeda, **spec menang**; catat di `docs/implementation-deviations.md`.
 

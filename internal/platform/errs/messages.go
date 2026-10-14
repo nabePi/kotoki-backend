@@ -1,7 +1,7 @@
 package errs
 
 // Messages holds the Indonesian user-facing text per code (spec 5.10 / 7.4.8).
-var Messages = map[Code]string{
+var Messages = map[Code]string{ //nolint:gosec // G101 false positive: user-facing error texts mention "password"/"token"
 	CodeAccountHasActiveSession:     "Akun tidak dapat dihapus selama masih ada sesi yang berjalan.",
 	CodeAccountSuspended:            "Akun Anda sedang dinonaktifkan. Hubungi dukungan.",
 	CodeAiGenerationFailed:          "Maaf, AI gagal menjawab. Silakan ucapkan lagi.",
