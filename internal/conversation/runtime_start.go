@@ -133,7 +133,7 @@ func (r *Runtime) runStartup(ctx context.Context) startResult {
 	}
 	r.sync.Update(r.startingRT())
 	r.sync.Start(r.ctx) //nolint:contextcheck // the sync loop lives as long as the runtime, not as long as the start
-	if err := r.persister.Submit(SessionEvent{Type: string(session.EventOwner), Payload: ownerChanged{Reason: "START", ToPod: r.pod, Fence: r.fence}}); err != nil {
+	if err := r.persister.Submit(SessionEvent{Type: string(session.EventOwner), Payload: ownerChanged{Reason: "START", ToPod: &r.pod, Fence: r.fence}}); err != nil {
 		return startFailed(serverFailure(fmt.Errorf("conversation: submit OWNER_CHANGED: %w", err)))
 	}
 
@@ -208,10 +208,10 @@ func (r *Runtime) startingRT() rtstate.RT {
 
 // ownerChanged is the payload of OWNER_CHANGED (§7.13.1).
 type ownerChanged struct {
-	Reason  string `json:"reason"`
-	FromPod string `json:"from_pod"`
-	ToPod   string `json:"to_pod"`
-	Fence   int64  `json:"fence"`
+	Reason  string  `json:"reason"`
+	FromPod string  `json:"from_pod"`
+	ToPod   *string `json:"to_pod"` // null when the session is released (DRAIN_RELEASE)
+	Fence   int64   `json:"fence"`
 }
 
 // loadLearner is step 4c: the learner block of the prompt, degraded to empty on any failure.

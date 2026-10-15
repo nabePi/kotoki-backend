@@ -27,7 +27,7 @@ func (m *Manager) resumeSamePod(ctx context.Context, h *handshake, r *Runtime, l
 	var snap ConfigSnapshot
 	var ok bool
 	if err := r.call(ctx, func(r *Runtime) { ok, snap = r.resumable(), r.snap }); err != nil || !ok {
-		return m.notResumable(h)
+		return m.notResumableOrDraining(ctx, h)
 	}
 	a := &attachReq{h: h, lastSeq: lastSeq}
 	a.stt, a.cancel, a.sttErr = r.openSTT(ctx, snap)
@@ -36,12 +36,26 @@ func (m *Manager) resumeSamePod(ctx context.Context, h *handshake, r *Runtime, l
 	}
 	if err := r.call(ctx, func(r *Runtime) { r.onAttach(a) }); err != nil { //nolint:contextcheck // the loop runs it on the runtime context; the request context only bounds the wait
 		r.closeSTT(a.stt, a.cancel) // the runtime stopped, or the client went, before it took the connection
-		return m.notResumable(h)
+		return m.notResumableOrDraining(ctx, h)
 	}
 	if a.err != nil {
-		return m.notResumable(h)
+		return m.notResumableOrDraining(ctx, h)
 	}
 	return nil
+}
+
+// notResumableOrDraining refuses a resume that found its runtime gone or not taking connections: on
+// a draining pod that is the handoff of the drain (the session is still ACTIVE: 4100, the client
+// fetches a new ticket and resumes on another pod), otherwise the session is not resumable.
+func (m *Manager) notResumableOrDraining(ctx context.Context, h *handshake) error {
+	if m.Draining() {
+		if sess, err := m.d.Session.GetForAttach(ctx, h.sid); err == nil && sess.Status == session.StatusActive {
+			m.d.Metrics.Reconnect("rejected", "", 0)
+			m.d.Metrics.Connection(ConnRejectedDraining)
+			return h.fail(errs.CodeServerDraining)
+		}
+	}
+	return m.notResumable(h)
 }
 
 // notResumable refuses a resume: ENDING and terminal sessions take no connection (§7.3.2).
@@ -58,9 +72,8 @@ func (m *Manager) notResumable(h *handshake) error {
 // previous owner is told, what it left in Redis is read, and a client that stayed away longer than
 // RECONNECT_WINDOW ends the session instead. Otherwise a Runtime is built that plays steps 6–11.
 func (m *Manager) takeover(ctx context.Context, h *handshake, rec session.RuntimeRecord, lastSeq int64) error {
-	if !m.reserveUpTo(m.d.Limits.HardMax) {
-		m.d.Metrics.Connection(ConnRejectedCapacity)
-		return h.fail(errs.CodeServerAtCapacity)
+	if code := m.reserveUpTo(m.d.Limits.HardMax); code != "" {
+		return m.refuseSlot(h, code)
 	}
 	fence, claimed, err := m.d.Session.ClaimRuntime(ctx, rec.ID, []session.Status{session.StatusActive})
 	if err != nil {
@@ -76,9 +89,12 @@ func (m *Manager) takeover(ctx context.Context, h *handshake, rec session.Runtim
 	// The runtime outlives the connection and the request: its context is the pod's.
 	r := newRuntime(m.ctx, m.d, claimed, fence, h.cs, h.seen, m.onRuntimeExit, RedisSyncLastDurableSeq(in.lastDurable)) //nolint:contextcheck // runtime context = pod context
 	r.serverSeq = in.known                                                                                              // the next event continues the previous owner's numbering
-	m.register(r)
+	draining := m.register(r)
 	m.d.Metrics.Connection(ConnAccepted)
 	r.beginTakeover(in) //nolint:contextcheck // the runtime goroutines run on the runtime context (pod context)
+	if draining {
+		m.tellDrain(r)
+	}
 	return nil
 }
 
@@ -235,43 +251,51 @@ func failInProgressTurns(ctx context.Context, d Deps, fence int64, sid uuid.UUID
 
 // ---- TAKEOVER subscriber (§7.9.1, §7.9.4) ----
 
-// subscribe starts the subscriber of the pod's TAKEOVER channel. The first subscription is made
-// here, so a takeover published after NewManager returns is not lost; the goroutine resubscribes
-// when the subscription ends or fails.
-func (m *Manager) subscribe() {
+// StartSubscriber starts the subscriber of the pod's TAKEOVER channel; it runs until ctx ends or
+// the Manager is closed, and only the first call counts. The first subscription is made here,
+// before it returns, so a takeover published afterwards is not lost; the goroutine resubscribes
+// (backoff 1 s) when the subscription ends or fails (§7.9.4: the fence in Postgres keeps a takeover
+// safe while the channel is down).
+func (m *Manager) StartSubscriber(ctx context.Context) {
 	if m.d.Store == nil {
 		return
 	}
-	ch := m.subscribeOnce()
-	m.bg.Add(1)
-	go func() {
-		defer m.bg.Done()
-		for {
-			if ch != nil {
-				select {
-				case t, ok := <-ch:
-					if ok {
-						m.onTakeover(t)
-						continue
+	m.subOnce.Do(func() {
+		sctx, cancel := context.WithCancel(ctx)
+		stop := context.AfterFunc(m.ctx, cancel) //nolint:contextcheck // the subscription also ends with the Manager (the pod context), not only with the caller's ctx
+		ch := m.subscribeOnce(sctx)
+		m.bg.Add(1)
+		go func() {
+			defer m.bg.Done()
+			defer stop()
+			defer cancel()
+			for {
+				if ch != nil {
+					select {
+					case t, ok := <-ch:
+						if ok {
+							m.onTakeover(t) //nolint:contextcheck // posted to the runtime loop, which reads the session status under its own bound (ioCtx)
+							continue
+						}
+					case <-sctx.Done():
+						return
 					}
-				case <-m.ctx.Done():
+				}
+				timer := time.NewTimer(m.d.PodSubscribeBackoff)
+				select {
+				case <-timer.C:
+				case <-sctx.Done():
+					timer.Stop()
 					return
 				}
+				ch = m.subscribeOnce(sctx)
 			}
-			timer := time.NewTimer(m.d.PodSubscribeBackoff)
-			select {
-			case <-timer.C:
-			case <-m.ctx.Done():
-				timer.Stop()
-				return
-			}
-			ch = m.subscribeOnce()
-		}
-	}()
+		}()
+	})
 }
 
-func (m *Manager) subscribeOnce() <-chan rtstate.Takeover {
-	ch, err := m.d.Store.SubscribePod(m.ctx, m.d.Cfg.PodID)
+func (m *Manager) subscribeOnce(ctx context.Context) <-chan rtstate.Takeover {
+	ch, err := m.d.Store.SubscribePod(ctx, m.d.Cfg.PodID)
 	if err != nil {
 		m.d.Log.Warn("subscribe to the pod channel failed", "pod", m.d.Cfg.PodID, "error", err.Error())
 		return nil

@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"sync"
 
 	promtest "github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
@@ -182,4 +183,42 @@ func (r *Runtime) PersisterPending() int { return r.persister.Pending() }
 // PanicOnLoop makes the loop panic: the panic of Runtime.loop itself (§7.7.2) that recoverLoop ends.
 func (r *Runtime) PanicOnLoop(ctx context.Context) error {
 	return r.call(ctx, func(*Runtime) { panic("scripted panic in the runtime loop") })
+}
+
+// HoldSlots takes n slots of the pod as if n starts were in flight, so the capacity thresholds
+// (95/100/120) are crossed without n runtimes; release gives them back.
+func (m *Manager) HoldSlots(n int) (release func()) {
+	m.mu.Lock()
+	m.pending += n
+	m.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			m.pending -= n
+			m.notifyLocked()
+			m.mu.Unlock()
+		})
+	}
+}
+
+// SessionsActiveTotal is sessions_active summed over its state labels.
+func (m *Metrics) SessionsActiveTotal() float64 {
+	var sum float64
+	for _, st := range []string{SessionStarting, SessionActive, SessionDetached, SessionEnding} {
+		sum += promtest.ToFloat64(m.sessionsActive.WithLabelValues(st))
+	}
+	return sum
+}
+
+// DrainingGauge reads the draining gauge.
+func (m *Metrics) DrainingGauge() float64 { return promtest.ToFloat64(m.draining) }
+
+// DrainDurationSamples is how many drain_duration_seconds observations were made.
+func (m *Metrics) DrainDurationSamples() uint64 {
+	var out dto.Metric
+	if err := m.drainDuration.Write(&out); err != nil {
+		panic(err)
+	}
+	return out.GetHistogram().GetSampleCount()
 }

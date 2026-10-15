@@ -310,7 +310,7 @@ func TestStartDeadlinePassed(t *testing.T) {
 	var ae *conversation.AttachError
 	require.ErrorAs(t, h.AttachResult(), &ae)
 	require.Equal(t, errs.CodeSessionStartDeadlinePassed, ae.Code)
-	require.Equal(t, 0, h.Mgr.Active())
+	require.Equal(t, 0, h.Mgr.ActiveSessions())
 }
 
 func TestStartFailsWhenSTTUnavailable(t *testing.T) {
@@ -334,7 +334,7 @@ func TestStartFailsWhenSTTUnavailable(t *testing.T) {
 	require.Equal(t, 1.0, h.Metrics.WSCloseTotal("4500"))
 
 	// Nothing stays behind: the owner key is released, the runtime is gone.
-	h.WaitFor("runtime gone", func() bool { return h.Mgr.Active() == 0 })
+	h.WaitFor("runtime gone", func() bool { return h.Mgr.ActiveSessions() == 0 })
 	h.WaitFor("owner released", func() bool { _, _, ok := h.Store.Owner(h.SID); return !ok })
 }
 
@@ -438,7 +438,7 @@ func TestStartTimeout10s(t *testing.T) {
 			require.Equal(t, tc.reason, failed.EndReason)
 			require.Equal(t, 0, failed.ChargedSeconds)
 			require.Empty(t, h.Events("session.started"))
-			h.WaitFor("runtime gone", func() bool { return h.Mgr.Active() == 0 })
+			h.WaitFor("runtime gone", func() bool { return h.Mgr.ActiveSessions() == 0 })
 		})
 	}
 }
@@ -613,7 +613,7 @@ func TestStartRefusedAtCapacity(t *testing.T) {
 	require.True(t, e.Retryable)
 	require.Equal(t, []string{"GetForAttach"}, h.Calls.Calls(), "the session stays RESERVED: nothing was claimed")
 	require.Equal(t, 1.0, h.Metrics.ConnectionsTotal(conversation.ConnRejectedCapacity))
-	require.Equal(t, 0, h.Mgr.Active())
+	require.Equal(t, 0, h.Mgr.ActiveSessions())
 }
 
 func TestStartErrorsMapToRefusals(t *testing.T) {
@@ -636,7 +636,7 @@ func TestStartErrorsMapToRefusals(t *testing.T) {
 			code, _ := h.WaitClosed()
 			require.Equal(t, tc.code, code)
 			require.Equal(t, tc.errc, errorOf(t, h).Error.Code)
-			require.Equal(t, 0, h.Mgr.Active(), "the reserved slot is given back")
+			require.Equal(t, 0, h.Mgr.ActiveSessions(), "the reserved slot is given back")
 		})
 	}
 }
@@ -650,7 +650,7 @@ func TestFenceLostWhileStarting(t *testing.T) {
 	require.Equal(t, "SESSION_TAKEN_OVER", reason)
 	require.Empty(t, h.Events("session.started"))
 	require.NotContains(t, h.Calls.Calls(), "FailStart", "a lost fence writes nothing more")
-	h.WaitFor("runtime gone", func() bool { return h.Mgr.Active() == 0 })
+	h.WaitFor("runtime gone", func() bool { return h.Mgr.ActiveSessions() == 0 })
 }
 
 func TestProtocolViolationAfterStart(t *testing.T) {
@@ -779,7 +779,7 @@ func TestPanicInStartupFailsTheStart(t *testing.T) {
 	require.Equal(t, "SERVER_ERROR", failed.EndReason)
 	require.Equal(t, "INTERNAL_ERROR", failed.ErrorCode)
 	require.Equal(t, []string{"GetForAttach", "ClaimRuntime", "MarkStarting", "FailStart"}, h.Calls.Calls())
-	h.WaitFor("runtime gone", func() bool { return h.Mgr.Active() == 0 })
+	h.WaitFor("runtime gone", func() bool { return h.Mgr.ActiveSessions() == 0 })
 }
 
 func TestPanicInGenerationEndsTheSessionServerError(t *testing.T) {
@@ -807,5 +807,5 @@ func TestPanicInGenerationEndsTheSessionServerError(t *testing.T) {
 		return len(ts) == 1 && ts[0].Status != nil
 	})
 	require.Equal(t, session.TurnFailed, *h.Turns.Turns(h.SID)[0].Status, "the turn in progress is FAILED")
-	h.WaitFor("runtime gone", func() bool { return h.Mgr.Active() == 0 })
+	h.WaitFor("runtime gone", func() bool { return h.Mgr.ActiveSessions() == 0 })
 }

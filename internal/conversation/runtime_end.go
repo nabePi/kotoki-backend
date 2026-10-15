@@ -516,8 +516,10 @@ func (r *Runtime) exit() {
 	if err := r.persister.Close(ctx); err != nil && !errors.Is(err, session.ErrFenceLost) && !errors.Is(err, context.Canceled) {
 		r.lg().Warn("persister close", "error", err.Error())
 	}
-	if err := r.sync.Release(ctx); err != nil && !errors.Is(err, session.ErrFenceLost) {
-		r.lg().Warn("redis sync release", "error", err.Error())
+	if !r.syncReleased { // the handoff of a drain released it already, before the client was told
+		if err := r.sync.Release(ctx); err != nil && !errors.Is(err, session.ErrFenceLost) {
+			r.lg().Warn("redis sync release", "error", err.Error())
+		}
 	}
 	cancel()
 	r.cancel()

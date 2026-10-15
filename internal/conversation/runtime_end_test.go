@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/nabePi/kotoki-backend/internal/conversation"
+	"github.com/nabePi/kotoki-backend/internal/conversation/audio"
 	"github.com/nabePi/kotoki-backend/internal/conversation/protocol"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"github.com/nabePi/kotoki-backend/internal/prompt"
@@ -62,7 +64,7 @@ func sessionEnding(h *rtharness.H, stage string) []protocol.SessionEnding {
 // gone waits until the runtime has released everything and left the registry.
 func gone(h *rtharness.H) {
 	h.T.Helper()
-	h.WaitFor("runtime gone", func() bool { _, ok := h.Runtime(); return !ok && h.Mgr.Active() == 0 })
+	h.WaitFor("runtime gone", func() bool { _, ok := h.Runtime(); return !ok && h.Mgr.ActiveSessions() == 0 })
 }
 
 // gatedLLM is the longScript with its last delta held: the LLM has produced the first sentence (and
@@ -803,4 +805,48 @@ func TestNoBalanceTickInTheGrace(t *testing.T) {
 	require.Equal(t, session.StatusEnding, h.View().Status)
 	require.Equal(t, ticks, len(h.Events("balance.tick")), "no balance.tick in ENDING")
 	gs.limit.Store(1 << 40)
+}
+
+// TestGenerationFailsWhileEnding (T22 open point): the APOLOGY of a FAILED turn is being played out by
+// an expiry when its generation fails (the clip cannot be loaded). The end does not apologize again,
+// does not count the failure and does not wait: the turn stays FAILED and the session settles.
+func TestGenerationFailsWhileEnding(t *testing.T) {
+	gate := make(chan struct{})
+	var open sync.Once
+	release := func() { open.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	h := rtharness.New(t, rtharness.WithDuration(120), rtharness.WithScript(llmFails), rtharness.WithTimeline(timelineOf(t, "ja_question")),
+		rtharness.WithApology(func() ([][]byte, error) { <-gate; return nil, audio.ErrBadApologyAsset }))
+	started(t, h)
+	userSays(h, questionJA)
+	h.WaitFor("the apology to start", func() bool { return len(generationsOf(h, "APOLOGY")) == 1 })
+	h.Sync()
+	require.Equal(t, 1, h.View().FailedTurns, "the reply that failed counts, once")
+
+	advanceTo(h, expiryOf(t, h))
+	require.Equal(t, session.StatusEnding, h.View().Status)
+	require.NotContains(t, h.Calls.Calls(), "Complete", "an expiry lets the apology play out")
+	require.Empty(t, h.Events("ai.interrupted"))
+
+	release() // the clip cannot be loaded: the apology fails inside the end
+	h.WaitEvents("session.completed", 1)
+	gone(h)
+
+	require.Len(t, generationsOf(h, "APOLOGY"), 1, "no second apology while ending")
+	require.Len(t, generationsOf(h, "REPLY"), 1)
+	ai := h.Events("ai.interrupted")
+	require.Len(t, ai, 1)
+	require.Equal(t, "SESSION_ENDING", ai[0].Payload.(protocol.AIInterrupted).Reason)
+	row := finalRow(t, h, 1)
+	require.Equal(t, session.TurnFailed, *row.Status)
+	require.Equal(t, "AI_GENERATION_FAILED", *row.ErrorCode)
+	require.Equal(t, 1.0, h.Metrics.TurnsTotal("FAILED"), "the turn is closed once")
+	require.Len(t, completed(h), 1)
+	errsSent := h.Events("error")
+	require.Len(t, errsSent, 1, "only the failure of the reply itself")
+	require.Equal(t, "AI_GENERATION_FAILED", errsSent[0].Payload.(protocol.ErrorPayload).Error.Code)
+	require.Equal(t, session.StatusCompleted, h.Session.Status(h.SID))
+	require.Equal(t, 1, callCount(h, "Complete"))
+	require.NotContains(t, h.Calls.Calls(), "Fail", "a failed apology at the end is not a PROVIDER_FAILURE")
+	require.Equal(t, "DURATION_ELAPSED", first(t, h, "session.completed").Payload.(protocol.SessionCompleted).EndReason)
 }

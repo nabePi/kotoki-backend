@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +36,38 @@ type SessionRuntime struct {
 	mu       sync.Mutex
 	sessions map[uuid.UUID]*rtSession
 	claims   [][]session.Status
+	holds    map[string]chan struct{}
+	blocked  atomic.Int32
+}
+
+// Blocked is how many calls are waiting on a Hold right now.
+func (r *SessionRuntime) Blocked() int { return int(r.blocked.Load()) }
+
+// Hold makes every call of method (GetForAttach, ClaimRuntime, MarkStarting, Activate, MarkHandoff) wait, before it
+// is recorded or checked, until the returned release is called: a database that is slow at that step,
+// so a test can act while a start or a handoff is half done.
+func (r *SessionRuntime) Hold(method string) (release func()) {
+	ch := make(chan struct{})
+	r.mu.Lock()
+	if r.holds == nil {
+		r.holds = map[string]chan struct{}{}
+	}
+	r.holds[method] = ch
+	r.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { close(ch) }) }
+}
+
+// wait blocks while method is held; the caller does not hold r.mu.
+func (r *SessionRuntime) wait(method string) {
+	r.mu.Lock()
+	ch := r.holds[method]
+	r.mu.Unlock()
+	if ch != nil {
+		r.blocked.Add(1)
+		defer r.blocked.Add(-1)
+		<-ch
+	}
 }
 
 // NewSessionRuntime returns an empty fake driven by clk.
@@ -127,6 +160,7 @@ func (e *transitionError) Is(target error) bool { return target == session.ErrIn
 
 // GetForAttach implements conversation.SessionRuntime.
 func (r *SessionRuntime) GetForAttach(_ context.Context, id uuid.UUID) (session.RuntimeRecord, error) {
+	r.wait("GetForAttach")
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, err := r.get("GetForAttach", id, -1)
@@ -138,6 +172,7 @@ func (r *SessionRuntime) GetForAttach(_ context.Context, id uuid.UUID) (session.
 
 // ClaimRuntime implements conversation.SessionRuntime: the fence rises by one.
 func (r *SessionRuntime) ClaimRuntime(_ context.Context, id uuid.UUID, allowed []session.Status) (int64, session.RuntimeRecord, error) {
+	r.wait("ClaimRuntime")
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.claims = append(r.claims, append([]session.Status(nil), allowed...))
@@ -159,6 +194,7 @@ func (r *SessionRuntime) ClaimRuntime(_ context.Context, id uuid.UUID, allowed [
 
 // MarkStarting implements conversation.SessionRuntime (RESERVED → STARTING; STARTING is a no-op).
 func (r *SessionRuntime) MarkStarting(_ context.Context, id uuid.UUID, fence int64) (session.RuntimeRecord, error) {
+	r.wait("MarkStarting")
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, err := r.get("MarkStarting", id, fence)
@@ -177,6 +213,7 @@ func (r *SessionRuntime) MarkStarting(_ context.Context, id uuid.UUID, fence int
 
 // Activate implements conversation.SessionRuntime (STARTING → ACTIVE; ACTIVE returns the same clock).
 func (r *SessionRuntime) Activate(_ context.Context, id uuid.UUID, fence int64) (time.Time, time.Time, error) {
+	r.wait("Activate")
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, err := r.get("Activate", id, fence)
@@ -251,6 +288,7 @@ func (r *SessionRuntime) AddDisconnected(_ context.Context, id uuid.UUID, fence 
 
 // MarkHandoff implements conversation.SessionRuntime (handoff_at = now; not a transition).
 func (r *SessionRuntime) MarkHandoff(_ context.Context, id uuid.UUID, fence int64) error {
+	r.wait("MarkHandoff")
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, err := r.get("MarkHandoff", id, fence)

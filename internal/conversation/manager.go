@@ -2,57 +2,46 @@ package conversation
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/nabePi/kotoki-backend/internal/conversation/protocol"
+	"github.com/nabePi/kotoki-backend/internal/conversation/rtstate"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"github.com/nabePi/kotoki-backend/internal/session"
 )
 
-// AttachTicket is what the gateway got from the consumed WS ticket (§7.3.1 step 5).
-type AttachTicket struct {
-	UserID    uuid.UUID
-	SessionID uuid.UUID
-}
-
-// AttachError is the reason a connection was refused or ended by the Manager before it was
-// handed to a Runtime; Code is the error event the client received.
-type AttachError struct {
-	Code errs.Code
-}
-
-func (e *AttachError) Error() string { return "conversation: attach refused: " + string(e.Code) }
-
-// readyFrameHeaders are the frame_header strings of session.ready (§7.4.5).
+// podinfo of the pod (§7.9.1): refreshed every 5 s with a 15 s TTL.
 const (
-	upstreamFrameHeader   = "0x01|u32 seq"
-	downstreamFrameHeader = "0x02|u32 generation|u32 seq"
-	wsWriteFallback       = 5 * time.Second // write bound for a refusal written without a writer goroutine
+	podInfoInterval = 5 * time.Second
+	podInfoTTL      = 15 * time.Second
 )
 
 // Manager is the registry of the sessions of this pod and the entry of every connection
-// (§7.1): Attach runs §7.3.1 steps 7–11 and hands the connection to a Runtime. The gateway does
-// steps 1–6 (origin, rate limit, capacity, upgrade, ticket) and calls Attach with the upgraded
-// socket; the Manager imports no WebSocket library.
+// (§7.1). The gateway does steps 1–6 of §7.3.1 (origin, rate limit, Admission, upgrade, ticket) and
+// calls Attach with the upgraded socket; the Manager imports no WebSocket library.
 //
-// Task 18 holds the skeleton: admission by capacity, the handshake, the start flow. Task 21 adds
-// resume on the pod that holds the runtime, the takeover of a session from another pod and the
-// TAKEOVER subscriber; Task 23 adds the drain around Attach, podinfo and the draining flag.
+// The files split it by what they do: manager.go is the registry, the capacity rules (§7.12.2),
+// the TAKEOVER subscriber's start and podinfo; manager_attach.go is Attach, steps 7–11 and the
+// table of §7.3.2, and the start of a runtime; manager_resume.go is resume on this pod, takeover
+// and the subscriber; drain.go is the graceful shutdown (§7.12.1).
 type Manager struct {
-	d      Deps
-	ctx    context.Context // podCtx: ends every runtime
-	cancel context.CancelFunc
+	d       Deps
+	ctx     context.Context // podCtx: ends every runtime
+	cancel  context.CancelFunc
+	started time.Time // podinfo.started_at
 
 	mu       sync.Mutex
 	runtimes map[uuid.UUID]*Runtime
-	pending  int // start flows between the capacity check and the registry
-	rwg      sync.WaitGroup
-	bg       sync.WaitGroup // the TAKEOVER subscriber
+	pending  int  // start flows between the capacity check and the registry
+	draining bool // set by Drain: no runtime is admitted any more
+	// changed is closed (and replaced) whenever a runtime or a reserved slot goes away or a runtime
+	// is registered: Drain waits on it for the pod to empty.
+	changed chan struct{}
+	rwg     sync.WaitGroup
+	bg      sync.WaitGroup // the TAKEOVER subscriber
+	subOnce sync.Once
 
 	// resume is the entry of the resume flow (§7.10) for a session that is ACTIVE: the pod that holds
 	// the runtime gives it the connection (attachResume), another pod takes the session over
@@ -61,23 +50,51 @@ type Manager struct {
 	resume func(ctx context.Context, h *handshake, rec session.RuntimeRecord, lastServerSeq int64) error
 }
 
-// NewManager creates the Manager of the pod; Close stops it.
+// NewManager creates the Manager of the pod; Close stops it. The TAKEOVER subscriber is not
+// started here: the caller starts it with StartSubscriber.
 func NewManager(d Deps) *Manager {
 	d = d.withDefaults()
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{d: d, ctx: ctx, cancel: cancel, runtimes: map[uuid.UUID]*Runtime{}}
+	m := &Manager{
+		d: d, ctx: ctx, cancel: cancel, started: d.Clock.Now(), runtimes: map[uuid.UUID]*Runtime{}, changed: make(chan struct{}),
+	}
 	m.resume = m.attachResume
 	d.Metrics.SetSessionCapacity(d.Limits.Max)
-	m.subscribe()
 	return m
 }
 
-// Active is the number of sessions this pod owns, starting ones included (activeSessions of
-// §7.12.2, the KEDA metric).
-func (m *Manager) Active() int {
+// ActiveSessions is the number of sessions this pod owns, starting ones included (activeSessions
+// of §7.12.2, the KEDA metric): the runtimes of the registry, whatever their state, plus the slots
+// of the starts in flight. It equals sessions_active summed over the state labels once no start is
+// in flight.
+func (m *Manager) ActiveSessions() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.runtimes) + m.pending
+}
+
+// Ready is /readyz (§7.12.2): the pod takes new connections while it is not draining and holds
+// fewer than REALTIME_READY_MAX_SESSIONS sessions. Connections it already has are not affected.
+func (m *Manager) Ready() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return !m.draining && len(m.runtimes)+m.pending < m.d.Limits.ReadyMax
+}
+
+// Admission is §7.3.1 step 3, asked by the gateway before the upgrade and before the ticket is
+// consumed (R-22): the pod is draining (SERVER_DRAINING), or it holds REALTIME_HARD_MAX_SESSIONS
+// sessions already (SERVER_AT_CAPACITY). It looks at nothing but the registry: no Redis, no
+// Postgres, so a refusal leaves the ticket where it was.
+func (m *Manager) Admission() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch {
+	case m.draining:
+		return errs.New(errs.CodeServerDraining, "the pod is draining")
+	case len(m.runtimes)+m.pending >= m.d.Limits.HardMax:
+		return errs.New(errs.CodeServerAtCapacity, "the pod holds the maximum number of sessions")
+	}
+	return nil
 }
 
 // Runtime returns the local runtime of a session.
@@ -88,42 +105,60 @@ func (m *Manager) Runtime(sid uuid.UUID) (*Runtime, bool) {
 	return r, ok
 }
 
-// Close stops every runtime at once and waits for them. It is the hard stop; the graceful drain
-// of Task 23 comes first in production.
+// Draining reports that Drain has begun.
+func (m *Manager) Draining() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.draining
+}
+
+// Close stops every runtime at once and waits for them. It is the hard stop; Drain comes first in
+// production and Close is what is left when it did not finish in time.
 func (m *Manager) Close() {
 	m.cancel()
 	m.rwg.Wait()
 	m.bg.Wait()
 }
 
-// reserve takes a slot for a new start; false when the pod is at REALTIME_MAX_SESSIONS (4503).
-func (m *Manager) reserve() bool { return m.reserveUpTo(m.d.Limits.Max) }
+// reserve takes a slot for a new start; the code of the refusal when the pod is draining or at
+// REALTIME_MAX_SESSIONS (4503).
+func (m *Manager) reserve() errs.Code { return m.reserveUpTo(m.d.Limits.Max) }
 
-// reserveUpTo takes a slot unless the pod already holds limit sessions: Max for a new start,
-// HardMax for a takeover (a session that already exists may still be resumed up to there, §7.12.2).
-func (m *Manager) reserveUpTo(limit int) bool {
+// reserveUpTo takes a slot unless the pod is draining or already holds limit sessions: Max for a
+// new start, HardMax for a takeover (a session that already exists may still be resumed up to
+// there, §7.12.2). It returns "" when the slot is taken. A draining pod admits nobody: a runtime
+// registered after Drain took its snapshot would never hear the drain.
+func (m *Manager) reserveUpTo(limit int) errs.Code {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.runtimes)+m.pending >= limit {
-		return false
+	switch {
+	case m.draining:
+		return errs.CodeServerDraining
+	case len(m.runtimes)+m.pending >= limit:
+		return errs.CodeServerAtCapacity
 	}
 	m.pending++
-	return true
+	return ""
 }
 
 func (m *Manager) unreserve() {
 	m.mu.Lock()
 	m.pending--
+	m.notifyLocked()
 	m.mu.Unlock()
 }
 
-// register turns a reserved slot into the runtime r.
-func (m *Manager) register(r *Runtime) {
+// register turns a reserved slot into the runtime r. It reports whether the pod began draining
+// meanwhile: the caller then tells the runtime (Drain's snapshot did not include it).
+func (m *Manager) register(r *Runtime) (draining bool) {
 	m.mu.Lock()
 	m.pending--
 	m.runtimes[r.sid] = r
+	draining = m.draining
+	m.notifyLocked()
 	m.mu.Unlock()
 	m.rwg.Add(1)
+	return draining
 }
 
 func (m *Manager) onRuntimeExit(r *Runtime) {
@@ -131,255 +166,45 @@ func (m *Manager) onRuntimeExit(r *Runtime) {
 	if m.runtimes[r.sid] == r {
 		delete(m.runtimes, r.sid)
 	}
+	m.notifyLocked()
 	m.mu.Unlock()
 	m.rwg.Done()
 }
 
-// handshake is the connection between session.ready and the hand-over to a Runtime: it owns the
-// connState and numbers the events it sends (server_seq 1 for session.ready; the runtime that is
-// created continues after them).
-type handshake struct {
-	m    *Manager
-	cs   *connState
-	sid  uuid.UUID
-	seq  int64
-	seen *EventIDCache
+// notifyLocked wakes the waiters of changed; the caller holds m.mu.
+func (m *Manager) notifyLocked() {
+	close(m.changed)
+	m.changed = make(chan struct{})
 }
 
-// send queues one server event of the handshake.
-func (h *handshake) send(typ string, payload any) {
-	h.seq++
-	ev := protocol.ServerEvent{
-		Type: typ, Version: protocol.Version, EventID: h.m.d.IDs.New(), ServerSeq: h.seq, SessionID: h.sid,
-		TS: h.m.d.Clock.Now(), Payload: payload,
-	}
-	if err := h.cs.out.EnqueueEvent(ev); err != nil {
-		h.m.d.Log.Warn("handshake event not queued", "type", typ, "error", err.Error())
-	}
-}
+// ---- podinfo (§7.9.1) ----
 
-// fail answers a fatal error: the event, then the close with the code of the catalog.
-func (h *handshake) fail(code errs.Code, opts ...protocol.ErrorOption) error {
-	h.send("error", protocol.NewError(code, h.m.d.IDs.New(), nil, nil, opts...))
-	h.cs.closeAfterDrain(protocol.CloseCode(code), string(code))
-	return &AttachError{Code: code}
-}
-
-// Attach serves one upgraded connection (§7.3.1 steps 7–11): it loads the session, checks the
-// owner and the status (§7.3.2), sends session.ready, waits for the first command and hands the
-// connection to a Runtime. It returns when the connection has ended: the Runtime owns the
-// connection after the hand-over, so the return only means this socket is done. ctx is the
-// request context of the gateway; its end closes the connection.
-func (m *Manager) Attach(ctx context.Context, conn Conn, t AttachTicket) error {
-	rec, err := m.d.Session.GetForAttach(ctx, t.SessionID)
-	if err != nil {
-		code := errs.CodeServiceUnavailable
-		if errors.Is(err, session.ErrNotFound) {
-			code = errs.CodeSessionNotFound
-		}
-		return m.refuse(ctx, conn, t.SessionID, code)
-	}
-	if rec.UserID != t.UserID {
-		return m.refuse(ctx, conn, t.SessionID, errs.CodeForbidden)
-	}
-	switch rec.Status { //nolint:exhaustive // §7.3.2: every other status is not resumable
-	case session.StatusReserved, session.StatusActive:
-	case session.StatusStarting:
-		return m.refuse(ctx, conn, t.SessionID, errs.CodeSessionStateConflict, protocol.WithRetryable(true))
-	default:
-		return m.refuse(ctx, conn, t.SessionID, errs.CodeSessionNotResumable)
-	}
-
-	seen := NewEventIDCache()
-	if r, ok := m.Runtime(t.SessionID); ok { // the dedupe of client event_ids outlives the connection (§7.4.2)
-		seen = r.seen
-	}
-	cs := newConnState(ctx, m.d, conn, t.SessionID, seen)
-	cs.start()
-	defer cs.wait()
-	h := &handshake{m: m, cs: cs, sid: t.SessionID, seen: seen}
-
-	expected := "session.start"
-	if rec.Status == session.StatusActive {
-		expected = "session.resume"
-	}
-	h.send("session.ready", m.ready(rec, expected))
-	first, err := m.awaitFirst(ctx, h)
-	if err != nil {
-		return err
-	}
-	return m.dispatchFirst(ctx, h, rec, first)
-}
-
-// ready builds the payload of session.ready.
-func (m *Manager) ready(rec session.RuntimeRecord, expected string) protocol.SessionReady {
-	params := protocol.AudioParams{Codec: "opus", SampleRate: 48000, Channels: 1, FrameMS: FrameMs}
-	return protocol.SessionReady{
-		Status: string(rec.Status), ExpectedCommand: expected, ConversationStartMode: string(rec.ConversationStartMode),
-		ProtocolVersion: protocol.Version,
-		Audio: protocol.ReadyAudio{
-			Upstream:   protocol.AudioStream{AudioParams: params, FrameHeader: upstreamFrameHeader},
-			Downstream: protocol.AudioStream{AudioParams: params, FrameHeader: downstreamFrameHeader},
-		},
-		Limits: protocol.Limits{
-			MaxJSONBytes: int(orInt64(m.d.Cfg.WSMaxJSONBytes, 16384)), MaxBinaryBytes: int(orInt64(m.d.Cfg.WSMaxBinaryBytes, protocol.MaxBinary)),
-			MaxBinaryPerSecond: orInt(m.d.Cfg.WSBinaryRate, 100),
-		},
-		HeartbeatIntervalS: int(orDur(m.d.Cfg.WSPingInterval, 15*time.Second) / time.Second),
-		ServerTime:         protocol.Timestamp{Time: m.d.Clock.Now()},
-	}
-}
-
-func orInt64(v, def int64) int64 {
-	if v > 0 {
-		return v
-	}
-	return def
-}
-
-// refuse answers a connection that is turned away before it has a connState (steps 7–9): the
-// error event and the close are written straight to the socket (no writer goroutine exists yet).
-func (m *Manager) refuse(ctx context.Context, conn Conn, sid uuid.UUID, code errs.Code, opts ...protocol.ErrorOption) error {
-	ev := protocol.ServerEvent{
-		Type: "error", Version: protocol.Version, EventID: m.d.IDs.New(), ServerSeq: 1, SessionID: sid, TS: m.d.Clock.Now(),
-		Payload: protocol.NewError(code, m.d.IDs.New(), nil, nil, opts...),
-	}
-	if env, err := protocol.MarshalServer(ev); err == nil {
-		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wsWriteFallback)
-		_ = conn.Write(wctx, MessageText, env) // best effort: the peer may be gone
-		cancel()
-	}
-	_ = conn.Close(protocol.CloseCode(code), string(code))
-	m.d.Metrics.WSClose(protocol.CloseCode(code))
-	if code == errs.CodeServiceUnavailable {
-		m.d.Metrics.Connection(ConnRejectedUnavailable)
-	} else {
-		m.d.Metrics.Connection(ConnRejectedState)
-	}
-	return &AttachError{Code: code}
-}
-
-// awaitFirst is step 10: the first command, at most WS_HANDSHAKE_TIMEOUT after session.ready. The
-// deadline is a time on the runtime clock checked on a ticker, like every other deadline.
-func (m *Manager) awaitFirst(ctx context.Context, h *handshake) (protocol.ClientEvent, error) {
-	deadline := m.d.Clock.Now().Add(m.d.Cfg.WSHandshakeTimeout)
-	tk := m.d.NewTicker(loopTick)
+// PodInfoLoop writes kotoki:realtime:podinfo:{pod} now and every 5 s (TTL 15 s) until ctx ends or
+// the Manager is closed: active_sessions, draining, started_at, build (the dashboards read it).
+// A failed write is logged and tried again at the next interval.
+func (m *Manager) PodInfoLoop(ctx context.Context) {
+	tk := m.d.NewTicker(podInfoInterval)
 	defer tk.Stop()
 	for {
+		m.writePodInfo(ctx)
 		select {
-		case ev := <-h.cs.cmdCh:
-			return ev, nil
-		case n := <-h.cs.notices:
-			h.send("error", protocol.NewError(n.Code, m.d.IDs.New(), n.RefEventID, nil))
-		case x := <-h.cs.exits:
-			var pe *ProtocolError
-			var pan *panicError
-			switch {
-			case errors.As(x.err, &pe):
-				return protocol.ClientEvent{}, h.violation(pe)
-			case errors.As(x.err, &pan):
-				m.d.Log.Error("panic recovered during the handshake", "error", pan.Error(), "stack", string(pan.stack))
-				return protocol.ClientEvent{}, h.fail(errs.CodeInternalError)
-			}
-			code := exitCloseCode(x.who)
-			h.cs.closeNow(code, closeReason(code)) // the peer is gone or the connection broke: release the socket
-			return protocol.ClientEvent{}, fmt.Errorf("conversation: connection ended before the first command: %w", x.err)
 		case <-tk.C():
-			if !m.d.Clock.Now().Before(deadline) {
-				return protocol.ClientEvent{}, h.fail(errs.CodeHandshakeTimeout)
-			}
 		case <-ctx.Done():
-			return protocol.ClientEvent{}, ctx.Err()
+			return
 		case <-m.ctx.Done():
-			return protocol.ClientEvent{}, h.fail(errs.CodeServerDraining)
+			return
 		}
 	}
 }
 
-// violation answers a fatal ProtocolError found by the reader before the session has a runtime:
-// the error and the 1008 close. There is no fence yet, so no PROTOCOL_VIOLATION row is written.
-func (h *handshake) violation(pe *ProtocolError) error {
-	return h.fail(pe.Code)
-}
-
-// dispatchFirst is step 11 and the table of §7.3.2: the first command must be session.start or
-// session.resume, with the audio format of D-071, and fit the status.
-func (m *Manager) dispatchFirst(ctx context.Context, h *handshake, rec session.RuntimeRecord, first protocol.ClientEvent) error {
-	switch p := first.Payload.(type) {
-	case protocol.SessionStart:
-		if !p.Audio.Valid() {
-			m.d.Metrics.protocolViolation(ViolationAudioFormat)
-			return h.fail(errs.CodeUnsupportedAudioFormat)
-		}
-		if rec.Status == session.StatusActive { // §7.3.2: an idempotent start is a resume from 0
-			return m.resume(ctx, h, rec, 0)
-		}
-		return m.startRuntime(ctx, h, rec)
-	case protocol.SessionResume:
-		if !p.Audio.Valid() {
-			m.d.Metrics.protocolViolation(ViolationAudioFormat)
-			return h.fail(errs.CodeUnsupportedAudioFormat)
-		}
-		if rec.Status != session.StatusActive { // RESERVED: the client must start
-			m.d.Metrics.Connection(ConnRejectedState)
-			return h.fail(errs.CodeSessionStateConflict)
-		}
-		return m.resume(ctx, h, rec, p.LastServerSeq)
+func (m *Manager) writePodInfo(ctx context.Context) {
+	if m.d.Store == nil {
+		return
 	}
-	m.d.Metrics.protocolViolation(ViolationHeader)
-	return h.fail(errs.CodeProtocolViolation)
-}
-
-// attachResume is the resume flow (§7.10) for a session that is ACTIVE: the pod that holds the
-// runtime gives it the new connection, any other pod takes the session over.
-func (m *Manager) attachResume(ctx context.Context, h *handshake, rec session.RuntimeRecord, lastServerSeq int64) error {
-	if r, ok := m.Runtime(rec.ID); ok {
-		return m.resumeSamePod(ctx, h, r, lastServerSeq)
+	info := rtstate.PodInfo{ActiveSessions: m.ActiveSessions(), Draining: m.Draining(), StartedAt: m.started, Build: m.d.Build}
+	wctx, cancel := context.WithTimeout(ctx, redisOpTimeout)
+	defer cancel()
+	if err := m.d.Store.WritePodInfo(wctx, m.d.Cfg.PodID, info, podInfoTTL); err != nil {
+		m.d.Log.Warn("podinfo not written", "pod", m.d.Cfg.PodID, "error", err.Error())
 	}
-	return m.takeover(ctx, h, rec, lastServerSeq)
-}
-
-// startRuntime is §7.6.3 steps 1–2 followed by the hand-over: capacity, ClaimRuntime, MarkStarting,
-// then the Runtime takes the connection and runs steps 3–9.
-func (m *Manager) startRuntime(ctx context.Context, h *handshake, rec session.RuntimeRecord) error {
-	if !m.reserve() {
-		m.d.Metrics.Connection(ConnRejectedCapacity)
-		return h.fail(errs.CodeServerAtCapacity)
-	}
-	fence, _, err := m.d.Session.ClaimRuntime(ctx, rec.ID, []session.Status{session.StatusReserved})
-	if err != nil {
-		m.unreserve()
-		return m.startRefused(h, err)
-	}
-	started, err := m.d.Session.MarkStarting(ctx, rec.ID, fence) // the newer record: it carries opening_prompt_version_id
-	if err != nil {
-		m.unreserve()
-		if errors.Is(err, session.ErrStartDeadlinePassed) {
-			m.d.Metrics.Connection(ConnRejectedState)
-			return h.fail(errs.CodeSessionStartDeadlinePassed)
-		}
-		return m.startRefused(h, err)
-	}
-	// The runtime outlives the connection and the request: its context is the pod's.
-	r := newRuntime(m.ctx, m.d, started, fence, h.cs, h.seen, m.onRuntimeExit) //nolint:contextcheck // runtime context = pod context, not the request context
-	r.serverSeq = h.seq                                                        // session.ready was server_seq 1
-	m.register(r)
-	m.d.Metrics.Connection(ConnAccepted)
-	r.begin() //nolint:contextcheck // the runtime goroutines run on the runtime context (pod context), not the request context
-	return nil
-}
-
-// startRefused maps an error of ClaimRuntime/MarkStarting to the refusal of the client.
-func (m *Manager) startRefused(h *handshake, err error) error {
-	switch {
-	case errors.Is(err, session.ErrNotFound):
-		m.d.Metrics.Connection(ConnRejectedState)
-		return h.fail(errs.CodeSessionNotFound)
-	case errors.Is(err, session.ErrInvalidTransition), errors.Is(err, session.ErrFenceLost):
-		m.d.Metrics.Connection(ConnRejectedState)
-		return h.fail(errs.CodeSessionStateConflict, protocol.WithRetryable(true)) // the status moved under us
-	}
-	m.d.Log.Error("start refused", "session_id", h.sid.String(), "error", err.Error())
-	m.d.Metrics.Connection(ConnRejectedUnavailable)
-	return h.fail(errs.CodeServiceUnavailable)
 }

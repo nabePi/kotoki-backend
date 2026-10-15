@@ -426,7 +426,7 @@ func TestResumeSamePod(t *testing.T) {
 	v := h.View()
 	require.True(t, v.Connected)
 	require.Equal(t, session.StatusActive, v.Status)
-	require.Equal(t, 1, h.Mgr.Active())
+	require.Equal(t, 1, h.Mgr.ActiveSessions())
 
 	// The session works after the resume: a new user turn is heard and answered.
 	gs.limit.Store(1 << 40)
@@ -553,7 +553,7 @@ func TestOldConnClosed4011(t *testing.T) {
 	require.Equal(t, 5, h.Session.Disconnected(h.SID))
 	require.Len(t, sessionEventsOf(h, "SESSION_DISCONNECTED"), 1)
 	require.True(t, h.View().Connected)
-	require.Equal(t, 1, h.Mgr.Active())
+	require.Equal(t, 1, h.Mgr.ActiveSessions())
 }
 
 func TestResumeRejectedWhenEnding(t *testing.T) {
@@ -737,7 +737,7 @@ func TestOldOwnerWritesNothingAfterTakeover(t *testing.T) {
 	require.Equal(t, 99, rt.Generation)
 	require.Equal(t, float64(1), h.Metrics.FenceLostTotal())
 	require.Equal(t, session.StatusActive, h.Session.Status(h.SID), "stopping is not ending the session")
-	require.Zero(t, h.Mgr.Active())
+	require.Zero(t, h.Mgr.ActiveSessions())
 }
 
 func TestStaleTakeoverMessageIsIgnored(t *testing.T) {
@@ -753,7 +753,7 @@ func TestStaleTakeoverMessageIsIgnored(t *testing.T) {
 	// a message for a session this pod does not hold is nothing to do either
 	conversation.HandleTakeover(h.Mgr, rtstate.Takeover{SessionID: uuid.New(), Fence: fence + 5})
 	h.Sync()
-	require.Equal(t, 1, h.Mgr.Active())
+	require.Equal(t, 1, h.Mgr.ActiveSessions())
 	// and a newer fence does stop it
 	r, _ := h.Runtime()
 	conversation.HandleTakeover(h.Mgr, rtstate.Takeover{SessionID: h.SID, Fence: fence + 1})
@@ -822,8 +822,8 @@ func TestTakeoverFencesOldOwner(t *testing.T) {
 	rc := sessionEventsOf(b, "SESSION_RECONNECTED")
 	require.Len(t, rc, 1)
 	require.Equal(t, false, payloadOf(t, rc[0])["same_pod"])
-	require.Equal(t, 1, b.Mgr.Active())
-	require.Zero(t, h.Mgr.Active())
+	require.Equal(t, 1, b.Mgr.ActiveSessions())
+	require.Zero(t, h.Mgr.ActiveSessions())
 
 	// Pod B serves the session.
 	gs.limit.Store(1 << 40)
@@ -901,7 +901,7 @@ func TestTakeoverRebuildsTheSessionState(t *testing.T) {
 	require.Equal(t, 6, snap.NextTurnSeq, "after the discarded turn too: maxSeq+1")
 	require.Empty(t, h.Memory.Builds(), "the memory context the session started with is read from redis, not built again")
 	require.Equal(t, 1, h.Router.STTOpens())
-	require.Equal(t, 1, h.Mgr.Active())
+	require.Equal(t, 1, h.Mgr.ActiveSessions())
 	require.Equal(t, session.StatusActive, h.View().Status)
 
 	// The session's deadlines follow expires_at, not the takeover: the end comes on time.
@@ -986,7 +986,7 @@ func TestTakeoverBeyondWindow(t *testing.T) {
 	require.Equal(t, 260, sc.ChargedSeconds, "300 s elapsed, 40 s away")
 	require.Greater(t, done[0].ServerSeq, int64(30), "the numbering continues the previous owner's")
 	require.Zero(t, h.Router.STTOpens(), "no stream for a session that is over")
-	require.Zero(t, h.Mgr.Active())
+	require.Zero(t, h.Mgr.ActiveSessions())
 }
 
 func TestTakeoverBeyondWindowFailsTheTurnLeftInProgress(t *testing.T) {
@@ -1004,7 +1004,7 @@ func TestTakeoverWithinWindowJustInside(t *testing.T) {
 	snap := resume(t, h, 0)
 	require.NotNil(t, snap)
 	require.Equal(t, session.StatusActive, h.Session.Status(h.SID))
-	require.Equal(t, 1, h.Mgr.Active())
+	require.Equal(t, 1, h.Mgr.ActiveSessions())
 }
 
 func TestTakeoverRedisDown(t *testing.T) {
@@ -1078,7 +1078,7 @@ func TestTakeoverRefusals(t *testing.T) {
 		require.Error(t, h.AttachResult())
 		code, _ := h.WaitClosed()
 		require.Equal(t, 4010, code)
-		require.Zero(t, h.Mgr.Active(), "the slot was given back")
+		require.Zero(t, h.Mgr.ActiveSessions(), "the slot was given back")
 	})
 	t.Run("the pod is at the hard limit", func(t *testing.T) {
 		h := seededTakeover(t, time.Second, nil, rtharness.WithLimits(conversation.Limits{ReadyMax: 1, Max: 1, HardMax: 0}))
@@ -1092,7 +1092,7 @@ func TestTakeoverRefusals(t *testing.T) {
 		h := seededTakeover(t, time.Second, nil, rtharness.WithLimits(conversation.Limits{ReadyMax: 1, Max: 0, HardMax: 1}))
 		h.Connect(h.ResumeCmd(0))
 		h.WaitEvents("session.snapshot", 1)
-		require.Equal(t, 1, h.Mgr.Active())
+		require.Equal(t, 1, h.Mgr.ActiveSessions())
 	})
 }
 
@@ -1144,6 +1144,7 @@ func TestPodChannelResubscribes(t *testing.T) {
 	deps := h.Deps
 	deps.Store, deps.PodSubscribeBackoff = store, time.Millisecond
 	m := conversation.NewManager(deps)
+	m.StartSubscriber(t.Context())
 	t.Cleanup(m.Close)
 	h.WaitFor("the subscriber to subscribe again", func() bool { return store.Subscribers("pod-a") == 1 })
 	require.Equal(t, 1, h.Store.Subscribers("pod-a"), "the manager of the harness subscribed when it was built")

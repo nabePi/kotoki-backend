@@ -78,6 +78,8 @@ type Deps struct {
 	// PodSubscribeBackoff is the wait before the TAKEOVER subscriber subscribes again (§7.9.4).
 	// Zero → 1 s.
 	PodSubscribeBackoff time.Duration
+	// Build is podinfo.build (the version of the binary); optional.
+	Build string
 }
 
 // withDefaults fills what a partial wiring leaves out; the tuning keeps the spec §7.2 defaults
@@ -116,6 +118,8 @@ func (d Deps) withDefaults() Deps {
 	c.PlaybackFinishGraceMS = orInt(c.PlaybackFinishGraceMS, 1500)
 	c.AudioMaxLeadMS = orInt(c.AudioMaxLeadMS, defaultMaxLeadMS)
 	c.MaxConsecutiveFailedTurns = orInt(c.MaxConsecutiveFailedTurns, 3)
+	c.DrainSafepointTimeout = orDur(c.DrainSafepointTimeout, 20*time.Second)
+	c.DrainFlushTimeout = orDur(c.DrainFlushTimeout, 5*time.Second)
 	if len(c.SessionWarningOffsets) == 0 {
 		c.SessionWarningOffsets = []time.Duration{60 * time.Second, 10 * time.Second}
 	}
@@ -174,7 +178,8 @@ type sttRecv struct {
 //	Task 21: reconnect (RECONNECT_WINDOW 30 s after a disconnect), takeBy (the budget of a takeover)
 //	Task 22: grace (expires_at + SESSION_EXPIRY_GRACE, or the 2 s of a user end); the flush deadline of
 //	         the end (ioTimeout) is a clock-driven context of the flush goroutine, not a field
-//	Task 23: safepoint (DRAIN_SAFEPOINT_TIMEOUT)
+//	Task 23: safepoint (DRAIN_SAFEPOINT_TIMEOUT, armed by the first drain check of an ACTIVE runtime);
+//	         the DRAIN_FLUSH_TIMEOUT of the handoff is a clock-driven context, not a field
 type deadlines struct {
 	startBy  time.Time   // STARTING must be ACTIVE by now + SESSION_START_TIMEOUT (§7.6.3 step 4)
 	warn     []time.Time // session.ending WARNING points (expires_at − offset), consumed in order
@@ -192,6 +197,9 @@ type deadlines struct {
 	// grace is the hard deadline of an end in progress (§7.11.2): the turn that is still running is
 	// cut there. Zero while the session is not ending.
 	grace time.Time
+	// safepoint is DRAIN_SAFEPOINT_TIMEOUT after the pod's drain reached a connected, ACTIVE runtime
+	// (§7.12.1): the turn still running is cut there and the session is handed off.
+	safepoint time.Time
 }
 
 // timedCancel is a context cancellation armed against the runtime clock (see cancelAt).
@@ -225,7 +233,8 @@ type timedCancel struct {
 //     Manager.attachResume/takeover, replay.go.
 //   - End (Task 22): endWith/fatal/finish in runtime_end.go (grace, USER_SPEAKING/PROCESSING
 //     handling, expiry, the flush before the settlement).
-//   - Manager (Task 23): admission/drain around Manager.Attach and Runtime.drain.
+//   - Manager (Task 23): admission/drain around Manager.Attach, and the drain of the runtime (drain.go:
+//     onDrain, advanceDrain, the handoff).
 type Runtime struct {
 	d   Deps
 	log *slog.Logger
@@ -292,6 +301,10 @@ type Runtime struct {
 	handled        uint64 // inputs handled, for Runtime.Barrier's quiescence check
 	pendingEnd     bool   // session.end received while STARTING (§7.11.3)
 	ending         bool
+	// draining: the pod is draining and told this runtime (Task 23, §7.12.1). handoff: the handoff
+	// has begun (the persister is being flushed; turns are no longer accepted). syncReleased: the
+	// handoff released the redis state, so exit has nothing left to release.
+	draining, handoff, syncReleased bool
 	// end is the normal end in progress (user end, expiry, reconnect timeout) or the tail of a fatal
 	// one (§7.11); nil while the session is not ending.
 	end     *endRun
@@ -480,6 +493,7 @@ func (r *Runtime) loop() {
 			r.onConnExit(x)
 		}
 		r.advanceEnd()
+		r.advanceDrain()
 	}
 }
 
@@ -529,6 +543,7 @@ func (r *Runtime) drain() {
 			return
 		}
 		r.advanceEnd()
+		r.advanceDrain()
 	}
 }
 
@@ -573,6 +588,10 @@ func (r *Runtime) checkDeadlines(now time.Time) {
 			r.dl.reconnect = time.Time{}
 			r.onReconnectTimeout(now)
 			return
+		}
+		if due(r.dl.safepoint) {
+			r.dl.safepoint = time.Time{}
+			r.onSafepointTimeout()
 		}
 		for len(r.dl.warn) > 0 && due(r.dl.warn[0]) {
 			off := r.dl.warnOff[0]
@@ -701,6 +720,8 @@ type View struct {
 	LastDurable int64     // the server_seq of the last durable event (the replay stream's tip)
 	CurrentTurn uuid.UUID // uuid.Nil: no turn in progress
 	PendingEnd  bool
+	// Draining: the pod's drain reached this runtime; Handoff: its handoff has begun (§7.12.1).
+	Draining, Handoff bool
 	// FailedTurns is consecutiveFailedTurns and ContentFilteredTurns the separate S-9 counter
 	// (§7.6.1).
 	FailedTurns          int
@@ -719,6 +740,7 @@ func (r *Runtime) View(ctx context.Context) (View, error) {
 	err := r.call(ctx, func(r *Runtime) {
 		v = View{Status: r.status, TurnState: r.turnState, Accepting: r.accepting, Connected: r.connected,
 			Generation: r.generation, NextTurnSeq: r.nextTurnSeq, ServerSeq: r.serverSeq, LastDurable: r.lastDurable, PendingEnd: r.pendingEnd,
+			Draining: r.draining, Handoff: r.handoff,
 			FailedTurns: r.failedTurns, ContentFilteredTurns: r.contentFilteredTurns,
 			Handled: r.handled, OutboundDrained: r.cs == nil || r.cs.out.Drained()}
 		if r.turn != nil {
@@ -936,7 +958,7 @@ func (r *Runtime) pushRT() {
 
 func (r *Runtime) rtSnapshot() rtstate.RT {
 	rt := rtstate.RT{
-		Status: string(r.status), TurnState: string(r.turnState), AcceptingTurns: r.accepting, Connected: r.connected,
+		Status: string(r.status), TurnState: string(r.turnState), AcceptingTurns: r.accepting, Connected: r.connected && !r.handoff,
 		Generation: int(r.generation), NextTurnSeq: r.nextTurnSeq, LastServerSeq: r.serverSeq, LastDurableSeq: r.lastDurable,
 		Adaptive: r.adaptive.Current, TurnsSinceAdjust: r.adaptive.TurnsSinceAdjust,
 	}

@@ -219,7 +219,7 @@ func (r *Runtime) onReconnectTimeout(now time.Time) {
 
 // resumable: only an ACTIVE session that is not ending takes a new connection (§7.3.2).
 func (r *Runtime) resumable() bool {
-	return !r.stopped && !r.ending && r.status == session.StatusActive && !r.takingOver
+	return !r.stopped && !r.ending && !r.handoff && r.status == session.StatusActive && !r.takingOver
 }
 
 // attachReq is a resume on this pod: the new connection and the STT stream the Manager opened for
@@ -434,7 +434,7 @@ func (r *Runtime) runTakeover(ctx context.Context) startResult {
 	r.sync.Update(r.takeoverRT())
 	r.sync.Start(r.ctx) //nolint:contextcheck // the sync loop lives as long as the runtime, not as long as the takeover
 	if err := r.persister.Submit(SessionEvent{Type: string(session.EventOwner), Payload: ownerChanged{
-		Reason: "TAKEOVER", FromPod: in.fromPod, ToPod: r.pod, Fence: r.fence}}); err != nil {
+		Reason: "TAKEOVER", FromPod: in.fromPod, ToPod: &r.pod, Fence: r.fence}}); err != nil {
 		return startFailed(serverFailure(fmt.Errorf("conversation: submit OWNER_CHANGED: %w", err)))
 	}
 	// Step 6: the turn the previous owner left in progress ends FAILED.

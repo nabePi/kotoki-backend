@@ -90,6 +90,7 @@ type options struct {
 	limits        conversation.Limits
 	wrapGen       func(provider.Generation) provider.Generation
 	sleep         func(ctx context.Context, d time.Duration) error
+	apology       func() ([][]byte, error)
 }
 
 // Option configures New.
@@ -136,6 +137,10 @@ func WithGenerationWrapper(f func(provider.Generation) provider.Generation) Opti
 func WithSleep(f func(ctx context.Context, d time.Duration) error) Option {
 	return func(o *options) { o.sleep = f }
 }
+
+// WithApology replaces the source of the APOLOGY packets (default: the embedded clip), to hold the
+// asset load or make it fail.
+func WithApology(f func() ([][]byte, error)) Option { return func(o *options) { o.apology = f } }
 
 // WithLimits sets the pod capacity limits (default 95/100/120).
 func WithLimits(l conversation.Limits) Option { return func(o *options) { o.limits = l } }
@@ -252,8 +257,10 @@ func New(t *testing.T, opts ...Option) *H {
 	if o.sleep != nil {
 		h.Deps.Sleep = o.sleep
 	}
+	h.Deps.Apology = o.apology
 	h.Mgr = conversation.NewManager(h.Deps)
 	h.ctx, h.cancel = context.WithCancel(context.Background())
+	h.Mgr.StartSubscriber(h.ctx)
 	t.Cleanup(h.Close)
 	return h
 }
@@ -397,6 +404,7 @@ func (h *H) Peer(pod string) *H {
 	p.Deps.Cfg.PodID = pod
 	p.Mgr = conversation.NewManager(p.Deps)
 	p.ctx, p.cancel = context.WithCancel(context.Background())
+	p.Mgr.StartSubscriber(p.ctx)
 	h.T.Cleanup(p.Close)
 	return p
 }
