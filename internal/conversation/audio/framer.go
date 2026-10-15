@@ -8,7 +8,13 @@ type Framer struct {
 }
 
 // NewFramer returns a framer producing sampleRate/50-sample blocks.
-func NewFramer(sampleRate int) *Framer { return &Framer{block: sampleRate / 50} }
+// It panics when sampleRate < 50 (zero-length blocks), which is a programmer error.
+func NewFramer(sampleRate int) *Framer {
+	if sampleRate < 50 {
+		panic("audio: NewFramer requires sampleRate >= 50")
+	}
+	return &Framer{block: sampleRate / 50}
+}
 
 // Write appends PCM bytes and returns every complete block; a trailing odd byte is carried.
 func (f *Framer) Write(pcm []byte) [][]int16 {

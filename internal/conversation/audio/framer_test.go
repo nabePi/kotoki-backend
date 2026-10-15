@@ -52,3 +52,9 @@ func TestResampleAndBytes(t *testing.T) {
 	s := []int16{1, -2, 300}
 	require.Equal(t, s, BytesToInt16(Int16ToBytes(s, nil)))
 }
+
+func TestNewFramerInvalidRatePanics(t *testing.T) {
+	require.Panics(t, func() { NewFramer(0) })
+	require.Panics(t, func() { NewFramer(49) })
+	require.NotPanics(t, func() { NewFramer(50) })
+}

@@ -30,10 +30,7 @@ func ReadWAV(path string) (PCM, error) {
 		body := p + 8
 		end := body + size
 		if end > len(b) {
-			if id != "data" {
-				return PCM{}, errors.New("audio: truncated wav chunk")
-			}
-			end = len(b)
+			return PCM{}, errors.New("audio: truncated wav chunk")
 		}
 		switch id {
 		case "fmt ":
