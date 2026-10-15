@@ -14,6 +14,7 @@ type Metrics struct {
 	outboundDropped    *prometheus.CounterVec
 	aiSentenceLimit    *prometheus.CounterVec
 	llmTruncated       prometheus.Counter
+	difficultyAdjusted prometheus.Counter
 }
 
 // NewMetrics registers the metrics on reg (nil → a private registry, for tests).
@@ -36,9 +37,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Generations stopped by the R-17 sentence limit."}, []string{"kind"}),
 		llmTruncated: prometheus.NewCounter(prometheus.CounterOpts{Name: "kotoki_realtime_llm_truncated_total",
 			Help: "LLM streams the router ended with DONE{TRUNCATED} after audio was sent (S-7)."}),
+		difficultyAdjusted: prometheus.NewCounter(prometheus.CounterOpts{Name: "kotoki_realtime_difficulty_adjustments_total",
+			Help: "In-session adaptive difficulty adjustments (spec 7.8.6)."}),
 	}
 	reg.MustRegister(m.audioFramesIn, m.audioFramesOut, m.protocolViolations, m.slowConsumer, m.outboundDropped,
-		m.aiSentenceLimit, m.llmTruncated)
+		m.aiSentenceLimit, m.llmTruncated, m.difficultyAdjusted)
 	return m
 }
 
@@ -81,5 +84,11 @@ func (m *Metrics) sentenceLimit(kind string) {
 func (m *Metrics) llmTruncatedInc() {
 	if m != nil {
 		m.llmTruncated.Inc()
+	}
+}
+
+func (m *Metrics) difficultyAdjustedInc() {
+	if m != nil {
+		m.difficultyAdjusted.Inc()
 	}
 }
