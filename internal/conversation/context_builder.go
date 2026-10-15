@@ -205,7 +205,10 @@ func (promptBuilder) BuildConversation(in ConversationInput) (BuiltPrompt, error
 	if messagesTokens(history) > b.RecentTurns {
 		c.truncated(compRecentTurns)
 		history = slices.Clone(history)
-		for messagesTokens(history) > b.RecentTurns && trimHistoryOnce(&history, b.MinRecentTurns, false) {
+		for messagesTokens(history) > b.RecentTurns {
+			if !trimHistoryOnce(&history, b.MinRecentTurns, false) {
+				break
+			}
 		}
 		if messagesTokens(history) > b.RecentTurns {
 			trimHistoryOnce(&history, b.MinRecentTurns, true)
@@ -626,9 +629,9 @@ func historyMessages(turns []TurnContext) []Message {
 		if t.UserText != nil && *t.UserText != "" {
 			out = append(out, Message{Role: "user", Content: *t.UserText})
 		}
-		switch {
-		case t.Status == statusFailed:
-		case t.Status == statusInterrupted:
+		switch t.Status {
+		case statusFailed:
+		case statusInterrupted:
 			// §7.8.1 literally: spoken text + marker, so an interrupt before the first audio
 			// still tells the model it was cut off.
 			out = append(out, Message{Role: "assistant", Content: t.AssistantText + interruptedMarker})
