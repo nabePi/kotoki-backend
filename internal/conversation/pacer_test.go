@@ -11,15 +11,20 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 )
 
+const maxFakeSleeps = 10000
+
 var pacerT0 = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 
 // fakeSleep advances the fake clock by d (the pacer's only source of waiting).
-func fakeSleep(clk *clock.Fake, calls *int) func(context.Context, time.Duration) error {
+func fakeSleep(t *testing.T, clk *clock.Fake, calls *int) func(context.Context, time.Duration) error {
 	return func(ctx context.Context, d time.Duration) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		*calls++
+		if *calls > maxFakeSleeps { // a test that forgot to drain Outbound, or a pacer spin
+			t.Fatalf("pacer slept %d times: spinning (undrained Outbound?)", *calls)
+		}
 		clk.Advance(d)
 		return nil
 	}
@@ -46,7 +51,7 @@ func frameCh(gen uint32, n int) chan audio.OutFrame {
 func TestPacerBurstThenRealtime(t *testing.T) {
 	clk := clock.NewFake(pacerT0)
 	var sleeps int
-	p := NewPacer(clk, fakeSleep(clk, &sleeps), 400)
+	p := NewPacer(clk, fakeSleep(t, clk, &sleeps), 400)
 	out := NewOutbound(256, nil)
 	var times []time.Time
 	err := p.Run(context.Background(), frameCh(1, 50), out, PacerHooks{
@@ -66,24 +71,31 @@ func TestPacerBurstThenRealtime(t *testing.T) {
 func TestPacerUnderrunResetsClock(t *testing.T) {
 	clk := clock.NewFake(pacerT0)
 	var sleeps int
-	p := NewPacer(clk, fakeSleep(clk, &sleeps), 400)
+	p := NewPacer(clk, fakeSleep(t, clk, &sleeps), 400)
 	out := NewOutbound(256, nil)
-	var maxLead time.Duration
+	var times []time.Time
 	err := p.Run(context.Background(), frameCh(1, 60), out, PacerHooks{
 		OnSentenceStart: func(f audio.OutFrame) {
 			drainOne(out)
+			times = append(times, clk.Now())
 			if f.Seq == 4 {
-				clk.Advance(time.Second) // TTS gap
-			}
-			if f.Seq > 4 {
-				if lead := p.EstimatedPlaybackEnd().Sub(clk.Now()); lead > maxLead {
-					maxLead = lead
-				}
+				clk.Advance(time.Second) // TTS gap after frame 4
 			}
 		},
 	})
 	require.NoError(t, err)
-	require.LessOrEqual(t, maxLead, 400*time.Millisecond, "no catch-up burst after an underrun")
+	require.Len(t, times, 60)
+	gap := times[5]
+	require.Equal(t, time.Second, gap.Sub(times[4]))
+	k := 5 // first frame after the gap that did not share the post-gap timestamp
+	for k < 60 && times[k].Equal(gap) {
+		k++
+	}
+	require.LessOrEqual(t, k-5, 20, "at most 400 ms may burst after an underrun")
+	require.Less(t, k, 60)
+	for i := k + 1; i < 60; i++ {
+		require.Equal(t, 20*time.Millisecond, times[i].Sub(times[i-1]), "frame %d", i)
+	}
 }
 
 func TestPacerBackpressure(t *testing.T) {
@@ -96,6 +108,9 @@ func TestPacerBackpressure(t *testing.T) {
 	sleep := func(ctx context.Context, d time.Duration) error {
 		require.Positive(t, d)
 		sleeps++
+		if sleeps > maxFakeSleeps {
+			t.Fatalf("pacer spinning on backpressure")
+		}
 		clk.Advance(d)
 		if sleeps == 3 {
 			_, ok := out.Next(ctx) // the writer drains one frame
@@ -115,7 +130,7 @@ func TestPacerBackpressure(t *testing.T) {
 func TestPacerHookOrder(t *testing.T) {
 	clk := clock.NewFake(pacerT0)
 	var sleeps int
-	p := NewPacer(clk, fakeSleep(clk, &sleeps), 400)
+	p := NewPacer(clk, fakeSleep(t, clk, &sleeps), 400)
 	out := NewOutbound(256, nil)
 	var events []string
 	lenAt := func(name string) { events = append(events, name+":"+string(rune('0'+out.AudioLen()))) }
@@ -185,7 +200,7 @@ func TestPacerCancelledBeforeStartEnqueuesNothing(t *testing.T) {
 func TestPlaybackEnd(t *testing.T) {
 	clk := clock.NewFake(pacerT0)
 	var sleeps int
-	p := NewPacer(clk, fakeSleep(clk, &sleeps), 400)
+	p := NewPacer(clk, fakeSleep(t, clk, &sleeps), 400)
 	require.True(t, p.EstimatedPlaybackEnd().IsZero())
 	out := NewOutbound(256, nil)
 	require.NoError(t, p.Run(context.Background(), frameCh(1, 10), out, PacerHooks{}))
@@ -195,7 +210,7 @@ func TestPlaybackEnd(t *testing.T) {
 func TestPacerEndMarkerOnlyOnNormalEnd(t *testing.T) {
 	clk := clock.NewFake(pacerT0)
 	var sleeps int
-	p := NewPacer(clk, fakeSleep(clk, &sleeps), 400)
+	p := NewPacer(clk, fakeSleep(t, clk, &sleeps), 400)
 
 	// normal end: frames then one end marker of the generation
 	out := NewOutbound(256, nil)
@@ -204,7 +219,7 @@ func TestPacerEndMarkerOnlyOnNormalEnd(t *testing.T) {
 
 	// no frames at all: nothing to ack, no marker
 	out = NewOutbound(256, nil)
-	require.NoError(t, NewPacer(clk, fakeSleep(clk, &sleeps), 400).Run(context.Background(), frameCh(7, 0), out, PacerHooks{}))
+	require.NoError(t, NewPacer(clk, fakeSleep(t, clk, &sleeps), 400).Run(context.Background(), frameCh(7, 0), out, PacerHooks{}))
 	require.Zero(t, countItems(out))
 }
 
@@ -227,4 +242,46 @@ func countItemsKeep(t *testing.T, out *Outbound, gen uint32) int {
 	require.True(t, last.GenEnd)
 	require.Equal(t, gen, last.Frame.Gen)
 	return n
+}
+
+func TestPacerCancelWhileWaitingForFrames(t *testing.T) {
+	noLeak(t)
+	clk := clock.NewFake(pacerT0)
+	out := NewOutbound(256, nil)
+	frames := make(chan audio.OutFrame) // open, never closed, never sent to
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p := NewPacer(clk, func(context.Context, time.Duration) error { return nil }, 400)
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx, frames, out, PacerHooks{}) }()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after cancel while blocked on frames")
+	}
+	require.Zero(t, countItems(out))
+}
+
+func TestPacerCancelAfterLastFrameNoEndMarker(t *testing.T) {
+	// cancel + close inside OnFirst: whichever of ctx.Done / closed channel the select sees
+	// first, Run reports the ctx error and queues no end marker.
+	for i := 0; i < 50; i++ {
+		clk := clock.NewFake(pacerT0)
+		out := NewOutbound(256, nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		ch := make(chan audio.OutFrame, 1)
+		ch <- audio.OutFrame{Gen: 1}
+		p := NewPacer(clk, func(context.Context, time.Duration) error { return nil }, 400)
+		done := false
+		err := p.Run(ctx, ch, out, PacerHooks{
+			OnFirst: func() { cancel(); close(ch) },
+			OnDone:  func(int, int64) { done = true },
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, done)
+		require.Equal(t, 1, countItems(out), "only the frame, no end marker")
+	}
 }

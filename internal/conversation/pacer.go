@@ -25,7 +25,11 @@ type PacerHooks struct {
 	OnFirst func()
 	// OnSentenceStart runs after the first frame of each sentence is enqueued.
 	OnSentenceStart func(f audio.OutFrame)
-	// OnDone runs when frames is closed and the end marker is queued (not when cancelled).
+	// OnDone runs on a normal end (frames closed, ctx live) once the last frame is ENQUEUED, not
+	// written. frameCount > 0: the end marker is queued and AUDIO_DONE must still come from the
+	// Writer's AUDIO_WRITTEN_ALL ack. frameCount == 0: silent generation, no marker is queued and
+	// no AUDIO_WRITTEN_ALL will ever come; the consumer must not wait for it and must map this to
+	// an explicit outcome. Never called when cancelled.
 	OnDone func(frameCount int, totalMS int64)
 }
 
@@ -62,7 +66,8 @@ func (p *Pacer) EstimatedPlaybackEnd() time.Time {
 //
 // End marker: when frames is closed, ctx is still live and at least one frame was sent, Run
 // queues out.EnqueueAudioEnd(gen) after the last frame so the Writer acks AUDIO_WRITTEN_ALL
-// (§7.7.4). A cancelled generation (ctx done, e.g. barge-in or expiry) never gets the marker,
+// (§7.7.4). Every wait selects on ctx, including the receive from frames; the producer must
+// still close frames on every exit so it does not leak. A cancelled generation (ctx done, e.g. barge-in or expiry) never gets the marker,
 // and neither does a generation without audio (nothing was written, so nothing to ack).
 func (p *Pacer) Run(ctx context.Context, frames <-chan audio.OutFrame, out *Outbound, hooks PacerHooks) error {
 	var (
@@ -70,7 +75,18 @@ func (p *Pacer) Run(ctx context.Context, frames <-chan audio.OutFrame, out *Outb
 		gen     uint32
 		lastSen = -1
 	)
-	for f := range frames {
+loop:
+	for {
+		var f audio.OutFrame
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case v, ok := <-frames:
+			if !ok {
+				break loop
+			}
+			f = v
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}

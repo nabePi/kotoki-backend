@@ -129,3 +129,5 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - Penanda akhir `EnqueueAudioEnd` (tidak ada di spec §7.5.4; kebutuhan ack `AUDIO_WRITTEN_ALL` §7.7.4) hanya untuk akhir normal dengan ≥ 1 frame; generation tanpa audio tidak di-ack (tidak ada yang ditulis) dan yang dibatalkan ctx tidak pernah ditandai.
 - `OnSentenceStart` dipanggil setelah `EnqueueAudio` (dan setelah `OnFirst` untuk frame pertama), bukan sebelum.
 - Setelah `sleep` kembali, pacer memeriksa ulang `ctx.Err()` agar `sleep` yang mengabaikan ctx tetap membatalkan Run.
+- Hand-off (binding untuk Task 12 `EvAudioDone` / Task 19): `OnDone(frameCount==0)` = generation senyap: tidak akan pernah ada `AUDIO_WRITTEN_ALL`; konsumen tidak boleh menunggunya dan harus memetakannya ke hasil eksplisit. `OnDone` terpanggil saat frame terakhir di-ENQUEUE, bukan ditulis; untuk generation tidak kosong `AUDIO_DONE` tetap harus berasal dari ack writer.
+- Penerimaan dari `frames` ikut `select` pada `ctx.Done()` (fix review); produsen tetap wajib menutup `frames` di setiap jalur keluar.
