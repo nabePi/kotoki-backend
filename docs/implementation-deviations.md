@@ -79,3 +79,7 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 
 ## M5-T4 — katalog error WS
 - Tabel §7.4.8 memuat 23 baris, bukan 24 seperti di brief task; `TestCatalog` mencakup semua 23.
+
+## M5-T6 — aset APOLOGY
+- Paket APOLOGY dienkode pada 24 kHz tetapi didekode oleh `Decoder` 16 kHz Task 5: Opus mendekode paket 20 ms ke laju keluaran mana pun (320 sampel @ 16 kHz), jadi tidak ada API baru.
+- Bootstrap: `go:embed` gagal bila file belum ada, sehingga generator pertama kali dijalankan dengan file kosong sebagai placeholder.

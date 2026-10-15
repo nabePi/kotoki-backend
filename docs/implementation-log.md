@@ -950,3 +950,9 @@ Tanggal: 2026-10-14
 ## M5-T5 — Audio: Opus, framer, PCM, WAV (cgo)
 - `internal/conversation/audio/{opus,framer,pcm,wav}.go` — satu-satunya paket cgo M5 (`gopkg.in/hraban/opus.v2`, libopus 1.6.1). `Decoder` 16 kHz mono (`Decode` hanya valid 320 sampel selain itu `ErrBadFrame`, `DecodePLC` 320 sampel), `Encoder` (`AppVoIP`, DTX/FEC off, panjang blok `sampleRate/50` atau `ErrBlockSize`), `Framer` (menahan byte ganjil, `Flush` pad nol), `Int16ToBytes/BytesToInt16/Decimate48to16/Resample`, `ReadWAV` (hanya PCM16 mono), `OutFrame`.
 - Tes: `TestEncodeDecodeRoundTrip`, `TestDecodeInvalid`, `TestPLC`, `TestEncoderBlockSizeError`, `TestFramerCarriesOddByte`, `TestFramerFlushPads`, `TestDecimate`, `TestResampleAndBytes`, `TestReadWAV`; `-race` hijau, `make lint` dan `make arch-check` hijau (aturan depguard/arch untuk paket cgo sudah ada, tidak diubah).
+
+## M5-T6 — Audio: VAD dan aset APOLOGY
+- `audio/vad.go`: `NewVAD(mode)` (mode di luar 0..3 ditolak) membungkus `go-webrtcvad` (cgo); `Process(pcm []int16) bool` menerima tepat 320 sampel (20 ms @ 16 kHz, dikonversi ke 640 byte LE), panjang lain atau error → `false`. Tidak thread-safe (buffer internal dipakai ulang).
+- `audio/apology.go`: `ApologyText` dan `ApologyFrames()` mem-parse embed `assets/apology_ja.opus` (`[uint16 BE len][packet]`); aset rusak → `ErrBadApologyAsset`.
+- `test/tools/genapology`: sintesis nada naik-turun 2,4 s (220–330 Hz per suku kata, 24 kHz) → `Framer` → `Encoder(24000,32000,5)`; `make assets-apology` menjalankannya, file hasil (120 paket, ±9 KB) di-commit. Hanya mode fake; `-tts` menyusul di M9.
+- Tes: `TestVADSilenceAndTone`, `TestVADRejectsBadMode`, `TestApologyFrames` (paket 24 kHz didekode `Decoder` 16 kHz Task 5 → 320 sampel); `-race`, `make arch-check`, `make lint` hijau. Aturan depguard tidak berubah (`**/test/**` sudah dikecualikan dari `audio-only-realtime-graph`).
