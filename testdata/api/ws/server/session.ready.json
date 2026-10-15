@@ -1,0 +1,37 @@
+{
+  "type": "session.ready",
+  "version": 1,
+  "event_id": "01929a4e-6f2c-7c3a-9a51-3f1f0b7c2d01",
+  "server_seq": 1,
+  "session_id": "01929a40-1111-7abc-8def-000000000001",
+  "ts": "2026-10-12T06:30:15.123Z",
+  "payload": {
+    "status": "RESERVED",
+    "expected_command": "session.start",
+    "conversation_start_mode": "AI_FIRST",
+    "protocol_version": 1,
+    "audio": {
+      "upstream": {
+        "codec": "opus",
+        "sample_rate": 48000,
+        "channels": 1,
+        "frame_ms": 20,
+        "frame_header": "0x01|u32 seq"
+      },
+      "downstream": {
+        "codec": "opus",
+        "sample_rate": 48000,
+        "channels": 1,
+        "frame_ms": 20,
+        "frame_header": "0x02|u32 generation|u32 seq"
+      }
+    },
+    "limits": {
+      "max_json_bytes": 16384,
+      "max_binary_bytes": 4096,
+      "max_binary_per_second": 100
+    },
+    "heartbeat_interval_s": 15,
+    "server_time": "2026-10-12T06:30:00.000Z"
+  }
+}

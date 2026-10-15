@@ -1,0 +1,22 @@
+{
+  "type": "turn.completed",
+  "version": 1,
+  "event_id": "01929a4e-6f2c-7c3a-9a51-3f1f0b7c2d16",
+  "server_seq": 16,
+  "session_id": "01929a40-1111-7abc-8def-000000000001",
+  "turn_id": "01929a4e-5a00-7d00-8000-0000000000aa",
+  "turn_seq": 3,
+  "ts": "2026-10-12T06:30:15.123Z",
+  "payload": {
+    "status": "COMPLETED",
+    "user_text": "昨日会社に行きました。",
+    "assistant_text": "へえ、そうなんですね。何か特別なことがありましたか？",
+    "assistant_spoken_text": "へえ、そうなんですね。何か特別なことがありましたか？",
+    "latency": {
+      "turn_end_to_first_audio_ms": 1180,
+      "stt_final_ms": 240,
+      "llm_first_token_ms": 410,
+      "tts_first_audio_ms": 290
+    }
+  }
+}

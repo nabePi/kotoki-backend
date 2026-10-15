@@ -1,0 +1,11 @@
+{
+  "type": "client.playback_finished",
+  "version": 1,
+  "event_id": "8a4f0c1e-3c55-4b8e-9d4b-0f1d2e3a4b5c",
+  "session_id": "01929a40-1111-7abc-8def-000000000001",
+  "ts": "2026-10-12T06:30:16.001Z",
+  "payload": {
+    "generation": 7,
+    "played_ms": 3820
+  }
+}

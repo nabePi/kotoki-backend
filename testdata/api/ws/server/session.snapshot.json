@@ -1,0 +1,34 @@
+{
+  "type": "session.snapshot",
+  "version": 1,
+  "event_id": "01929a4e-6f2c-7c3a-9a51-3f1f0b7c2d55",
+  "server_seq": 155,
+  "session_id": "01929a40-1111-7abc-8def-000000000001",
+  "generation": 7,
+  "ts": "2026-10-12T06:30:15.123Z",
+  "payload": {
+    "replay": "COMPLETE",
+    "replayed_count": 12,
+    "server_seq_baseline": 154,
+    "session": {
+      "status": "ACTIVE",
+      "conversation_start_mode": "USER_FIRST",
+      "started_at": "2026-10-12T06:30:01.200Z",
+      "expires_at": "2026-10-12T06:40:01.200Z",
+      "remaining_seconds": 312,
+      "ending": null
+    },
+    "turn_state": "LISTENING",
+    "active_generation": 9,
+    "next_turn_seq": 6,
+    "recent_turns": [
+      {
+        "turn_id": "01929a4e-5a00-7d00-8000-0000000000aa",
+        "turn_seq": 5,
+        "status": "INTERRUPTED",
+        "user_text": "昨日、会社に行きました。",
+        "assistant_spoken_text": "へえ、そうなんですね。"
+      }
+    ]
+  }
+}

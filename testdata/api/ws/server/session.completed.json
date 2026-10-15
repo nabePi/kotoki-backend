@@ -1,0 +1,16 @@
+{
+  "type": "session.completed",
+  "version": 1,
+  "event_id": "01929a4e-6f2c-7c3a-9a51-3f1f0b7c2d04",
+  "server_seq": 4,
+  "session_id": "01929a40-1111-7abc-8def-000000000001",
+  "ts": "2026-10-12T06:30:15.123Z",
+  "payload": {
+    "end_reason": "DURATION_ELAPSED",
+    "started_at": "2026-10-12T06:30:01.200Z",
+    "ended_at": "2026-10-12T06:40:01.200Z",
+    "charged_seconds": 598,
+    "disconnected_seconds": 4,
+    "turn_count": 14
+  }
+}

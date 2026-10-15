@@ -71,3 +71,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - `fakes.AudioStore` adalah blob store generik (Put/Get/Delete): belum ada port yang memakainya dan audio user tidak pernah disimpan (D-099); Task berikutnya boleh mempersempitnya.
 - Fake `RuntimeStore` mengabaikan TTL (tidak ada kedaluwarsa) dan memangkas stream tepat 500 (Redis `MAXLEN ~`).
 - `memory.MemoryContext` memakai `//nolint:revive` karena nama ditetapkan §11.7.1.
+
+## M5-T3 — decoder protokol WS
+- Decoder `DecodeClientEvent`/`DecodeServerEvent` **mengabaikan** field payload (dan envelope) yang tidak dikenal, mengikuti §7.4.2 ("Field yang tidak dikenal diabaikan, forward compatibility"). §14.4 butir (c) menulis "decoder menolak field tak dikenal"; kedua teks bertentangan dan §7.4.2 dipilih karena menyangkut kompatibilitas client. `type` tak dikenal tetap ditolak (`ErrUnknownType`), `version != 1` → `ErrUnsupportedVersion`, payload bukan object/salah tipe → `ErrInvalidPayload`.
+- `IsDurable("error")` selalu `false`: durable-nya `error` bergantung `ErrorPayload.Fatal` (hanya non-fatal), jadi diputuskan pemanggil.
+- Jumlah golden WS = 27 (6 client + 21 server), bukan 28 seperti di brief task; setiap tipe di §7.4.4/§7.4.5 punya tepat satu golden.

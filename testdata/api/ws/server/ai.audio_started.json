@@ -1,0 +1,17 @@
+{
+  "type": "ai.audio_started",
+  "version": 1,
+  "event_id": "01929a4e-6f2c-7c3a-9a51-3f1f0b7c2d13",
+  "server_seq": 13,
+  "session_id": "01929a40-1111-7abc-8def-000000000001",
+  "turn_id": "01929a4e-5a00-7d00-8000-0000000000aa",
+  "turn_seq": 3,
+  "generation": 7,
+  "ts": "2026-10-12T06:30:15.123Z",
+  "payload": {
+    "codec": "opus",
+    "sample_rate": 48000,
+    "channels": 1,
+    "frame_ms": 20
+  }
+}

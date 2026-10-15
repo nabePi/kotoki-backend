@@ -934,3 +934,9 @@ Tanggal: 2026-10-14
 - Fake di `internal/testutil/fakes`: `RuntimeStore` (owner Lua §7.9.2, stream dipangkas 500, pub/sub per pod), `SessionRuntime` (`session.CanTransition`, fence naik di `ClaimRuntime`, `ErrFenceLost`, `Complete` idempotent, settlement `min(duration, ceil(endingAt-startedAt) - disconnected)` dengan fake clock), `TurnRepo`, `EventWriter`, `MemoryRetrieval`, `LearnerContext`, `AudioStore`; semuanya aman konkuren dengan hook `FailNext`.
 - `repotest.RuntimeStoreSuite` (dipakai ulang Task 16 untuk Redis), `testutil.NoGoroutineLeak(t, pkgPrefix)`.
 - Tes: `TestSpeedTables`, `TestAdaptiveDifficultyJSONTags`, `TestRuntimeStoreContract`, `TestFakeSessionRuntime`, `TestFakeTurnRepoAndEvents`, `TestFakeMemoryRetrieval`, `TestNoGoroutineLeakPasses`; lint bersih.
+
+## M5-T3 — Protokol WS v1: envelope, payload, registry, golden
+- `internal/conversation/protocol/{envelope,client,server,registry,codec}.go`: `ServerEvent`/`ClientEvent`, payload per §7.4.4/§7.4.5 (tanpa `expression`, D-014), `AudioParams.Valid()` (opus/48000/1/20; decode tidak menolak, pemanggil yang memberi `UNSUPPORTED_AUDIO_FORMAT`), `Timestamp` (RFC 3339 UTC dengan tepat 3 digit ms, juga untuk `ts` envelope), registry `map[string]reflect.Type` untuk client (6) dan server (21), `IsDurable` (12 tipe §7.4.3), `MarshalServer/MarshalClient/DecodeServerEvent/DecodeClientEvent`. `turn_id/turn_seq/generation` dihilangkan bila nil, `replay` hanya bila true. Paket cgo-free dan tidak mengimpor `conversation/audio`.
+- Golden `testdata/api/ws/{client,server}/*.json` (27 file, indent 2, UUID/waktu tetap) dibuat dengan `go test ./internal/conversation/protocol -update`.
+- Tes: `TestGoldenServer/TestGoldenClient` (marshal JSONEq, decode→re-marshal, kelengkapan dua arah), `TestDurableSet`, `TestEnvelopeOmitsEmpty`, `TestDecodeClient`.
+- Keputusan: field tak dikenal diabaikan (§7.4.2 menang atas §14.4), lihat deviations.
