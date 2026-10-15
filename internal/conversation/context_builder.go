@@ -48,8 +48,9 @@ type ConversationInput struct { //nolint:revive // name fixed by the spec (7.8.3
 	Budget           prompt.Budget
 
 	// DurationMinutes and SessionMode fill Session.DurationMinutes / Session.Mode of PromptData
-	// (§6.8.2); the spec's ConversationInput has no source for them. SessionMode "" means USER_FIRST
-	// in CONVERSATION and AI_FIRST in OPENING.
+	// (§6.8.2); the spec's ConversationInput has no source for them (sessions.duration_seconds and
+	// sessions.conversation_start_mode). Both are required: DurationMinutes > 0 and SessionMode
+	// USER_FIRST or AI_FIRST, otherwise BuildConversation fails instead of guessing.
 	DurationMinutes int
 	SessionMode     string
 }
@@ -114,6 +115,8 @@ const (
 	rollingSummaryTemp     = 0.3
 	defaultSummaryMaxRunes = 300
 	closingThresholdSecs   = 60
+	sessionUserFirst       = "USER_FIRST"
+	sessionAIFirst         = "AI_FIRST"
 	statusDiscarded        = "DISCARDED"
 	statusInterrupted      = "INTERRUPTED"
 	statusFailed           = "FAILED"
@@ -151,19 +154,26 @@ func (promptBuilder) BuildConversation(in ConversationInput) (BuiltPrompt, error
 	if in.Mode == ModeConversation && in.CurrentUserText == "" {
 		return BuiltPrompt{}, errors.New("conversation: empty user text for a CONVERSATION prompt")
 	}
+	if in.DurationMinutes <= 0 {
+		return BuiltPrompt{}, fmt.Errorf("conversation: DurationMinutes must be positive, got %d", in.DurationMinutes)
+	}
+	if in.SessionMode != sessionUserFirst && in.SessionMode != sessionAIFirst {
+		return BuiltPrompt{}, fmt.Errorf("conversation: SessionMode must be %s or %s, got %q", sessionUserFirst, sessionAIFirst, in.SessionMode)
+	}
+	band, _ := content.DifficultyBand(in.Config.ScenarioVersion.DifficultyLevel)
+	if band == "" {
+		return BuiltPrompt{}, fmt.Errorf("conversation: scenario difficulty level %d is out of range 1-5", in.Config.ScenarioVersion.DifficultyLevel)
+	}
 	b := in.Budget
 	if b == (prompt.Budget{}) {
 		b = prompt.DefaultBudget
 	}
 	c := newCollector()
-
 	data := buildPromptData(in)
 
 	// 2 character, 3 topic + scenario.
-	data.Character.Persona = fitCharacter(&data.Character, b.Character, c)
+	data.Character.Persona = fitCharacter(data.Character, b.Character, c)
 	fitScenario(&data.Scenario, data.Topic, b.Scenario, c)
-	c.tokens[compCharacter] = characterTokens(data.Character)
-	c.tokens[compScenario] = scenarioTokens(data.Scenario, data.Topic)
 
 	// 12 current input (kept from the front).
 	current := in.CurrentUserText
@@ -172,68 +182,122 @@ func (promptBuilder) BuildConversation(in ConversationInput) (BuiltPrompt, error
 		c.truncated(compCurrentInput)
 	}
 
-	// Trim order 8 → 7 → 10 → 6 → 11 (§7.8.1).
-	data.Memory.Episodes = fitItems(episodicTexts(in.Memory.Episodic), scores(in.Memory.Episodic), b.MemoryEpisodic, maxEpisodicItems, compMemoryEpisodic, c)
-	data.Memory.Items = fitItems(coreTexts(in.Memory.Core), scores(in.Memory.Core), b.MemoryCore, maxCoreItems, compMemoryCore, c)
-	c.tokens[compMemoryEpisodic] = listTokens(data.Memory.Episodes)
-	c.tokens[compMemoryCore] = listTokens(data.Memory.Items)
+	// Per-component caps, in the order 8 → 7 → 10 → 6 → 11 (§7.8.1).
+	episodes := memEntries(episodicTexts(in.Memory.Episodic), in.Memory.Episodic)
+	core := memEntries(coreTexts(in.Memory.Core), in.Memory.Core)
+	episodes = fitItems(episodes, b.MemoryEpisodic, maxEpisodicItems, compMemoryEpisodic, c)
+	core = fitItems(core, b.MemoryCore, maxCoreItems, compMemoryCore, c)
 
 	data.Session.Summary = in.RollingSummary
 	if prompt.EstimateTokens(data.Session.Summary) > b.Summary {
 		data.Session.Summary = truncateToTokens(data.Session.Summary, b.Summary)
 		c.truncated(compSummary)
 	}
-	c.tokens[compSummary] = prompt.EstimateTokens(data.Session.Summary)
-
 	if learnerTokens(data.Learner) > b.Learner {
 		data.Learner.Adaptation = dropFocusLine(data.Learner.Adaptation)
 		c.truncated(compLearner)
 	}
-	c.tokens[compLearner] = learnerTokens(data.Learner)
 
-	history := historyMessages(in.RecentTurns)
-	if in.Mode == ModeOpening {
-		history = nil
+	var history []Message
+	if in.Mode == ModeConversation {
+		history = historyMessages(in.RecentTurns)
 	}
-	history = fitHistory(history, b, c)
-	c.tokens[compRecentTurns] = messagesTokens(history)
-	c.tokens[compCurrentInput] = prompt.EstimateTokens(current)
+	if messagesTokens(history) > b.RecentTurns {
+		c.truncated(compRecentTurns)
+		history = slices.Clone(history)
+		for messagesTokens(history) > b.RecentTurns && trimHistoryOnce(&history, b.MinRecentTurns, false) {
+		}
+		if messagesTokens(history) > b.RecentTurns {
+			trimHistoryOnce(&history, b.MinRecentTurns, true)
+		}
+	}
 
-	// 1 fixed text (rules, output contract, template text) and 9 session state.
+	// Component 1: fixed text with every conditional block present (headers, memory rules, ...).
 	fixed, err := renderSystem(in.Prompt, skeleton(data))
 	if err != nil {
 		return BuiltPrompt{}, err
 	}
 	c.tokens[compSystem] = prompt.EstimateTokens(fixed)
-	if c.tokens[compSystem] > b.System {
-		return BuiltPrompt{}, fmt.Errorf("conversation: prompt version %s fixed text is %d tokens, budget %d", in.Prompt.ID, c.tokens[compSystem], b.System)
-	}
-	c.tokens[compSessionState] = prompt.EstimateTokens(fmt.Sprint(data.Session.RemainingMinutes, data.Session.DurationMinutes))
+	// The spec calls an over-budget component 1 a configuration error, but its own seed template
+	// (§6.8.3, mandatory for M3) measures above 600 with every conditional block counted; the
+	// excess is absorbed by the total-budget trimming below instead of failing every session.
 
-	system, err := renderSystem(in.Prompt, data)
+	render := func() (string, int, error) {
+		data.Memory.Items, data.Memory.Episodes = entryTexts(core), entryTexts(episodes)
+		sys, err := renderSystem(in.Prompt, data)
+		return sys, prompt.EstimateTokens(sys) + messagesTokens(history) + currentTokens(in.Mode, current), err
+	}
+	system, total, err := render()
 	if err != nil {
 		return BuiltPrompt{}, err
 	}
+	// Total input over budget: keep trimming 8 → 7 → 10 → 6 (focus line) → 11 (to the floor).
+	for total > b.Total() {
+		over := total - b.Total()
+		switch {
+		case len(episodes) > 0:
+			episodes = dropLowest(episodes)
+			c.truncated(compMemoryEpisodic)
+		case len(core) > 0:
+			core = dropLowest(core)
+			c.truncated(compMemoryCore)
+		case data.Session.Summary != "":
+			data.Session.Summary = truncateToTokens(data.Session.Summary, max(prompt.EstimateTokens(data.Session.Summary)-over, 0))
+			c.truncated(compSummary)
+		case dropFocusLine(data.Learner.Adaptation) != data.Learner.Adaptation:
+			data.Learner.Adaptation = dropFocusLine(data.Learner.Adaptation)
+			c.truncated(compLearner)
+		default:
+			h := slices.Clone(history)
+			if !trimHistoryOnce(&h, b.MinRecentTurns, false) && !trimHistoryOnce(&h, b.MinRecentTurns, true) {
+				return finishPrompt(in, c, system, history, current, total, data, core, episodes), nil
+			}
+			history = h
+			c.truncated(compRecentTurns)
+		}
+		if system, total, err = render(); err != nil {
+			return BuiltPrompt{}, err
+		}
+	}
+	return finishPrompt(in, c, system, history, current, total, data, core, episodes), nil
+}
+
+func currentTokens(mode Mode, current string) int {
+	if mode != ModeConversation {
+		return 0
+	}
+	return prompt.EstimateTokens(current) + prompt.ItemOverheadTokens
+}
+
+func finishPrompt(in ConversationInput, c *collector, system string, history []Message, current string, total int,
+	data prompt.PromptData, core, episodes []memEntry) BuiltPrompt {
+	c.tokens[compCharacter] = characterTokens(data.Character)
+	c.tokens[compScenario] = scenarioTokens(data.Scenario, data.Topic)
+	c.tokens[compLearner] = learnerTokens(data.Learner)
+	c.tokens[compMemoryCore] = listTokens(entryTexts(core))
+	c.tokens[compMemoryEpisodic] = listTokens(entryTexts(episodes))
+	c.tokens[compSummary] = prompt.EstimateTokens(data.Session.Summary)
+	c.tokens[compSessionState] = prompt.EstimateTokens(fmt.Sprint(data.Session.RemainingMinutes, data.Session.DurationMinutes))
+	c.tokens[compRecentTurns] = messagesTokens(history)
+	c.tokens[compCurrentInput] = prompt.EstimateTokens(current)
+
 	msgs := make([]Message, 0, len(history)+2)
 	msgs = append(msgs, Message{Role: "system", Content: system})
 	msgs = append(msgs, history...)
-	if in.Mode == ModeConversation {
-		msgs = append(msgs, Message{Role: "user", Content: current})
-	}
-
 	maxOut := openingMaxOutput
 	if in.Mode == ModeConversation {
+		msgs = append(msgs, Message{Role: "user", Content: current})
 		maxOut = conversationMaxOutput
 	}
 	return BuiltPrompt{
 		Messages:             msgs,
 		MaxOutputTokens:      in.Prompt.LLMParams.MaxOutputTokensOr(maxOut),
 		Temperature:          float32(in.Prompt.LLMParams.TemperatureOr(defaultTemperature)),
-		EstimatedInputTokens: prompt.EstimateTokens(system) + messagesTokens(msgs[1:]),
+		EstimatedInputTokens: total,
 		ComponentTokens:      c.tokens,
 		Truncations:          c.truncations,
 		PromptVersionID:      in.Prompt.ID,
-	}, nil
+	}
 }
 
 // rollingSummarySystem is the §7.8.5 system text; %d is MaxRunes.
@@ -266,6 +330,7 @@ func (promptBuilder) BuildRollingSummary(in SummaryInput) (BuiltPrompt, error) {
 		Messages: msgs, MaxOutputTokens: rollingSummaryMaxOut, Temperature: rollingSummaryTemp,
 		EstimatedInputTokens: messagesTokens(msgs),
 		ComponentTokens:      map[string]int{},
+		Truncations:          []string{},
 	}, nil
 }
 
@@ -302,13 +367,6 @@ func buildPromptData(in ConversationInput) prompt.PromptData {
 
 	remaining := max(in.RemainingSeconds, 0)
 	remainingMin := (remaining + 59) / 60
-	mode := in.SessionMode
-	if mode == "" {
-		mode = "USER_FIRST"
-		if in.Mode == ModeOpening {
-			mode = "AI_FIRST"
-		}
-	}
 	hint := ""
 	if ch.GreetingHint != nil {
 		hint = *ch.GreetingHint
@@ -329,7 +387,7 @@ func buildPromptData(in ConversationInput) prompt.PromptData {
 		},
 		Learner: in.Learner,
 		Session: prompt.SessionData{
-			Mode: mode, DurationMinutes: max(in.DurationMinutes, remainingMin), RemainingMinutes: remainingMin,
+			Mode: in.SessionMode, DurationMinutes: in.DurationMinutes, RemainingMinutes: remainingMin,
 		},
 	}
 }
@@ -342,26 +400,35 @@ func renderSystem(pv content.PromptVersion, data prompt.PromptData) (string, err
 	return r.System, nil
 }
 
-// skeleton is data with every variable field emptied: rendering it measures component 1.
+// skeleton is data with every variable field replaced by a one-character placeholder, and the
+// conditional template blocks switched on: rendering it measures component 1 (fixed text
+// including headers and memory rules), slightly over-counted by the placeholders.
 func skeleton(d prompt.PromptData) prompt.PromptData {
 	return prompt.PromptData{
-		CoreRules: d.CoreRules, OutputContract: d.OutputContract,
-		Speech: d.Speech, Session: prompt.SessionData{Mode: d.Session.Mode},
+		CoreRules: d.CoreRules, OutputContract: prompt.OutputContract(false), // the closing text is component 9
+		Character: prompt.CharacterData{GreetingHint: "x"},
+		Scenario: prompt.ScenarioData{
+			Tasks: []string{"x"}, Constraints: []string{"x"}, GrammarTargets: []string{"x"},
+			VocabHints: []prompt.VocabHint{{TermJA: "x", Reading: "x", Meaning: "x"}},
+		},
+		Speech:  d.Speech,
+		Learner: prompt.LearnerContext{DisplayName: "x", Adaptation: "x"},
+		Memory:  prompt.MemoryData{Items: []string{"x"}, Episodes: []string{"x"}},
+		Session: prompt.SessionData{Mode: d.Session.Mode, Summary: "x"},
 	}
 }
 
-// fitCharacter cuts the persona at a paragraph end so name + persona + greeting hint fit budget.
-func fitCharacter(ch *prompt.CharacterData, budget int, c *collector) string {
-	if characterTokens(*ch) <= budget {
+// fitCharacter cuts the persona at a paragraph end so name + persona fit budget (component 2).
+func fitCharacter(ch prompt.CharacterData, budget int, c *collector) string {
+	if characterTokens(ch) <= budget {
 		return ch.Persona
 	}
 	c.truncated(compCharacter)
-	room := budget - prompt.EstimateTokens(ch.Name) - prompt.EstimateTokens(ch.GreetingHint)
-	return cutAtParagraph(ch.Persona, room)
+	return cutAtParagraph(ch.Persona, budget-prompt.EstimateTokens(ch.Name))
 }
 
 func characterTokens(ch prompt.CharacterData) int {
-	return prompt.EstimateTokens(ch.Name) + prompt.EstimateTokens(ch.Persona) + prompt.EstimateTokens(ch.GreetingHint)
+	return prompt.EstimateTokens(ch.Name) + prompt.EstimateTokens(ch.Persona)
 }
 
 // cutAtParagraph keeps whole paragraphs (split on blank lines, then lines) while they fit; when
@@ -424,16 +491,18 @@ func scenarioTokens(sc prompt.ScenarioData, topic prompt.TopicData) int {
 	return n
 }
 
-// fitScenario cuts the situation text first; when the lists alone are too large it drops their
-// trailing items (vocabulary, grammar targets, constraints, tasks). It replaces slices, never
-// edits them in place.
+// fitScenario enforces component 3. Over budget: the situation is cut first (at a paragraph end),
+// preceded by dropping trailing list items (vocabulary, grammar targets, constraints, tasks) when
+// the lists alone are too large; when goal and roles still do not fit, the situation is removed and
+// goal, user role and AI role are cut by tokens in that order. It replaces slices, never edits them.
 func fitScenario(sc *prompt.ScenarioData, topic prompt.TopicData, budget int, c *collector) {
 	if scenarioTokens(*sc, topic) <= budget {
 		return
 	}
 	c.truncated(compScenario)
-	for scenarioTokens(prompt.ScenarioData{Situation: "", AIRole: sc.AIRole, UserRole: sc.UserRole, Goal: sc.Goal,
-		Tasks: sc.Tasks, Constraints: sc.Constraints, GrammarTargets: sc.GrammarTargets, VocabHints: sc.VocabHints}, topic) > budget {
+	situation := sc.Situation
+	sc.Situation = ""
+	for scenarioTokens(*sc, topic) > budget {
 		switch {
 		case len(sc.VocabHints) > 0:
 			sc.VocabHints = sc.VocabHints[:len(sc.VocabHints)-1]
@@ -444,12 +513,17 @@ func fitScenario(sc *prompt.ScenarioData, topic prompt.TopicData, budget int, c 
 		case len(sc.Tasks) > 0:
 			sc.Tasks = sc.Tasks[:len(sc.Tasks)-1]
 		default:
+			for _, f := range []*string{&sc.Goal, &sc.UserRole, &sc.AIRole} {
+				over := scenarioTokens(*sc, topic) - budget
+				if over <= 0 {
+					break
+				}
+				*f = truncateToTokens(*f, max(prompt.EstimateTokens(*f)-over, 0))
+			}
 			return
 		}
 	}
-	rest := scenarioTokens(prompt.ScenarioData{AIRole: sc.AIRole, UserRole: sc.UserRole, Goal: sc.Goal,
-		Tasks: sc.Tasks, Constraints: sc.Constraints, GrammarTargets: sc.GrammarTargets, VocabHints: sc.VocabHints}, topic)
-	sc.Situation = cutAtParagraph(sc.Situation, budget-rest)
+	sc.Situation = cutAtParagraph(situation, budget-scenarioTokens(*sc, topic))
 }
 
 func listTokens(items []string) int {
@@ -482,47 +556,47 @@ func episodicTexts(items []memory.ContextItem) []string {
 	return out
 }
 
-func scores(items []memory.ContextItem) []float64 {
-	out := make([]float64, len(items))
-	for i, it := range items {
-		out[i] = it.Score
+// memEntry is one memory line with the score that ranks it.
+type memEntry struct {
+	text  string
+	score float64
+}
+
+func memEntries(texts []string, items []memory.ContextItem) []memEntry {
+	out := make([]memEntry, len(texts))
+	for i, t := range texts {
+		out[i] = memEntry{text: t, score: items[i].Score}
 	}
 	return out
 }
 
-// fitItems drops the lowest-scored item (the later one on ties) until the list has at most
-// maxCount items and fits budget; survivors keep their order.
-func fitItems(texts []string, score []float64, budget, maxCount int, name string, c *collector) []string {
-	idx := make([]int, len(texts))
-	for i := range idx {
-		idx[i] = i
-	}
-	cost := func() int {
-		n := 0
-		for _, i := range idx {
-			n += prompt.EstimateTokens(texts[i]) + prompt.ItemOverheadTokens
-		}
-		return n
-	}
-	dropped := false
-	for len(idx) > 0 && (len(idx) > maxCount || cost() > budget) {
-		worst := 0
-		for k, i := range idx {
-			if score[i] <= score[idx[worst]] {
-				worst = k
-			}
-		}
-		idx = slices.Delete(idx, worst, worst+1)
-		dropped = true
-	}
-	if dropped {
-		c.truncated(name)
-	}
-	out := make([]string, len(idx))
-	for k, i := range idx {
-		out[k] = texts[i]
+func entryTexts(es []memEntry) []string {
+	out := make([]string, len(es))
+	for i, e := range es {
+		out[i] = e.text
 	}
 	return out
+}
+
+// dropLowest returns a copy without the lowest-scored entry (the later one on ties).
+func dropLowest(es []memEntry) []memEntry {
+	worst := 0
+	for i, e := range es {
+		if e.score <= es[worst].score {
+			worst = i
+		}
+	}
+	return slices.Delete(slices.Clone(es), worst, worst+1)
+}
+
+// fitItems drops the lowest-scored entries until at most maxCount remain and they fit budget;
+// survivors keep their order.
+func fitItems(es []memEntry, budget, maxCount int, name string, c *collector) []memEntry {
+	for len(es) > 0 && (len(es) > maxCount || listTokens(entryTexts(es)) > budget) {
+		es = dropLowest(es)
+		c.truncated(name)
+	}
+	return es
 }
 
 func learnerTokens(l prompt.LearnerContext) int {
@@ -543,21 +617,25 @@ func dropFocusLine(adaptation string) string {
 
 // historyMessages turns past turns into chat messages (§7.8.1): user then assistant per turn;
 // INTERRUPTED carries the spoken text plus a marker; FAILED only the user; DISCARDED is skipped.
+//
+// At most recentWindowMax non-DISCARDED turns are used even when the caller skipped
+// SelectRecentWindow.
 func historyMessages(turns []TurnContext) []Message {
 	var out []Message
-	for _, t := range turns {
-		if t.Status == statusDiscarded {
-			continue
-		}
+	for _, t := range SelectRecentWindow(turns, -1) { // 12 newest live turns
 		if t.UserText != nil && *t.UserText != "" {
 			out = append(out, Message{Role: "user", Content: *t.UserText})
 		}
 		switch {
-		case t.Status == statusFailed || t.AssistantText == "":
+		case t.Status == statusFailed:
 		case t.Status == statusInterrupted:
+			// §7.8.1 literally: spoken text + marker, so an interrupt before the first audio
+			// still tells the model it was cut off.
 			out = append(out, Message{Role: "assistant", Content: t.AssistantText + interruptedMarker})
 		default:
-			out = append(out, Message{Role: "assistant", Content: t.AssistantText})
+			if t.AssistantText != "" {
+				out = append(out, Message{Role: "assistant", Content: t.AssistantText})
+			}
 		}
 	}
 	return out
@@ -571,25 +649,25 @@ func messagesTokens(ms []Message) int {
 	return n
 }
 
-// fitHistory drops the oldest turns (never below MinRecentTurns) while over budget, then cuts
-// every user message to 300 runes. A turn starts at a user message or at a lone assistant message.
-func fitHistory(h []Message, b prompt.Budget, c *collector) []Message {
-	if messagesTokens(h) <= b.RecentTurns {
-		return h
+// trimHistoryOnce makes one step of recent-turn trimming: drop the oldest turn while more than
+// minTurns remain, or (cutUsers) cut every user message to 300 runes. It reports whether it
+// changed anything. h must be a private copy.
+func trimHistoryOnce(h *[]Message, minTurns int, cutUsers bool) bool {
+	if !cutUsers {
+		if countTurns(*h) <= minTurns {
+			return false
+		}
+		*h = (*h)[nextTurnStart(*h):]
+		return true
 	}
-	c.truncated(compRecentTurns)
-	h = slices.Clone(h)
-	for messagesTokens(h) > b.RecentTurns && countTurns(h) > b.MinRecentTurns {
-		h = h[nextTurnStart(h):]
-	}
-	if messagesTokens(h) > b.RecentTurns {
-		for i := range h {
-			if r := []rune(h[i].Content); h[i].Role == "user" && len(r) > maxUserTextRunes {
-				h[i].Content = string(r[:maxUserTextRunes])
-			}
+	changed := false
+	for i, m := range *h {
+		if r := []rune(m.Content); m.Role == "user" && len(r) > maxUserTextRunes {
+			(*h)[i].Content = string(r[:maxUserTextRunes])
+			changed = true
 		}
 	}
-	return h
+	return changed
 }
 
 // countTurns counts turn starts: every user message, and an assistant message that does not

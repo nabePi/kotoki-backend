@@ -54,6 +54,7 @@ func baseInput() ConversationInput {
 		CurrentUserText:  "切符をください。",
 		RemainingSeconds: 600,
 		DurationMinutes:  15,
+		SessionMode:      "USER_FIRST",
 		Budget:           prompt.DefaultBudget,
 	}
 }
@@ -136,7 +137,6 @@ func TestTrimOrder(t *testing.T) {
 	require.LessOrEqual(t, bp.ComponentTokens["summary"], 500)
 	require.LessOrEqual(t, bp.ComponentTokens["recent_turns"], 2000)
 	require.GreaterOrEqual(t, len(bp.Messages), 1+2*4+1)
-	// highest scored core item survives, lowest is dropped (score is in order of the 'あ' count: all equal, so check count)
 	require.Equal(t, orig, in.RecentTurns, "input is never mutated")
 	require.Len(t, in.Memory.Core, 30)
 }
@@ -204,6 +204,7 @@ func TestOpeningOnlySystem(t *testing.T) {
 	in.Prompt.Key = content.PromptOpening
 	in.Prompt.SystemTemplate = prompt.OpeningV1.System
 	in.CurrentUserText = ""
+	in.SessionMode = "AI_FIRST"
 	in.RecentTurns = []TurnContext{{Seq: 1, Status: "COMPLETED", UserText: sp("x"), AssistantText: "y"}}
 	bp := build(t, in)
 	require.Len(t, bp.Messages, 1)
@@ -233,11 +234,10 @@ func TestSystemIsRender(t *testing.T) {
 		Memory:  prompt.MemoryData{Items: []string{"名前は＜タロウ＞です"}, Episodes: []string{"2026-10-01: 京都へ行った"}},
 		Session: prompt.SessionData{Mode: "USER_FIRST", DurationMinutes: 15, RemainingMinutes: 2, Summary: "旅の話をした。"},
 	}
-	data.Session.Mode = bp2mode(in)
 	r, err := prompt.Render(in.Prompt.Template(), data)
 	require.NoError(t, err)
 	require.Equal(t, r.System, bp.Messages[0].Content)
-	require.NotContains(t, bp.Messages[0].Content, "remain 2 of")
+	require.Contains(t, bp.Messages[0].Content, "About 2 of 15 minutes remain.")
 
 	in.RemainingSeconds = 60
 	closing := build(t, in)
@@ -246,16 +246,14 @@ func TestSystemIsRender(t *testing.T) {
 	require.NotContains(t, bp.Messages[0].Content, "wrap up the conversation")
 }
 
-func bp2mode(in ConversationInput) string {
-	if in.SessionMode != "" {
-		return in.SessionMode
-	}
-	return "USER_FIRST"
-}
-
 func TestFullNameNeverInPrompt(t *testing.T) {
 	in := baseInput()
 	in.Learner.DisplayName = "タロウ"
+	// A full name that leaked into any field the templates do not read must not reach the messages.
+	in.Config.Snapshot.Character.Code = fullName
+	in.Config.Snapshot.Character.AvatarKey = sp(fullName)
+	in.Learner.GoalLine = fullName
+	in.Learner.FocusSkills = []string{fullName}
 	bp := build(t, in)
 	for _, m := range bp.Messages {
 		require.NotContains(t, m.Content, fullName)
@@ -366,5 +364,202 @@ func TestRecentWindow(t *testing.T) {
 	require.Equal(t, []int{9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}, seqs(SelectRecentWindow(mk(20), 0)), "capped at 12")
 	ts := mk(20)
 	ts[18].Status = "DISCARDED"
-	require.NotContains(t, seqs(SelectRecentWindow(ts, 12)), 19)
+	require.Equal(t, []int{12, 13, 14, 15, 16, 17, 18, 20}, seqs(SelectRecentWindow(ts, 12)))
+}
+
+// allCapsInput fills every capped component up to (or past) its own cap, so only the total
+// budget can still force trimming.
+func allCapsInput() ConversationInput {
+	in := baseInput()
+	in.Config.Snapshot.Character.Persona = strings.TrimSpace(strings.Repeat("A warm, curious conversation partner who loves travel and food.\n\n", 40))
+	in.Config.ScenarioVersion.Situation = rep("駅で会います。", 600)
+	in.Config.ScenarioVersion.Tasks = []string{rep("あいうえお", 20), rep("かきくけこ", 20)}
+	in.Learner.Adaptation = "<conversation_difficulty>\n語彙: " + rep("や", 560) + "\n学習のねらい: 聞き取り\n</conversation_difficulty>"
+	in.RollingSummary = rep("要約です。", 450)
+	for i := range 20 {
+		in.Memory.Core = append(in.Memory.Core, memory.ContextItem{Content: rep("あいうえお", 22), Score: float64(100 - i)})
+	}
+	for i := range 3 {
+		in.Memory.Episodic = append(in.Memory.Episodic, memory.ContextItem{Content: rep("かきくけこ", 140), Score: 0.9 - float64(i)/100})
+	}
+	for i := range 12 {
+		in.RecentTurns = append(in.RecentTurns, TurnContext{Seq: i + 1, Status: "COMPLETED", UserText: sp(rep("あ", 300)), AssistantText: rep("い", 300)})
+	}
+	in.CurrentUserText = rep("今日は天気がいいですね。", 700)
+	return in
+}
+
+func TestAllCapsTotalTrimmed(t *testing.T) {
+	in := allCapsInput()
+	bp := build(t, in)
+	require.LessOrEqual(t, bp.EstimatedInputTokens, in.Budget.Total())
+	// the per-component caps leave the total over (component 1 is 646, recent turns sit at the
+	// 4-turn floor): the ordered trimming takes episodic items first and leaves core and learner alone
+	require.Contains(t, bp.Truncations, "memory_episodic")
+	require.Less(t, bp.ComponentTokens["memory_episodic"], 2*170)
+	require.Equal(t, 20*(prompt.EstimateTokens(rep("あいうえお", 22))+prompt.ItemOverheadTokens), bp.ComponentTokens["memory_core"])
+	require.Equal(t, 650, bp.ComponentTokens["learner"])
+	require.Equal(t, 495, bp.ComponentTokens["summary"])
+	require.Contains(t, bp.Messages[0].Content, "学習のねらい")
+	require.GreaterOrEqual(t, len(bp.Messages), 1+4*2+1)
+	require.Equal(t, 12, len(in.RecentTurns))
+}
+
+func TestScenarioOverflowCutsGoalAndRoles(t *testing.T) {
+	in := baseInput()
+	sv := &in.Config.ScenarioVersion
+	sv.Situation = rep("駅で会います。", 2000)
+	sv.Goal, sv.UserRole, sv.AIRole = rep("目標", 500), rep("旅行者", 300), rep("駅員", 300)
+	sv.Tasks = []string{rep("あ", 100)}
+	bp := build(t, in)
+	require.LessOrEqual(t, bp.ComponentTokens["scenario"], in.Budget.Scenario)
+	require.Contains(t, bp.Truncations, "scenario")
+	require.NotContains(t, bp.Messages[0].Content, "駅で会います")
+	require.Equal(t, 2000, len([]rune(sv.Situation)), "input not mutated")
+	require.Len(t, sv.Tasks, 1)
+}
+
+func TestHandoffFieldsRequired(t *testing.T) {
+	for name, mut := range map[string]func(*ConversationInput){
+		"duration zero":    func(in *ConversationInput) { in.DurationMinutes = 0 },
+		"duration < 0":     func(in *ConversationInput) { in.DurationMinutes = -1 },
+		"mode empty":       func(in *ConversationInput) { in.SessionMode = "" },
+		"mode unknown":     func(in *ConversationInput) { in.SessionMode = "OTHER" },
+		"difficulty range": func(in *ConversationInput) { in.Config.ScenarioVersion.DifficultyLevel = 9 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := baseInput()
+			mut(&in)
+			_, err := NewPromptBuilder().BuildConversation(in)
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), in.CurrentUserText)
+		})
+	}
+}
+
+func TestInterruptedWithoutSpokenTextKeepsMarker(t *testing.T) {
+	in := baseInput()
+	in.RecentTurns = []TurnContext{{Seq: 1, Status: "INTERRUPTED", UserText: sp("あの")}}
+	bp := build(t, in)
+	require.Equal(t, []Message{{"user", "あの"}, {"assistant", "（ユーザーが割り込みました）"}, {"user", "切符をください。"}}, bp.Messages[1:])
+}
+
+func TestBuilderCapsRecentTurnsAtTwelve(t *testing.T) {
+	in := baseInput()
+	for i := range 30 {
+		in.RecentTurns = append(in.RecentTurns, TurnContext{Seq: i + 1, Status: "COMPLETED", UserText: sp("u"), AssistantText: "a"})
+	}
+	in.RecentTurns[29].Status = "DISCARDED"
+	bp := build(t, in)
+	require.Equal(t, 1+12*2+1, len(bp.Messages))
+	require.Len(t, in.RecentTurns, 30)
+}
+
+func TestRollingSummaryTruncationsNotNull(t *testing.T) {
+	bp, err := NewPromptBuilder().BuildRollingSummary(SummaryInput{})
+	require.NoError(t, err)
+	b, err := json.Marshal(bp)
+	require.NoError(t, err)
+	require.Contains(t, string(b), `"truncations":[]`)
+}
+
+// maxFit is the largest n with measure(n) <= budget (measure is monotone).
+func maxFit(budget int, measure func(n int) int) int {
+	lo, hi := 0, 5000
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if measure(mid) <= budget {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo
+}
+
+func TestCapBoundaries(t *testing.T) {
+	b := prompt.DefaultBudget
+	turns := func(n int) []TurnContext {
+		var ts []TurnContext
+		for i := range 4 {
+			ts = append(ts, TurnContext{Seq: i + 1, Status: "COMPLETED", UserText: sp(rep("あ", 150)), AssistantText: rep("い", 150)})
+		}
+		return append(ts, TurnContext{Seq: 5, Status: "COMPLETED", UserText: sp(rep("あ", 150)), AssistantText: rep("い", n)})
+	}
+	cases := []struct {
+		name    string
+		measure func(n int) int
+		apply   func(in *ConversationInput, n int)
+		budget  int
+	}{
+		{"summary", func(n int) int { return prompt.EstimateTokens(rep("あ", n)) }, func(in *ConversationInput, n int) { in.RollingSummary = rep("あ", n) }, b.Summary},
+		{"current_input", func(n int) int { return prompt.EstimateTokens(rep("あ", n)) }, func(in *ConversationInput, n int) { in.CurrentUserText = rep("あ", n) }, b.CurrentInput},
+		{"memory_core", func(n int) int { return prompt.EstimateTokens(rep("あ", n)) + prompt.ItemOverheadTokens }, func(in *ConversationInput, n int) {
+			in.Memory.Core = []memory.ContextItem{{Content: rep("あ", n), Score: 1}}
+		}, b.MemoryCore},
+		{"memory_episodic", func(n int) int {
+			return prompt.EstimateTokens("2026-10-01: "+rep("あ", n)) + prompt.ItemOverheadTokens
+		}, func(in *ConversationInput, n int) {
+			in.Memory.Episodic = []memory.ContextItem{{Content: rep("あ", n), Score: 1, ObservedAt: time.Date(2026, 10, 1, 5, 0, 0, 0, time.UTC)}}
+		}, b.MemoryEpisodic},
+		{"learner", func(n int) int { return learnerTokens(learnerWith(n)) }, func(in *ConversationInput, n int) { in.Learner = learnerWith(n) }, b.Learner},
+		{"character", func(n int) int { return characterTokens(prompt.CharacterData{Name: "葵", Persona: rep("あ", n)}) }, func(in *ConversationInput, n int) {
+			in.Config.Snapshot.Character.GreetingHint = nil
+			in.Config.Snapshot.Character.Persona = rep("あ", n)
+		}, b.Character},
+		{"scenario", func(n int) int { return scenarioWith(n).tokens() }, func(in *ConversationInput, n int) {
+			in.Config.ScenarioVersion.Situation = rep("あ", n)
+		}, b.Scenario},
+		{"recent_turns", func(n int) int { return messagesTokens(historyMessages(turns(n))) }, func(in *ConversationInput, n int) { in.RecentTurns = turns(n) }, b.RecentTurns},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			n := maxFit(c.budget, c.measure)
+			require.Equal(t, c.budget, c.measure(n), "boundary is reachable exactly")
+			in := baseInput()
+			c.apply(&in, n)
+			require.NotContains(t, build(t, in).Truncations, c.name, "exactly at the limit")
+			in = baseInput()
+			c.apply(&in, n+1)
+			require.Contains(t, build(t, in).Truncations, c.name, "one token over")
+		})
+	}
+}
+
+func learnerWith(n int) prompt.LearnerContext {
+	return prompt.LearnerContext{DisplayName: "タロウ", Adaptation: "<conversation_difficulty>\n語彙: " + rep("や", n) + "\n学習のねらい: 聞き取り\n</conversation_difficulty>"}
+}
+
+type scenarioProbe struct {
+	sc    prompt.ScenarioData
+	topic prompt.TopicData
+}
+
+func (p scenarioProbe) tokens() int { return scenarioTokens(p.sc, p.topic) }
+
+func scenarioWith(n int) scenarioProbe {
+	b := baseInput()
+	sv := b.Config.ScenarioVersion
+	return scenarioProbe{
+		sc:    prompt.ScenarioData{Situation: rep("あ", n), AIRole: sv.AIRole, UserRole: sv.UserRole, Goal: sv.Goal},
+		topic: prompt.TopicData{Name: b.Config.Topic.Name},
+	}
+}
+
+// TestTotalTrimOrder makes the total unreachable (negative System share) with every component
+// filled: trimming runs 8 → 7 → 10 → 6 (focus line only) → 11 (stops at the 4-turn floor).
+func TestTotalTrimOrder(t *testing.T) {
+	in := allCapsInput()
+	in.Budget.System = -2500
+	bp := build(t, in)
+	for _, name := range []string{"memory_episodic", "memory_core", "summary", "learner", "recent_turns"} {
+		require.Contains(t, bp.Truncations, name)
+	}
+	require.Zero(t, bp.ComponentTokens["memory_episodic"])
+	require.Zero(t, bp.ComponentTokens["memory_core"])
+	require.Zero(t, bp.ComponentTokens["summary"])
+	sys := bp.Messages[0].Content
+	require.NotContains(t, sys, "学習のねらい")
+	require.Contains(t, sys, "語彙: ")
+	require.Equal(t, 1+4*2+1, len(bp.Messages))
 }
