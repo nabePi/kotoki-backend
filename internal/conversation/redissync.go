@@ -67,11 +67,13 @@ func RedisSyncLastDurableSeq(seq int64) RedisSyncOption {
 }
 
 // RedisSyncOnFenceLost is called once when the owner script refuses this pod (a newer fence
-// owns the session). It runs on the sync goroutine (or the caller of Acquire/Flush) and must
-// not block.
+// owns the session). See RedisSync for the rules a callback must follow.
 func RedisSyncOnFenceLost(f func(error)) RedisSyncOption {
 	return func(s *RedisSync) { s.onFenceLost = f }
 }
+
+// RedisSyncFenceLatch shares the runtime's fence-loss latch (default: one of its own).
+func RedisSyncFenceLatch(l *FenceLatch) RedisSyncOption { return func(s *RedisSync) { s.latch = l } }
 
 // RedisSyncTicker replaces the ticker of the sync loop (tests fire it by hand).
 func RedisSyncTicker(f func(time.Duration) Ticker) RedisSyncOption {
@@ -141,26 +143,32 @@ type syncPlan struct {
 // advancing so a resume across the gap reports UNAVAILABLE), and every HEARTBEAT_INTERVAL the
 // sync retries a full rewrite: owner via the Lua script, hb, rt, turn, summary.
 //
-// Fence: when the owner script refuses this pod, OnFenceLost fires once, fence_lost_total is
-// incremented and nothing is written again (Flush/Release/Acquire return session.ErrFenceLost).
+// Fence: when the owner script refuses this pod, OnFenceLost fires once, the FenceLatch counts
+// fence_lost_total, the loop goroutine exits and nothing is written again (Flush/Release/Acquire
+// return session.ErrFenceLost).
+//
+// Callbacks: OnFenceLost runs on the sync goroutine, or on the caller of Acquire/Flush, while the
+// Redis I/O lock is held. It must not call back into the RedisSync (Flush, Release, Acquire and
+// Abort take that lock or wait for the goroutine: deadlock) and must not block: the loop signals
+// itself with a non-blocking channel send.
 //
 // Loop usage (Tasks 18–23): NewRedisSync → Acquire(ctx) at start/takeover → Start(sessionCtx) →
 // Update / UpdateTurn / ClearTurn / UpdateSummary (a Summarizer result kept because its
 // coveredUntilSeq grew) / Event (every emitted server event with its envelope) → drain handoff:
 // Flush(ctx) then later Release(ctx); finish(): Update(rt status COMPLETED) then Release(ctx);
-// fence lost from the persister: Abort().
+// fence lost from the persister: Abort(). Both get the runtime's FenceLatch.
 type RedisSync struct {
 	store       rtstate.Store
 	clk         clock.Clock
 	sid         uuid.UUID
 	pod         string
 	fence       int64
-	m           *Metrics
 	log         *slog.Logger
 	newTicker   func(time.Duration) Ticker
 	withTimeout TimeoutFunc
 	onFenceLost func(error)
 	passHook    func()
+	latch       *FenceLatch
 	duration    time.Duration
 	ownerTTL    time.Duration
 	ownerEvery  time.Duration
@@ -181,6 +189,7 @@ type RedisSync struct {
 	nextBeat    time.Time
 	lost        bool
 	finished    bool // released or aborted: no more writes
+	halted      bool // the loop must not run another pass
 	started     bool
 	cancel      context.CancelFunc
 	done        chan struct{}
@@ -193,10 +202,10 @@ func NewRedisSync(store rtstate.Store, clk clock.Clock, sid uuid.UUID, pod strin
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	s := &RedisSync{store: store, clk: clk, sid: sid, pod: pod, fence: fence, m: m, log: log,
+	s := &RedisSync{store: store, clk: clk, sid: sid, pod: pod, fence: fence, log: log,
 		newTicker: NewRealTicker, withTimeout: context.WithTimeout,
 		ownerTTL: defaultOwnerTTL, ownerEvery: defaultOwnerRefresh, beatTTL: defaultHeartbeatTTL,
-		beatEvery: defaultHeartbeatTick, done: make(chan struct{})}
+		beatEvery: defaultHeartbeatTick, latch: NewFenceLatch(m), done: make(chan struct{})}
 	for _, o := range opts {
 		o(s)
 	}
@@ -336,14 +345,25 @@ func (s *RedisSync) Abort() {
 	s.stopLoop()
 }
 
+// stopLoop waits for a pass in flight (taking the I/O lock), so the events it took are written
+// rather than dropped by a cancellation, then stops the goroutine.
 func (s *RedisSync) stopLoop() {
+	s.io.Lock()
 	s.mu.Lock()
+	s.halted = true
 	started, cancel := s.started, s.cancel
 	s.mu.Unlock()
+	s.io.Unlock()
 	if started {
 		cancel()
 		<-s.done
 	}
+}
+
+func (s *RedisSync) isHalted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.halted
 }
 
 func (s *RedisSync) writable() error {
@@ -367,7 +387,7 @@ func (s *RedisSync) loop(ctx context.Context) {
 		if s.passHook != nil {
 			s.passHook()
 		}
-		if s.writable() != nil {
+		if s.writable() != nil || s.isHalted() {
 			return
 		}
 		select {
@@ -385,7 +405,7 @@ func (s *RedisSync) pass(ctx context.Context) {
 	defer s.io.Unlock()
 	now := s.clk.Now()
 	s.mu.Lock()
-	if s.lost || s.finished || (s.down && now.Before(s.probeAt)) {
+	if s.lost || s.finished || s.halted || (s.down && now.Before(s.probeAt)) {
 		s.mu.Unlock()
 		return
 	}
@@ -536,7 +556,7 @@ func (s *RedisSync) refreshOwner(ctx context.Context) error {
 	s.lost, s.events = true, nil
 	s.mu.Unlock()
 	if first {
-		s.m.fenceLostInc()
+		s.latch.trip()
 		s.log.WarnContext(ctx, "redis owner refresh refused: fence lost", "session_id", s.sid, "fence", s.fence)
 		if s.onFenceLost != nil {
 			s.onFenceLost(err)

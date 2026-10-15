@@ -14,6 +14,7 @@ import (
 
 	"github.com/nabePi/kotoki-backend/internal/conversation"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
+	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"github.com/nabePi/kotoki-backend/internal/session"
 	"github.com/nabePi/kotoki-backend/internal/testutil/fakes"
 )
@@ -26,10 +27,83 @@ var (
 
 const pFence = int64(7)
 
+// sqlStateErr stands for a pgconn.PgError: the server answered with an error, so nothing was
+// committed. The persister only sees the SQLState method (it must not import pgx).
+type sqlStateErr struct{ code string }
+
+func (e sqlStateErr) Error() string    { return "ERROR: statement failed (SQLSTATE " + e.code + ")" }
+func (e sqlStateErr) SQLState() string { return e.code }
+
+// safeErr stands for a pgconn error with SafeToRetry() == true: the request never left.
+type safeErr struct{}
+
+func (safeErr) Error() string     { return "dial tcp 10.0.0.1:5432: connect: connection refused" }
+func (safeErr) SafeToRetry() bool { return true }
+
+func pgErr(code string) error {
+	return errs.Wrap(sqlStateErr{code}, errs.CodeInternalError, "write failed")
+}
+
+var (
+	errDBDown = errs.Wrap(safeErr{}, errs.CodeInternalError, "write failed")
+	// errAmbiguous: the attempt timed out; the commit may or may not have happened.
+	errAmbiguous = errs.Wrap(context.DeadlineExceeded, errs.CodeInternalError, "write failed")
+	// errConnReset: the connection broke after the statement was sent.
+	errConnReset = errs.Wrap(errors.New("read tcp 10.0.0.2:41000->10.0.0.1:5432: read: connection reset by peer"),
+		errs.CodeInternalError, "write failed")
+	errValidation = errs.WithDetails(errs.New(errs.CodeValidationFailed, "invalid seconds"), map[string]any{"field": "seconds"})
+)
+
+// step scripts one call of a fake: the error it returns and whether the write committed first.
+type step struct {
+	err    error
+	commit bool
+}
+
+type script struct {
+	mu    sync.Mutex
+	steps map[string][]step
+}
+
+func (s *script) add(call string, st ...step) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.steps == nil {
+		s.steps = map[string][]step{}
+	}
+	s.steps[call] = append(s.steps[call], st...)
+}
+
+func (s *script) pop(call string) (step, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	q := s.steps[call]
+	if len(q) == 0 {
+		return step{}, false
+	}
+	s.steps[call] = q[1:]
+	return q[0], true
+}
+
+// run applies the scripted step of call around the real write.
+func (s *script) run(call string, write func() error) error {
+	st, ok := s.pop(call)
+	if !ok {
+		return write()
+	}
+	if st.commit {
+		if err := write(); err != nil {
+			return err
+		}
+	}
+	return st.err
+}
+
 // recTurns wraps fakes.TurnRepo: it records the order of calls, can block UpdateUser until
-// released, and can fail every write while failing is set.
+// released, fails every write while failing is set, and follows a per-call script.
 type recTurns struct {
 	*fakes.TurnRepo
+	script
 	mu      sync.Mutex
 	calls   []string
 	users   []string // TurnUser.Text of every UpdateUser that reached the repository
@@ -40,24 +114,21 @@ type recTurns struct {
 }
 
 func newRecTurns() *recTurns {
-	return &recTurns{TurnRepo: fakes.NewTurnRepo(), entered: make(chan struct{}, 64)}
+	return &recTurns{TurnRepo: fakes.NewTurnRepo(), entered: make(chan struct{}, 128)}
 }
 
-func (r *recTurns) record(call string) error {
+func (r *recTurns) do(call string, write func() error) error {
 	r.mu.Lock()
 	r.calls = append(r.calls, call)
 	r.mu.Unlock()
 	if r.failing.Load() || r.failN.Add(-1) >= 0 {
-		return errors.New("db down")
+		return errDBDown
 	}
-	return nil
+	return r.run(call, write)
 }
 
 func (r *recTurns) Insert(ctx context.Context, fence int64, t conversation.TurnStart) error {
-	if err := r.record("Insert"); err != nil {
-		return err
-	}
-	return r.TurnRepo.Insert(ctx, fence, t)
+	return r.do("Insert", func() error { return r.TurnRepo.Insert(ctx, fence, t) })
 }
 
 func (r *recTurns) UpdateUser(ctx context.Context, fence int64, id uuid.UUID, u conversation.TurnUser) error {
@@ -73,17 +144,17 @@ func (r *recTurns) UpdateUser(ctx context.Context, fence int64, id uuid.UUID, u 
 			return ctx.Err()
 		}
 	}
-	if err := r.record("UpdateUser"); err != nil {
-		return err
-	}
-	return r.TurnRepo.UpdateUser(ctx, fence, id, u)
+	return r.do("UpdateUser", func() error { return r.TurnRepo.UpdateUser(ctx, fence, id, u) })
 }
 
 func (r *recTurns) Finalize(ctx context.Context, fence int64, id uuid.UUID, f conversation.TurnFinal) error {
-	if err := r.record("Finalize"); err != nil {
-		return err
-	}
-	return r.TurnRepo.Finalize(ctx, fence, id, f)
+	return r.do("Finalize", func() error { return r.TurnRepo.Finalize(ctx, fence, id, f) })
+}
+
+func (r *recTurns) setGate(g chan struct{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gate = g
 }
 
 func (r *recTurns) callLog() []string {
@@ -98,56 +169,94 @@ func (r *recTurns) userTexts() []string {
 	return append([]string(nil), r.users...)
 }
 
-// discRec records AddDisconnected calls.
-type discRec struct {
-	mu      sync.Mutex
-	seconds []int
-	err     error
+// recEvents wraps fakes.EventWriter with a per-call script.
+type recEvents struct {
+	*fakes.EventWriter
+	script
 }
 
-func (d *discRec) AddDisconnected(_ context.Context, sid uuid.UUID, fence int64, seconds int) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.err != nil {
-		return d.err
-	}
-	if sid != pSession || fence != pFence {
-		return fmt.Errorf("unexpected sid/fence %s/%d", sid, fence)
-	}
-	d.seconds = append(d.seconds, seconds)
-	return nil
+func (w *recEvents) Append(ctx context.Context, fence int64, sid uuid.UUID, typ string, turnID *uuid.UUID, payload any) error {
+	return w.run("Append", func() error { return w.EventWriter.Append(ctx, fence, sid, typ, turnID, payload) })
 }
 
-func (d *discRec) got() []int {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return append([]int(nil), d.seconds...)
+// sessFake is the PersistSession: disconnected_seconds, fence and status of the session row.
+type sessFake struct {
+	script
+	mu     sync.Mutex
+	fence  int64
+	status session.Status
+	disc   int
+	reads  int
+	writes int
+}
+
+func (s *sessFake) AddDisconnected(_ context.Context, sid uuid.UUID, fence int64, seconds int) error {
+	s.mu.Lock()
+	s.writes++
+	s.mu.Unlock()
+	return s.run("AddDisconnected", func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if sid != pSession || fence != s.fence {
+			return session.ErrFenceLost
+		}
+		s.disc += seconds
+		return nil
+	})
+}
+
+func (s *sessFake) GetForAttach(_ context.Context, sid uuid.UUID) (session.RuntimeRecord, error) {
+	if err := s.run("GetForAttach", func() error { return nil }); err != nil {
+		return session.RuntimeRecord{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reads++
+	return session.RuntimeRecord{ID: sid, Status: s.status, RuntimeFence: s.fence, DisconnectedSeconds: s.disc}, nil
+}
+
+func (s *sessFake) state() (disc, reads, writes int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.disc, s.reads, s.writes
+}
+
+func (s *sessFake) setFence(f int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fence = f
+}
+
+type fatalSig struct {
+	err error
+	at  time.Time
 }
 
 type persistRig struct {
 	p      *conversation.Persister
 	turns  *recTurns
-	events *fakes.EventWriter
-	disc   *discRec
+	events *recEvents
+	sess   *sessFake
 	clk    *clock.Fake
 	m      *conversation.Metrics
 	lost   chan error
-	stuck  chan error
+	fatal  chan fatalSig
 	cancel context.CancelFunc
 }
 
 func startPersister(t *testing.T, opts ...conversation.PersisterOption) *persistRig {
 	t.Helper()
 	noLeak(t)
-	r := &persistRig{turns: newRecTurns(), events: fakes.NewEventWriter(), disc: &discRec{},
-		clk: clock.NewFake(pT0), m: conversation.NewMetrics(nil), lost: make(chan error, 8), stuck: make(chan error, 8)}
+	r := &persistRig{turns: newRecTurns(), events: &recEvents{EventWriter: fakes.NewEventWriter()},
+		sess: &sessFake{fence: pFence, status: session.StatusActive},
+		clk:  clock.NewFake(pT0), m: conversation.NewMetrics(nil), lost: make(chan error, 8), fatal: make(chan fatalSig, 8)}
 	all := append([]conversation.PersisterOption{
 		conversation.PersisterClock(r.clk),
 		conversation.PersisterSleep(fastSleep(r.clk)),
 		conversation.PersisterOnFenceLost(func(err error) { r.lost <- err }),
-		conversation.PersisterOnStuck(func(err error) { r.stuck <- err }),
+		conversation.PersisterOnFatal(func(err error) { r.fatal <- fatalSig{err: err, at: r.clk.Now()} }),
 	}, opts...)
-	r.p = conversation.NewPersister(pSession, r.turns, r.events, r.disc, pFence, r.m, nil, all...)
+	r.p = conversation.NewPersister(pSession, r.turns, r.events, r.sess, pFence, r.m, nil, all...)
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
 	r.p.Start(ctx)
@@ -164,6 +273,14 @@ func userJob(text string) conversation.UpdateUser {
 	return conversation.UpdateUser{TurnID: pTurn, User: conversation.TurnUser{CreatedAt: pT0, Text: text}}
 }
 
+func insertJob() conversation.InsertTurn {
+	return conversation.InsertTurn{Turn: conversation.TurnStart{ID: pTurn, SessionID: pSession, Sequence: 1, CreatedAt: pT0}}
+}
+
+func finalJob(st session.TurnStatus) conversation.FinalizeTurn {
+	return conversation.FinalizeTurn{TurnID: pTurn, Final: conversation.TurnFinal{CreatedAt: pT0, Status: st, CompletedAt: pT0}}
+}
+
 // waitSignal waits for one value on ch.
 func waitSignal(t *testing.T, ch <-chan struct{}, what string) {
 	t.Helper()
@@ -171,6 +288,17 @@ func waitSignal(t *testing.T, ch <-chan struct{}, what string) {
 	case <-ch:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+func waitFatal(t *testing.T, r *persistRig) fatalSig {
+	t.Helper()
+	select {
+	case f := <-r.fatal:
+		return f
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnFatal not called")
+		return fatalSig{}
 	}
 }
 
@@ -200,23 +328,22 @@ func TestPersisterOrdered(t *testing.T) {
 	require.Equal(t, "BARGE_IN", evs[0].Type)
 	require.Equal(t, pFence, evs[0].Fence)
 	require.Equal(t, pTurn, *evs[0].TurnID)
-	require.Equal(t, []int{4}, r.disc.got())
+	disc, _, _ := r.sess.state()
+	require.Equal(t, 4, disc)
 
 	cctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	require.NoError(t, r.p.Close(cctx))
 	require.ErrorIs(t, r.p.Submit(userJob("late")), conversation.ErrPersisterClosed)
 	require.Empty(t, r.lost)
-	require.Empty(t, r.stuck)
+	require.Empty(t, r.fatal)
 }
 
 func TestPersisterCoalesce(t *testing.T) {
 	r := startPersister(t)
 	require.NoError(t, r.turns.Insert(context.Background(), pFence, conversation.TurnStart{ID: pTurn, SessionID: pSession, Sequence: 1, CreatedAt: pT0}))
 	gate := make(chan struct{})
-	r.turns.mu.Lock()
-	r.turns.gate = gate
-	r.turns.mu.Unlock()
+	r.turns.setGate(gate)
 
 	require.NoError(t, r.p.Submit(userJob("u0")))
 	waitSignal(t, r.turns.entered, "first UpdateUser in flight")
@@ -240,9 +367,7 @@ func TestPersisterCoalesceKeepsOtherTurnsAndOrder(t *testing.T) {
 	require.NoError(t, r.turns.Insert(ctx, pFence, conversation.TurnStart{ID: pTurn, SessionID: pSession, Sequence: 1, CreatedAt: pT0}))
 	require.NoError(t, r.turns.Insert(ctx, pFence, conversation.TurnStart{ID: other, SessionID: pSession, Sequence: 2, CreatedAt: pT0}))
 	gate := make(chan struct{})
-	r.turns.mu.Lock()
-	r.turns.gate = gate
-	r.turns.mu.Unlock()
+	r.turns.setGate(gate)
 
 	require.NoError(t, r.p.Submit(userJob("a0")))
 	waitSignal(t, r.turns.entered, "first UpdateUser in flight")
@@ -258,9 +383,7 @@ func TestPersisterCoalesceKeepsOtherTurnsAndOrder(t *testing.T) {
 func TestPersisterFenceLost(t *testing.T) {
 	r := startPersister(t)
 	gate := make(chan struct{})
-	r.turns.mu.Lock()
-	r.turns.gate = gate
-	r.turns.mu.Unlock()
+	r.turns.setGate(gate)
 	r.turns.SetFence(pFence + 1) // another pod claimed the session
 	require.NoError(t, r.p.Submit(userJob("first")))
 	waitSignal(t, r.turns.entered, "UpdateUser in flight")
@@ -279,7 +402,9 @@ func TestPersisterFenceLost(t *testing.T) {
 	require.ErrorIs(t, flush(t, r.p), session.ErrFenceLost)
 	require.ErrorIs(t, r.p.Submit(conversation.SessionEvent{Type: "BARGE_IN"}), session.ErrFenceLost)
 	require.Empty(t, r.events.Events(), "nothing is written after the fence is lost")
-	require.Empty(t, r.disc.got())
+	_, reads, writes := r.sess.state()
+	require.Zero(t, writes)
+	require.Zero(t, reads, "a definite fence loss is not re-checked")
 	require.Equal(t, []string{"UpdateUser"}, r.turns.callLog(), "the queued jobs are never sent")
 	require.Empty(t, r.lost, "OnFenceLost fires once")
 	require.InDelta(t, 1, r.m.FenceLostTotal(), 0)
@@ -323,61 +448,246 @@ func TestPersisterRetryThenSuccess(t *testing.T) {
 		"the failed job is retried before the next one runs")
 	require.Equal(t, session.TurnFailed, *r.turns.Turns(pSession)[0].Status)
 	require.Empty(t, r.lost)
-	require.Empty(t, r.stuck, "a short outage is not stuck")
+	require.Empty(t, r.fatal, "a short outage is not stuck")
 	require.Less(t, r.clk.Now().Sub(pT0), 5*time.Second, "backoff starts small")
 }
 
-func TestPersisterStuckWhenFailingOver30s(t *testing.T) {
-	r := startPersister(t)
-	clk := r.clk
-	r.turns.failing.Store(true)
-	require.NoError(t, r.p.Submit(conversation.InsertTurn{Turn: conversation.TurnStart{ID: pTurn, SessionID: pSession, Sequence: 1, CreatedAt: pT0}}))
-	select {
-	case err := <-r.stuck:
-		require.ErrorIs(t, err, conversation.ErrPersisterStuck)
-	case <-time.After(2 * time.Second):
-		t.Fatal("OnStuck not called")
-	}
-	require.Greater(t, clk.Now().Sub(pT0), 30*time.Second, "stuck only after more than 30 s of failure")
-	require.Empty(t, r.stuck, "OnStuck fires once")
-}
-
-func TestPersisterStuckWhenQueueOver64For30s(t *testing.T) {
-	r := startPersister(t)
-	clk := r.clk
-	require.NoError(t, r.turns.Insert(context.Background(), pFence, conversation.TurnStart{ID: pTurn, SessionID: pSession, Sequence: 1, CreatedAt: pT0}))
+// queueBlocked holds the worker on an UpdateUser and queues n events behind it at the current
+// fake time.
+func queueBlocked(t *testing.T, r *persistRig, n int) chan struct{} {
+	t.Helper()
+	require.NoError(t, r.turns.TurnRepo.Insert(context.Background(), pFence, insertJob().Turn))
 	gate := make(chan struct{})
-	r.turns.mu.Lock()
-	r.turns.gate = gate
-	r.turns.mu.Unlock()
+	r.turns.setGate(gate)
 	require.NoError(t, r.p.Submit(userJob("blocked")))
 	waitSignal(t, r.turns.entered, "UpdateUser in flight")
-	for i := range 65 {
+	for i := range n {
 		require.NoError(t, r.p.Submit(conversation.SessionEvent{Type: "BARGE_IN", Payload: map[string]int{"i": i}}), "the loop is never refused")
 	}
-	require.Equal(t, 65, r.p.Pending())
-	clk.Advance(30 * time.Second)
-	require.NoError(t, r.p.Submit(conversation.SessionEvent{Type: "BARGE_IN"}))
-	require.Empty(t, r.stuck, "exactly 30 s is not stuck yet")
-	clk.Advance(time.Second)
-	require.NoError(t, r.p.Submit(conversation.SessionEvent{Type: "BARGE_IN"}))
-	close(gate) // the worker reports after its in-flight job
-	select {
-	case err := <-r.stuck:
-		require.ErrorIs(t, err, conversation.ErrPersisterStuck)
-	case <-time.After(2 * time.Second):
-		t.Fatal("OnStuck not called")
-	}
+	require.Equal(t, n, r.p.Pending())
+	return gate
+}
+
+func TestPersisterQueueOf64IsNotStuck(t *testing.T) {
+	r := startPersister(t)
+	gate := queueBlocked(t, r, 64)
+	r.clk.Advance(31 * time.Second)
+	close(gate) // the worker applies the stuck rule after its in-flight job
 	require.NoError(t, flush(t, r.p))
-	require.Len(t, r.events.Events(), 67)
+	require.Empty(t, r.fatal, "64 queued jobs are at the cap, not above it")
+	require.Len(t, r.events.Events(), 64)
+}
+
+func TestPersisterQueueAbove64ForExactly30sIsNotStuck(t *testing.T) {
+	r := startPersister(t)
+	gate := queueBlocked(t, r, 65)
+	r.clk.Advance(30 * time.Second)
+	close(gate)
+	require.NoError(t, flush(t, r.p))
+	require.Empty(t, r.fatal, "exactly 30 s above 64 is not more than 30 s")
+}
+
+func TestPersisterQueueAbove64ForOver30sIsStuck(t *testing.T) {
+	r := startPersister(t)
+	gate := queueBlocked(t, r, 65)
+	r.clk.Advance(30*time.Second + time.Millisecond)
+	close(gate)
+	f := waitFatal(t, r)
+	require.ErrorIs(t, f.err, conversation.ErrPersisterStuck)
+	require.NoError(t, flush(t, r.p), "a stuck persister keeps writing")
+	require.Len(t, r.events.Events(), 65)
+	require.Empty(t, r.fatal, "OnFatal fires once")
+}
+
+func TestPersisterFailingForOver30sIsStuck(t *testing.T) {
+	var sleeps atomic.Int32
+	var clk atomic.Pointer[clock.Fake]
+	r := startPersister(t, conversation.PersisterSleep(func(ctx context.Context, _ time.Duration) error {
+		if sleeps.Add(1) == 1 {
+			clk.Load().Advance(30 * time.Second) // the second attempt fails exactly 30 s after the first
+		} else {
+			clk.Load().Advance(time.Millisecond)
+		}
+		return ctx.Err()
+	}))
+	clk.Store(r.clk)
+	r.turns.failing.Store(true)
+	require.NoError(t, r.p.Submit(insertJob()))
+	f := waitFatal(t, r)
+	require.ErrorIs(t, f.err, conversation.ErrPersisterStuck)
+	require.Equal(t, pT0.Add(30*time.Second+time.Millisecond), f.at, "stuck only once failing for more than 30 s")
+	require.Empty(t, r.fatal, "OnFatal fires once")
+}
+
+func TestPersisterTransientServerErrorRetried(t *testing.T) {
+	r := startPersister(t)
+	r.turns.add("Insert", step{err: pgErr("40001")}, step{err: pgErr("55P03")})
+	require.NoError(t, r.p.Submit(insertJob()))
+	require.NoError(t, flush(t, r.p))
+	require.Equal(t, []string{"Insert", "Insert", "Insert"}, r.turns.callLog())
+	require.Len(t, r.turns.Turns(pSession), 1)
+	require.Empty(t, r.fatal)
+}
+
+func TestPersisterAmbiguousInsertDuplicateIsSuccess(t *testing.T) {
+	r := startPersister(t)
+	// The first attempt committed but timed out; the retry hits the primary key.
+	r.turns.add("Insert", step{err: errAmbiguous, commit: true}, step{err: pgErr("23505")})
+	require.NoError(t, r.p.Submit(insertJob()))
+	require.NoError(t, r.p.Submit(userJob("x")))
+	require.NoError(t, flush(t, r.p))
+	require.Equal(t, []string{"Insert", "Insert", "UpdateUser"}, r.turns.callLog())
+	require.Empty(t, r.fatal)
+	require.Empty(t, r.lost)
+}
+
+func TestPersisterDuplicateInsertWithoutAmbiguityIsRejected(t *testing.T) {
+	r := startPersister(t)
+	r.turns.add("Insert", step{err: pgErr("23505")})
+	require.NoError(t, r.p.Submit(insertJob()))
+	if err := r.p.Submit(userJob("x")); err != nil { // the rejection may already have happened
+		require.ErrorIs(t, err, conversation.ErrPersistRejected)
+	}
+	f := waitFatal(t, r)
+	require.ErrorIs(t, f.err, conversation.ErrPersistRejected)
+	require.Equal(t, pT0, f.at, "a permanent error fails fast, without backoff")
+	require.ErrorIs(t, flush(t, r.p), conversation.ErrPersistRejected)
+	require.ErrorIs(t, r.p.Submit(userJob("y")), conversation.ErrPersistRejected)
+	require.Equal(t, []string{"Insert"}, r.turns.callLog(), "nothing is written after a rejection")
+	require.Empty(t, r.lost)
+	require.Zero(t, r.m.FenceLostTotal())
+}
+
+func TestPersisterDuplicateAfterDefiniteFailureIsRejected(t *testing.T) {
+	r := startPersister(t)
+	// The first attempt never reached the server, so a duplicate on the retry is not ours.
+	r.turns.add("Insert", step{err: errDBDown}, step{err: pgErr("23505")})
+	require.NoError(t, r.p.Submit(insertJob()))
+	f := waitFatal(t, r)
+	require.ErrorIs(t, f.err, conversation.ErrPersistRejected)
+}
+
+func TestPersisterPermanentErrorsFailFast(t *testing.T) {
+	cases := map[string]struct {
+		arm func(r *persistRig)
+		job conversation.PersistJob
+	}{
+		"validation": {func(r *persistRig) { r.sess.add("AddDisconnected", step{err: errValidation}) }, conversation.AddDisconnected{Seconds: -1}},
+		"check violation": {func(r *persistRig) { r.events.add("Append", step{err: pgErr("23514")}) },
+			conversation.SessionEvent{Type: "BARGE_IN"}},
+		"turn not found": {func(*persistRig) {}, userJob("no such turn")},
+		"invalid transition": {func(r *persistRig) {
+			r.sess.add("AddDisconnected", step{err: &session.TransitionError{From: session.StatusCompleted, To: session.StatusActive}})
+		}, conversation.AddDisconnected{Seconds: 2}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := startPersister(t)
+			tc.arm(r)
+			require.NoError(t, r.p.Submit(tc.job))
+			f := waitFatal(t, r)
+			require.ErrorIs(t, f.err, conversation.ErrPersistRejected)
+			require.Equal(t, pT0, f.at, "no retry for 30 s")
+			cctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			require.ErrorIs(t, r.p.Close(cctx), conversation.ErrPersistRejected)
+		})
+	}
+}
+
+func TestPersisterAmbiguousFinalizeIsNotFenceLoss(t *testing.T) {
+	r := startPersister(t)
+	require.NoError(t, r.turns.TurnRepo.Insert(context.Background(), pFence, insertJob().Turn))
+	// The commit went through but the connection broke; the retry matches no row because the
+	// turn is final already (status IS NULL), which the repository reports as ErrFenceLost.
+	r.turns.add("Finalize", step{err: errConnReset, commit: true}, step{err: session.ErrFenceLost})
+	require.NoError(t, r.p.Submit(finalJob(session.TurnCompleted)))
+	require.NoError(t, r.p.Submit(conversation.SessionEvent{Type: "TURN_FAILED"}))
+	require.NoError(t, flush(t, r.p))
+	require.Empty(t, r.lost, "the session is still ours: not a fence loss")
+	require.Zero(t, r.m.FenceLostTotal())
+	require.Empty(t, r.fatal)
+	_, reads, _ := r.sess.state()
+	require.Positive(t, reads, "ownership is re-checked before deciding")
+	require.Equal(t, session.TurnCompleted, *r.turns.Turns(pSession)[0].Status)
+	require.Len(t, r.events.Events(), 1)
+}
+
+func TestPersisterAmbiguousFinalizeThenFenceReallyLost(t *testing.T) {
+	r := startPersister(t)
+	require.NoError(t, r.turns.TurnRepo.Insert(context.Background(), pFence, insertJob().Turn))
+	r.turns.add("Finalize", step{err: errAmbiguous}, step{err: session.ErrFenceLost})
+	r.sess.setFence(pFence + 1)
+	require.NoError(t, r.p.Submit(finalJob(session.TurnCompleted)))
+	select {
+	case err := <-r.lost:
+		require.ErrorIs(t, err, session.ErrFenceLost)
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnFenceLost not called")
+	}
+	require.ErrorIs(t, flush(t, r.p), session.ErrFenceLost)
+}
+
+func TestPersisterAddDisconnectedAmbiguousCommittedCountsOnce(t *testing.T) {
+	r := startPersister(t)
+	r.sess.mu.Lock()
+	r.sess.disc = 10
+	r.sess.mu.Unlock()
+	r.sess.add("AddDisconnected", step{err: errAmbiguous, commit: true})
+	require.NoError(t, r.p.Submit(conversation.AddDisconnected{Seconds: 4}))
+	require.NoError(t, flush(t, r.p))
+	disc, _, writes := r.sess.state()
+	require.Equal(t, 14, disc, "the episode is counted once")
+	require.Equal(t, 1, writes, "not sent again once the read-back shows it committed")
+	require.Empty(t, r.fatal)
+}
+
+func TestPersisterAddDisconnectedAmbiguousNotCommittedRetried(t *testing.T) {
+	r := startPersister(t)
+	r.sess.mu.Lock()
+	r.sess.disc = 10 // the read-back compares with the value before the first attempt, not with 0
+	r.sess.mu.Unlock()
+	r.sess.add("AddDisconnected", step{err: errConnReset})
+	require.NoError(t, r.p.Submit(conversation.AddDisconnected{Seconds: 4}))
+	require.NoError(t, flush(t, r.p))
+	disc, _, writes := r.sess.state()
+	require.Equal(t, 14, disc)
+	require.Equal(t, 2, writes)
+}
+
+func TestPersisterUpdateUserMergeStaysBeforeFinalize(t *testing.T) {
+	r := startPersister(t)
+	require.NoError(t, r.turns.TurnRepo.Insert(context.Background(), pFence, insertJob().Turn))
+	gate := make(chan struct{})
+	r.turns.setGate(gate)
+	require.NoError(t, r.p.Submit(userJob("u0")))
+	waitSignal(t, r.turns.entered, "UpdateUser in flight")
+	require.NoError(t, r.p.Submit(userJob("u1")))
+	require.NoError(t, r.p.Submit(finalJob(session.TurnCompleted)))
+	require.NoError(t, r.p.Submit(userJob("u2")))
+	require.Equal(t, 2, r.p.Pending(), "u2 replaces u1 at its place, ahead of the Finalize")
+	close(gate)
+	require.NoError(t, flush(t, r.p))
+	require.Equal(t, []string{"UpdateUser", "UpdateUser", "Finalize"}, r.turns.callLog(),
+		"the user side is written while status IS NULL, as the fenced SQL requires")
+	require.Equal(t, []string{"u0", "u2"}, r.turns.userTexts())
+}
+
+func TestPersisterAbortDropsQueueWithoutWriting(t *testing.T) {
+	r := startPersister(t)
+	gate := queueBlocked(t, r, 3)
+	defer close(gate)
+	r.p.Abort()
+	require.Zero(t, r.p.Pending(), "the queue is dropped")
+	require.ErrorIs(t, r.p.Submit(conversation.SessionEvent{Type: "BARGE_IN"}), conversation.ErrPersisterClosed)
+	require.Empty(t, r.events.Events())
+	require.Empty(t, r.lost)
+	require.Zero(t, r.m.FenceLostTotal(), "Abort after a fence loss seen elsewhere does not count it again")
 }
 
 func TestPersisterCloseStopsOnContext(t *testing.T) {
 	r := startPersister(t)
-	gate := make(chan struct{})
-	r.turns.mu.Lock()
-	r.turns.gate = gate
-	r.turns.mu.Unlock()
+	r.turns.setGate(make(chan struct{}))
 	require.NoError(t, r.p.Submit(userJob("never")))
 	waitSignal(t, r.turns.entered, "UpdateUser in flight")
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)

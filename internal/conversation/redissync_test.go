@@ -31,8 +31,12 @@ type flakyStore struct {
 	down  atomic.Bool
 	block atomic.Bool // writes wait for ctx to end (a hung Redis)
 	mu    sync.Mutex
-	calls []string
-	ttls  map[string]time.Duration
+	// appendGate, when set, holds the next AppendEvent (signalling appendEntered) until it is
+	// closed or the operation's ctx ends.
+	appendGate    chan struct{}
+	appendEntered chan struct{}
+	calls         []string
+	ttls          map[string]time.Duration
 }
 
 func newFlakyStore() *flakyStore {
@@ -127,6 +131,18 @@ func (s *flakyStore) DeleteTurn(ctx context.Context, sid uuid.UUID) error {
 }
 
 func (s *flakyStore) AppendEvent(ctx context.Context, sid uuid.UUID, e rtstate.EventEntry) error {
+	s.mu.Lock()
+	gate := s.appendGate
+	s.appendGate = nil
+	s.mu.Unlock()
+	if gate != nil {
+		s.appendEntered <- struct{}{}
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if err := s.note(ctx, "AppendEvent", 0); err != nil {
 		return err
 	}
@@ -477,13 +493,116 @@ func TestOwnerRefreshLost(t *testing.T) {
 	require.Zero(t, r.store.count("WriteRT"), "nothing is written once the owner refresh fails")
 	require.InDelta(t, 1, r.m.FenceLostTotal(), 0)
 
+	beats := r.store.count("WriteHeartbeat")
+
+	// The loop has stopped: later changes are never written, whatever is due.
+	r.s.Update(activeRT("ENDING"))
+	r.s.UpdateTurn(rtstate.TurnSnap{TurnID: pTurn, TurnSeq: 2})
+	r.s.UpdateSummary(rtstate.Summary{Text: "要約", CoveredUntilSeq: 2})
+	r.s.Event(durableEvent(9, "turn.completed"))
+	r.clk.Advance(250 * time.Millisecond)
+	select {
+	case r.tick.c <- r.clk.Now():
+		t.Fatal("the sync loop still runs after the owner was refused")
+	case <-time.After(50 * time.Millisecond):
+	}
+	r.clk.Advance(5 * time.Second)
+	select {
+	case r.tick.c <- r.clk.Now():
+		t.Fatal("the sync loop still runs after the owner was refused")
+	case <-time.After(50 * time.Millisecond):
+	}
+	for _, c := range []string{"WriteRT", "WriteTurn", "WriteSummary", "AppendEvent"} {
+		require.Zero(t, r.store.count(c), c)
+	}
+	require.Equal(t, beats, r.store.count("WriteHeartbeat"), "no heartbeat after the refusal")
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	require.ErrorIs(t, r.s.Flush(ctx), session.ErrFenceLost)
+	require.ErrorIs(t, r.s.Release(ctx), session.ErrFenceLost)
+	require.ErrorIs(t, r.s.Acquire(ctx), session.ErrFenceLost)
 	require.Zero(t, r.store.count("WriteRT"))
+	require.Zero(t, r.store.count("ReleaseOwner"))
 	pod, _, _ := r.store.Owner(pSession)
 	require.Equal(t, "pod-b", pod)
 	require.Empty(t, r.lost, "OnFenceLost fires once")
+	require.InDelta(t, 1, r.m.FenceLostTotal(), 0)
+}
+
+func TestRedisSyncReleaseKeepsInFlightEvents(t *testing.T) {
+	r := startSync(t, conversation.RedisSyncTimeoutFunc(func(ctx context.Context, _ time.Duration) (context.Context, context.CancelFunc) {
+		return context.WithTimeout(ctx, 5*time.Second) // the test holds one operation open on purpose
+	}))
+	gate := make(chan struct{})
+	r.store.mu.Lock()
+	r.store.appendGate, r.store.appendEntered = gate, make(chan struct{}, 1)
+	r.store.mu.Unlock()
+	r.s.Event(durableEvent(1, "turn.completed"))
+	r.s.Event(durableEvent(2, "turn.completed"))
+	r.clk.Advance(50 * time.Millisecond)
+	go func() { r.tick.c <- r.clk.Now() }()
+	waitSignal(t, r.store.appendEntered, "AppendEvent in flight")
+	r.s.Event(durableEvent(3, "turn.completed")) // not part of the pass in flight
+
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		done <- r.s.Release(ctx)
+	}()
+	time.Sleep(20 * time.Millisecond) // let Release reach the pass in flight
+	close(gate)
+	waitSignal(t, r.passed, "the pass in flight")
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Release did not return")
+	}
+	evs, err := r.store.ReadEvents(context.Background(), pSession)
+	require.NoError(t, err)
+	var seqs []int64
+	for _, e := range evs {
+		seqs = append(seqs, e.Seq)
+	}
+	require.Equal(t, []int64{1, 2, 3}, seqs, "Release lets the pass in flight finish and writes the rest")
+}
+
+func TestRedisSyncPendingEventsCap500(t *testing.T) {
+	r := startSync(t)
+	for i := int64(1); i <= 501; i++ {
+		r.s.Event(durableEvent(i, "turn.completed"))
+	}
+	r.step(t, 50*time.Millisecond)
+	require.Equal(t, 500, r.store.count("AppendEvent"), "at most 500 entries wait for a pass (the stream keeps ~500 anyway)")
+	evs, err := r.store.ReadEvents(context.Background(), pSession)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), evs[0].Seq, "the oldest entry is dropped")
+	require.Equal(t, int64(1), evs[0].PrevSeq, "prev_seq shows the gap, so a resume from 0 is UNAVAILABLE")
+}
+
+func TestFenceLatchCountsOnce(t *testing.T) {
+	m := conversation.NewMetrics(nil)
+	latch := conversation.NewFenceLatch(m)
+	r := startSync(t, conversation.RedisSyncFenceLatch(latch))
+	_, err := r.store.RuntimeStore.AcquireOwner(context.Background(), pSession, "pod-b", pFence+1, 15*time.Second)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.ErrorIs(t, r.s.Acquire(ctx), session.ErrFenceLost)
+
+	p := startPersister(t, conversation.PersisterFenceLatch(latch))
+	p.turns.SetFence(pFence + 1)
+	require.NoError(t, p.p.Submit(insertJob()))
+	select {
+	case <-p.lost:
+	case <-time.After(2 * time.Second):
+		t.Fatal("persister OnFenceLost not called")
+	}
+	require.InDelta(t, 1, m.FenceLostTotal(), 0, "one runtime, one fence loss")
+	require.Zero(t, r.m.FenceLostTotal())
+	require.Zero(t, p.m.FenceLostTotal())
 }
 
 func TestRedisSyncFlushAndRelease(t *testing.T) {

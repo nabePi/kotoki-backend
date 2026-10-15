@@ -167,6 +167,9 @@ type RuntimeRecord struct {
 	ConfigSnapshot         json.RawMessage
 	AdaptiveDifficulty     json.RawMessage
 	RuntimeFence           int64
+	// DisconnectedSeconds lets the runtime read back an AddDisconnected whose outcome it did not
+	// learn (connection lost around the commit) instead of adding the episode twice.
+	DisconnectedSeconds int
 }
 
 // RuntimeRecordOf is the runtime's view of a session row.
@@ -176,6 +179,7 @@ func RuntimeRecordOf(s Session) RuntimeRecord {
 		StartedAt: s.StartedAt, ExpiresAt: s.ExpiresAt, TopicID: s.TopicID, ScenarioID: s.ScenarioID, ScenarioVersionID: s.ScenarioVersionID,
 		CharacterID: s.CharacterID, PromptVersionID: s.PromptVersionID, OpeningPromptVersionID: s.OpeningPromptVersionID,
 		ConfigSnapshot: s.ConfigSnapshot, AdaptiveDifficulty: s.AdaptiveDifficulty, RuntimeFence: s.RuntimeFence,
+		DisconnectedSeconds: s.DisconnectedSeconds,
 	}
 }
 

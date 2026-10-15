@@ -211,6 +211,7 @@ func (r *SessionRuntime) AddDisconnected(_ context.Context, id uuid.UUID, fence 
 		return invalid(s.rec.Status, s.rec.Status)
 	}
 	s.disc += seconds
+	s.rec.DisconnectedSeconds = s.disc
 	return nil
 }
 

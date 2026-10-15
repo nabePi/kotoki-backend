@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/require"
 )
 
 // NoGoroutineLeak fails the test when, 2 s after it ends, goroutines whose stack mentions
@@ -16,18 +14,33 @@ func NoGoroutineLeak(t *testing.T, pkgPrefix string) {
 	t.Helper()
 	before := goroutinesOf(pkgPrefix)
 	t.Cleanup(func() {
-		var leaked []string
-		ok := func() bool {
-			leaked = leaked[:0]
-			for id, stack := range goroutinesOf(pkgPrefix) {
-				if _, existed := before[id]; !existed {
-					leaked = append(leaked, stack)
-				}
-			}
-			return len(leaked) == 0
+		if leaked := waitNoNew(before, pkgPrefix, 2*time.Second); len(leaked) > 0 {
+			t.Errorf("goroutines of %s leaked:\n%s", pkgPrefix, strings.Join(leaked, "\n\n"))
 		}
-		require.Eventuallyf(t, ok, 2*time.Second, 20*time.Millisecond, "goroutines of %s leaked:\n%s", pkgPrefix, strings.Join(leaked, "\n\n"))
 	})
+}
+
+// waitNoNew polls until no goroutine of pkgPrefix outside before is left, and returns the stacks
+// still there at the deadline (nil when none).
+func waitNoNew(before map[string]string, pkgPrefix string, wait time.Duration) []string {
+	var leaked []string
+	ok := func() bool {
+		leaked = leaked[:0]
+		for id, stack := range goroutinesOf(pkgPrefix) {
+			if _, existed := before[id]; !existed {
+				leaked = append(leaked, stack)
+			}
+		}
+		return len(leaked) == 0
+	}
+	deadline := time.Now().Add(wait)
+	for !ok() {
+		if time.Now().After(deadline) {
+			return leaked
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return nil
 }
 
 // goroutinesOf returns the stacks of live goroutines (but the caller's) that mention pkgPrefix,
