@@ -342,3 +342,23 @@ func TestCloseUnblocksAReaderStuckOnAFullBuffer(t *testing.T) {
 		t.Fatal("Close hangs while the reader is blocked on a full Audio buffer")
 	}
 }
+
+func TestAbortDropsTheTransportWithoutCloseHandshake(t *testing.T) {
+	readErr := make(chan error, 1)
+	url := wsServer(t, func(ctx context.Context, c *websocket.Conn, _ *http.Request) {
+		_, _, err := c.Read(ctx)
+		readErr <- err
+	})
+	rc, err := Dial(context.Background(), url, "t", "")
+	require.NoError(t, err)
+	require.NoError(t, rc.Abort())
+	err = <-readErr
+	require.Error(t, err)
+	require.Equal(t, websocket.StatusCode(-1), websocket.CloseStatus(err), "the server saw the transport vanish, not a close frame: %v", err)
+	<-rc.Done()
+	_, open := <-rc.Events()
+	require.False(t, open)
+	// Idempotent, and Close afterwards is a no-op.
+	require.NoError(t, rc.Abort())
+	require.NoError(t, rc.Close(websocket.StatusNormalClosure, ""))
+}

@@ -305,3 +305,15 @@ func (rc *RealtimeConn) Close(code websocket.StatusCode, reason string) error {
 	})
 	return rc.closeErr
 }
+
+// Abort drops the connection the way a network failure would: the transport is closed without a
+// close handshake, so the server sees a read error rather than a close frame. It waits for the
+// reader to stop. Like Close, only the first of Close/Abort does anything.
+func (rc *RealtimeConn) Abort() error {
+	rc.closeOnce.Do(func() {
+		close(rc.closeCh)
+		_ = rc.ws.CloseNow() // the transport may already be gone; nothing to report
+		<-rc.done
+	})
+	return rc.closeErr
+}
