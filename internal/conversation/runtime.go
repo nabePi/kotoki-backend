@@ -287,7 +287,15 @@ type Runtime struct {
 	lastPartialAt time.Time // stt.partial throttle
 	partialDirty  bool      // a partial was held back by the throttle
 	sttAudioBase  int64     // Stats().AudioMsSent at the end of the previous turn (stt_audio_ms)
-	failedTurns   int       // consecutiveFailedTurns (§7.6.1); Task 20 raises it, a good turn resets it
+	failedTurns   int       // consecutiveFailedTurns (§7.6.1): a FAILED turn raises it, COMPLETED/INTERRUPTED reset it
+	// contentFilteredTurns counts the FAILED turns of CONTENT_FILTERED (S-9): a counter of its own,
+	// outside consecutiveFailedTurns.
+	contentFilteredTurns int
+	// hints are the client.barge_in hints not yet classified (barge-in hint_confirmed within 1 s,
+	// hint_unconfirmed after it); bargeStop is the last barge-in, whose bargein_stop_seconds and
+	// BARGE_IN session event are settled on the next tick.
+	hints     []time.Time
+	bargeStop *pendingBargeStop
 
 	// Post-turn state (§7.7.5, §7.8): the recentTurns ring, the rolling summary and the memory jobs.
 	recent         []recentTurn
@@ -480,6 +488,7 @@ func (r *Runtime) onTick(now time.Time) {
 	r.checkStarvation(now)
 	r.flushPartial(now)
 	r.flushDueText(now)
+	r.settleBargeIn(now)
 	if r.cs != nil && !now.Before(r.nextSample) {
 		r.nextSample = now.Add(queueSampleEvery)
 		r.d.Metrics.OutboundDepth(r.cs.out.ControlLen(), r.cs.out.AudioLen())
@@ -619,6 +628,10 @@ type View struct {
 	ServerSeq   int64
 	CurrentTurn uuid.UUID // uuid.Nil: no turn in progress
 	PendingEnd  bool
+	// FailedTurns is consecutiveFailedTurns and ContentFilteredTurns the separate S-9 counter
+	// (§7.6.1).
+	FailedTurns          int
+	ContentFilteredTurns int
 	// OutboundDrained is true when the connection's queue and writer hold nothing (true with no
 	// connection).
 	OutboundDrained bool
@@ -633,6 +646,7 @@ func (r *Runtime) View(ctx context.Context) (View, error) {
 	err := r.call(ctx, func(r *Runtime) {
 		v = View{Status: r.status, TurnState: r.turnState, Accepting: r.accepting, Connected: r.connected,
 			Generation: r.generation, NextTurnSeq: r.nextTurnSeq, ServerSeq: r.serverSeq, PendingEnd: r.pendingEnd,
+			FailedTurns: r.failedTurns, ContentFilteredTurns: r.contentFilteredTurns,
 			Handled: r.handled, OutboundDrained: r.cs == nil || r.cs.out.Drained()}
 		if r.turn != nil {
 			v.CurrentTurn = r.turn.id
@@ -845,6 +859,17 @@ func (r *Runtime) emitError(code errs.Code, ref *uuid.UUID, details any, opts ..
 	r.emit("error", evMeta{}, protocol.NewError(code, r.d.IDs.New(), ref, details, opts...))
 }
 
+// emitTurnError is emitError bound to a turn and, when gen is not nil, to the generation it is about
+// (§7.4.5: turn and generation are optional on `error`).
+func (r *Runtime) emitTurnError(t *turnRun, gen *genRun, code errs.Code) {
+	m := evMeta{turn: t}
+	if gen != nil {
+		n := gen.number
+		m.gen = &n
+	}
+	r.emit("error", m, protocol.NewError(code, r.d.IDs.New(), nil, nil))
+}
+
 // pushRT hands the current rt snapshot to the redisSync (coalesced ≤ 1 write / 100 ms).
 func (r *Runtime) pushRT() {
 	r.sync.Update(r.rtSnapshot())
@@ -907,8 +932,7 @@ func (r *Runtime) onCommand(ev protocol.ClientEvent) {
 	case protocol.ClientPlaybackFinished:
 		r.onPlaybackFinished(p)
 	case protocol.ClientBargeIn:
-		// Row 18: a hint only. Counting it as hint_confirmed/hint_unconfirmed needs the barge-in
-		// bookkeeping of Task 20.
+		r.onBargeInHint() // row 18
 	case protocol.Ping:
 		r.emit("pong", evMeta{}, protocol.Pong{ClientTS: p.ClientTS, ServerTS: r.d.Clock.Now().UnixMilli()})
 	case protocol.SessionStart, protocol.SessionResume:

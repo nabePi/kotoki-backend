@@ -99,6 +99,7 @@ func newConnState(parent context.Context, d Deps, conn Conn, sid uuid.UUID, seen
 		ctx:     ctx, cancel: cancel, closedCh: make(chan struct{}),
 	}
 	cs.hb.NewTicker = d.NewTicker
+	cs.writer.Now = d.Clock.Now
 	return cs
 }
 

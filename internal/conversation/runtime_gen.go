@@ -50,11 +50,12 @@ type genRun struct {
 }
 
 // spokenText is assistant_spoken_text: the first k sentences, in order (D-078). A turn that played
-// to the end passes the sentence count.
+// to the end passes the sentence count. The texts come from the Generation, which records every
+// sentence before it can be spoken: the loop's own copy (sentences) may still be behind the writer.
 func (g *genRun) spokenText(k int) string {
 	var b strings.Builder
 	for i := range k {
-		b.WriteString(g.sentences[i])
+		b.WriteString(g.g.SentenceText(i))
 	}
 	return b.String()
 }
@@ -75,7 +76,7 @@ func (r *Runtime) startOpening() {
 	r.turnState = StateProcessing
 	if err := r.startGeneration(GenOpening); err != nil {
 		r.lg().Error("start opening generation failed", "error", err.Error())
-		r.failTurn(errs.CodeAiGenerationFailed)
+		r.failTurn(errs.CodeAiGenerationFailed, CauseProvider, "")
 		return
 	}
 	r.pushTurn()
@@ -179,6 +180,13 @@ func (r *Runtime) cancelGeneration() {
 	g := r.gen
 	g.g.Cancel()
 	r.retired = append(r.retired, g.g)
+	// The loop never waits for the goroutines of a cancelled generation (§7.6.5); this one only
+	// watches how long they take to leave (generation_goroutine_exit_seconds, must stay < 1 s).
+	started, gg := r.d.Clock.Now(), g.g
+	r.goSafe("generation exit", func() {
+		gg.Wait()
+		r.d.Metrics.GenerationExit(r.d.Clock.Now().Sub(started))
+	})
 	r.dropCancel(g.cancelID)
 	r.generation++
 	if r.cs != nil {
@@ -291,6 +299,12 @@ func (r *Runtime) onFirstAudio(g *genRun) {
 	if !g.static && sum.LLMFirstTokenMs > 0 {
 		r.d.Metrics.LLMFirstToken(string(sum.LLMProvider), sum.LLMModel, time.Duration(sum.LLMFirstTokenMs)*time.Millisecond)
 	}
+	if sum.UsedFallback && r.voice.Fallback != nil { // §7.7.6: TTS moved to voice.fallback, the one vendor fallback (D-017)
+		id := g.turn.id
+		r.submit(SessionEvent{Type: string(session.EventFallback), TurnID: &id, Payload: map[string]any{
+			"capability": "TTS", "from": string(r.voice.Primary.Provider), "to": string(r.voice.Fallback.Provider), "turn_seq": g.turn.seq,
+		}})
+	}
 	if sum.TTSFirstAudioMs > 0 {
 		r.d.Metrics.TTSFirstAudio(string(sum.TTSProvider), sum.TTSModel, time.Duration(sum.TTSFirstAudioMs)*time.Millisecond)
 	}
@@ -354,18 +368,18 @@ func (r *Runtime) closeTurn(status session.TurnStatus) {
 	if t == nil || g == nil {
 		return
 	}
+	if t.failed != nil { // the APOLOGY of a FAILED turn ended: the turn stays FAILED
+		r.completeFailedTurn(true)
+		return
+	}
 	// assistant_spoken_text: the sentences whose last frame the writer has written. A fragment the
 	// parser never cut (DONE{TRUNCATED}, S-7) is in assistant_text but was never spoken.
-	spokenCount := len(g.sentences)
-	if r.cs != nil {
-		spokenCount = min(spokenCount, r.cs.writer.SentencesWritten(g.number))
-	}
-	spoken := g.spokenText(spokenCount)
+	spoken := g.spokenText(r.spokenCount(g))
 	r.flushText(g)
 	fin := r.finalOf(g, status, spoken)
 	r.submit(FinalizeTurn{TurnID: t.id, Final: fin})
 	r.d.Metrics.Turn(string(status))
-	text, spokenText := g.text.String(), spoken
+	text, spokenText := g.g.Text(), spoken
 	tc := protocol.TurnCompleted{Status: string(status), AssistantText: &text, AssistantSpokenText: &spokenText}
 	if t.hasUser {
 		u := t.userText
@@ -384,6 +398,16 @@ func (r *Runtime) closeTurn(status session.TurnStatus) {
 	r.pushRT()
 }
 
+// spokenCount is how many sentences of g the user heard: the ones whose last frame the writer has
+// written (D-078). Without a connection there is no writer to ask and the parsed sentences stand
+// in. A fragment the parser never cut (DONE{TRUNCATED}) is in neither.
+func (r *Runtime) spokenCount(g *genRun) int {
+	if r.cs == nil {
+		return len(g.sentences)
+	}
+	return r.cs.writer.SentencesWritten(g.number)
+}
+
 // latencyOf is the optional latency object of turn.completed.
 func (r *Runtime) latencyOf(t *turnRun, fin session.TurnFinal) *protocol.Latency {
 	l := &protocol.Latency{STTFinalMS: t.sttFinalMS}
@@ -399,54 +423,11 @@ func (r *Runtime) latencyOf(t *turnRun, fin session.TurnFinal) *protocol.Latency
 	return l
 }
 
-// onGenFailed is GENERATION_FAILED. Row 12 (OPENING) is handled here: turn 0 FAILED, back to
-// LISTENING, the opening is not retried. Task 20 adds rows 11 and 16 (REPLY, after first audio)
-// with the apology and the failed-turn counters.
-func (r *Runtime) onGenFailed(g *genRun, e EvGenFailed) {
-	select { // a panic of the same generation is the real outcome: it reaches the loop on fatalCh
-	case err := <-r.fatalCh:
-		r.onFatalSignal(err)
-		return
-	default:
-	}
-	r.lg().Warn("generation failed", "kind", string(g.kind), "cause", string(e.Cause))
-	r.failTurn(errs.CodeAiGenerationFailed)
-}
-
-// failTurn ends the current turn FAILED without an apology (row 12): the generation is cancelled,
-// error{AI_GENERATION_FAILED} and turn.completed{FAILED} go out, and the state is LISTENING.
-func (r *Runtime) failTurn(code errs.Code) {
-	t, g := r.turn, r.gen
-	if t == nil {
-		return
-	}
-	var fin session.TurnFinal
-	if g != nil {
-		r.flushText(g)
-		fin = r.finalOf(g, session.TurnFailed, g.spokenText(0))
-		r.cancelGeneration()
-	} else {
-		fin = session.TurnFinal{CreatedAt: t.createdAt, Status: session.TurnFailed, CompletedAt: r.d.Clock.Now()}
-	}
-	c := string(code)
-	fin.ErrorCode = &c
-	r.submit(FinalizeTurn{TurnID: t.id, Final: fin})
-	r.d.Metrics.Turn(string(session.TurnFailed))
-	r.emitError(code, nil, nil)
-	r.emit("turn.completed", evMeta{turn: t}, protocol.TurnCompleted{Status: string(session.TurnFailed)})
-	r.turn = nil
-	r.sync.ClearTurn()
-	r.sttAudioBase = r.sttAudioTotal()
-	r.commitBoundary("listening")
-	r.turnState = StateListening
-	r.pushRT()
-}
-
 // finalOf builds the columns of a final turn from the generation (§7.6.6). A static opening has
 // no LLM: llm_provider, llm_model and the token counts stay NULL.
 func (r *Runtime) finalOf(g *genRun, status session.TurnStatus, spoken string) session.TurnFinal {
 	sum := g.g.Summary()
-	text := g.text.String()
+	text := g.g.Text()
 	f := session.TurnFinal{
 		CreatedAt: g.turn.createdAt, Status: status, AssistantText: &text, AssistantSpokenText: &spoken,
 		TTSProvider: nonEmpty(string(sum.TTSProvider)), TTSModel: nonEmpty(sum.TTSModel), TTSVoiceID: nonEmpty(sum.TTSVoiceID),

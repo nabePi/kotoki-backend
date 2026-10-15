@@ -176,6 +176,41 @@ func (s *ScriptedSTT) Finalize() error {
 	return nil
 }
 
+// EmitPartial emits a PARTIAL with text now, outside the timeline (the running segment becomes
+// text): the STT hearing something at a moment the test chooses, e.g. the user's words during
+// the AI's speech.
+func (s *ScriptedSTT) EmitPartial(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.partial = text
+	s.emit(provider.STTEvent{Type: provider.STTPartial, Text: text, StartMs: s.segStartMs, EndMs: s.audioMs})
+}
+
+// EmitFinal emits a FINAL{FromFinalize:false} with text now, outside the timeline: the STT closing
+// a segment of its own accord (a pause in the user's speech).
+func (s *ScriptedSTT) EmitFinal(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.emit(provider.STTEvent{Type: provider.STTFinal, Text: text, StartMs: s.segStartMs, EndMs: s.audioMs})
+	s.partial, s.segStartMs = "", s.audioMs
+}
+
+// Fail emits the ERROR event the router sends when the vendor stream is lost for good.
+func (s *ScriptedSTT) Fail(err *provider.Error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.emit(provider.STTEvent{Type: provider.STTError, Err: err})
+}
+
 // SetFinalizeText overrides the text of the next Finalize FINAL only (e.g. an echo "gema").
 func (s *ScriptedSTT) SetFinalizeText(text string) {
 	s.mu.Lock()

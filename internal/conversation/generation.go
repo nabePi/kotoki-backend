@@ -184,8 +184,16 @@ type Generation struct {
 
 	llmFinished  atomic.Bool // the text is complete: STOP/MAX_TOKENS, R-17 limit, static, asset
 	failed       atomic.Bool // EvGenFailed was decided (once)
+	failedAt     atomic.Pointer[failInfo]
 	audioDone    atomic.Bool // EvAudioDone was produced (once)
 	framesQueued atomic.Int64
+
+	// sentMu guards sentText: the text of each sentence the parser cut, recorded before the sentence
+	// can be spoken. assistant_spoken_text is built from it (the writer's count says how many
+	// sentences were heard), never from what Runtime.loop has had time to read from genEvents.
+	sentMu   sync.Mutex
+	sentText map[int]string
+	fullText strings.Builder // every clean delta, in order: assistant_text
 
 	// epochMu orders the pacer's admit decision against runTTS moving to a new TTS epoch.
 	epochMu       sync.Mutex
@@ -297,6 +305,38 @@ func (g *Generation) OnWriterAck(a WriterAck) (EvAudioDone, bool) {
 		TotalMS: n * pacerFrameMS, SentenceCount: a.Sentences}, true
 }
 
+// recordSentence keeps the text of sentence s (see sentText).
+func (g *Generation) recordSentence(s prompt.Sentence) {
+	g.sentMu.Lock()
+	defer g.sentMu.Unlock()
+	if g.sentText == nil {
+		g.sentText = map[int]string{}
+	}
+	g.sentText[s.Index] = s.Text
+}
+
+// recordText keeps the clean text of a delta (see fullText).
+func (g *Generation) recordText(clean string) {
+	g.sentMu.Lock()
+	defer g.sentMu.Unlock()
+	g.fullText.WriteString(clean)
+}
+
+// Text is everything the LLM produced so far, as the parser cleaned it (assistant_text). Safe for
+// concurrent use; unlike what the loop has read from genEvents it is never behind the sentences.
+func (g *Generation) Text() string {
+	g.sentMu.Lock()
+	defer g.sentMu.Unlock()
+	return g.fullText.String()
+}
+
+// SentenceText is the text of sentence i ("" when it was never cut). Safe for concurrent use.
+func (g *Generation) SentenceText(i int) string {
+	g.sentMu.Lock()
+	defer g.sentMu.Unlock()
+	return g.sentText[i]
+}
+
 // startLLM runs an OPENING/REPLY generation from the LLM.
 func (g *Generation) startLLM() { g.startText(g.runLLM) }
 
@@ -349,39 +389,67 @@ func (g *Generation) emit(ev GenEvent) bool {
 	}
 }
 
+// Stages of a failed generation (TURN_FAILED.stage, §7.13.1).
+const (
+	failStageLLM = "LLM"
+	failStageTTS = "TTS"
+)
+
+// failInfo is where a generation failed and the class of the error (TURN_FAILED.stage and
+// error_class).
+type failInfo struct{ stage, class string }
+
+// FailInfo is the stage ("LLM" or "TTS") and error class of the failure the generation reported;
+// empty when it did not fail. It is set before EvGenFailed is sent.
+func (g *Generation) FailInfo() (stage, class string) {
+	if fi := g.failedAt.Load(); fi != nil {
+		return fi.stage, fi.class
+	}
+	return "", ""
+}
+
 // fail reports GENERATION_FAILED once and stops the LLM (no more tokens are useful). A cancelled
 // generation never fails: cancellation belongs to the loop.
-func (g *Generation) fail(c GenCause) {
+func (g *Generation) fail(c GenCause, stage, class string) {
 	if g.ctx.Err() != nil || !g.failed.CompareAndSwap(false, true) {
 		return
 	}
+	g.failedAt.Store(&failInfo{stage: stage, class: class})
 	g.llmCancel()
 	g.emit(EvGenFailed{Gen: g.Number, Cause: c})
 }
 
 // failFrom maps a provider error: CONTENT_FILTERED → its own cause, a cancellation of ctx →
-// nothing, anything else → CauseProvider.
-func (g *Generation) failFrom(ctx context.Context, err error) {
+// nothing, anything else → CauseProvider. stage is where the error came from.
+func (g *Generation) failFrom(ctx context.Context, err error, stage string) {
 	var pe *provider.Error
 	isPE := errors.As(err, &pe)
 	if ctx.Err() != nil && (errors.Is(err, context.Canceled) || (isPE && pe.Kind == provider.KindCancelled)) {
 		return
 	}
+	class := "UNKNOWN"
+	if isPE {
+		class = string(pe.Kind)
+	}
 	if isPE && pe.Kind == provider.KindContentFiltered {
-		g.fail(CauseContentFiltered)
+		g.fail(CauseContentFiltered, stage, class)
 		return
 	}
-	g.fail(CauseProvider)
+	g.fail(CauseProvider, stage, class)
 }
 
 // deliver emits the clean text and the sentences, and hands the sentences to runTTS. A sentence
 // the parser has cut is always handed over, even when the LLM was cut meanwhile (expiry: parsed
 // sentences are still spoken, §7.7.2/§7.11); only the end of the generation or of runTTS stops it.
 func (g *Generation) deliver(clean string, out []prompt.Sentence, sentences chan<- prompt.Sentence) bool {
-	if clean != "" && !g.emit(EvTextDelta{Gen: g.Number, Clean: clean}) {
-		return false
+	if clean != "" {
+		g.recordText(clean)
+		if !g.emit(EvTextDelta{Gen: g.Number, Clean: clean}) {
+			return false
+		}
 	}
 	for _, s := range out {
+		g.recordSentence(s)
 		if !g.emit(EvSentence{Gen: g.Number, Sentence: s}) {
 			return false
 		}
@@ -405,7 +473,7 @@ func (g *Generation) runLLM(sentences chan<- prompt.Sentence) {
 	req.RequestID = fmt.Sprintf("%s:%d", g.p.SessionID, g.Number)
 	stream, err := g.pg.StreamLLM(g.llmCtx, req)
 	if err != nil {
-		g.failFrom(g.llmCtx, err)
+		g.failFrom(g.llmCtx, err, failStageLLM)
 		return
 	}
 	defer func() { _ = stream.Close() }()
@@ -420,7 +488,7 @@ func (g *Generation) runLLM(sentences chan<- prompt.Sentence) {
 		case ev, ok := <-stream.Events():
 			if !ok {
 				if g.llmCtx.Err() == nil {
-					g.fail(CauseProvider) // ended without a terminal event
+					g.fail(CauseProvider, failStageLLM, "NO_TERMINAL_EVENT") // ended without a terminal event
 				}
 				return
 			}
@@ -444,7 +512,7 @@ func (g *Generation) runLLM(sentences chan<- prompt.Sentence) {
 				if ev.Err == nil {
 					err = errors.New("conversation: LLM error without detail")
 				}
-				g.failFrom(g.llmCtx, err)
+				g.failFrom(g.llmCtx, err, failStageLLM)
 				return
 			}
 		}
@@ -464,10 +532,10 @@ func (g *Generation) llmDone(reason provider.FinishReason, parser *prompt.Senten
 	case provider.FinishTruncated: // S-7: the parser is not closed
 		g.p.Metrics.llmTruncatedInc()
 	case provider.FinishContentFiltered:
-		g.fail(CauseContentFiltered)
+		g.fail(CauseContentFiltered, failStageLLM, string(provider.KindContentFiltered))
 	case provider.FinishCancelled: // the loop's cancellation
 	default:
-		g.fail(CauseProvider)
+		g.fail(CauseProvider, failStageLLM, "UNEXPECTED_FINISH")
 	}
 }
 
@@ -490,13 +558,14 @@ func (g *Generation) playAsset(frames chan<- audio.OutFrame) {
 	defer close(frames)
 	pkts, err := g.p.Asset()
 	if err != nil {
-		g.fail(CauseProvider)
+		g.fail(CauseProvider, failStageTTS, "ASSET")
 		return
 	}
 	if len(pkts) == 0 {
 		return // silent: the pacer reports it
 	}
 	g.llmFinished.Store(true) // no LLM: the content is complete
+	g.recordSentence(prompt.Sentence{Index: 0, Text: g.p.AssetText})
 	if !g.emit(EvSentence{Gen: g.Number, Sentence: prompt.Sentence{Index: 0, Text: g.p.AssetText}}) {
 		return
 	}
@@ -526,7 +595,7 @@ func (g *Generation) runPacer(frames <-chan audio.OutFrame) {
 		},
 		OnDone: func(n int, _ int64) {
 			if n == 0 {
-				g.fail(CauseProvider)
+				g.fail(CauseProvider, failStageTTS, "NO_AUDIO")
 			}
 		},
 	}
@@ -616,7 +685,7 @@ type ttsStage struct {
 func (st *ttsStage) newEncoder() bool {
 	enc, err := audio.NewEncoder(provider.TTSSampleRate, st.g.p.OpusBitrate, st.g.p.OpusComplexity)
 	if err != nil {
-		st.g.fail(CauseProvider)
+		st.g.fail(CauseProvider, failStageTTS, "ENCODER")
 		return false
 	}
 	st.enc = enc
@@ -638,7 +707,7 @@ func (st *ttsStage) restart(e int) bool {
 	if admitted {
 		// the switch raced the first frame (MarkAudioSent): audio of the old voice is on its way
 		// and the voice cannot change once audio is sent (S-12)
-		g.fail(CauseProvider)
+		g.fail(CauseProvider, failStageTTS, "EPOCH_RACE")
 		return false
 	}
 	st.next, st.seq, st.prevText = 0, 0, ""
@@ -664,7 +733,7 @@ func (st *ttsStage) send(f audio.OutFrame) bool {
 func (st *ttsStage) encode(block []int16, idx int) (audio.OutFrame, bool) {
 	pkt, err := st.enc.Encode(block)
 	if err != nil {
-		st.g.fail(CauseProvider)
+		st.g.fail(CauseProvider, failStageTTS, "ENCODER")
 		return audio.OutFrame{}, false
 	}
 	f := audio.OutFrame{Gen: st.g.Number, Seq: st.seq, SentenceIdx: idx, Opus: pkt, Epoch: st.epoch}
@@ -682,7 +751,7 @@ func (st *ttsStage) speak(s prompt.Sentence) speakResult {
 	}
 	stream, err := g.pg.Synthesize(g.ctx, req)
 	if err != nil {
-		g.failFrom(g.ctx, err)
+		g.failFrom(g.ctx, err, failStageTTS)
 		return stopped
 	}
 	defer func() { _ = stream.Close() }()
@@ -716,7 +785,7 @@ func (st *ttsStage) speak(s prompt.Sentence) speakResult {
 				if c.Err.VendorCode == vendorCodeTTSSwitched {
 					return st.awaitEpoch()
 				}
-				g.failFrom(g.ctx, c.Err)
+				g.failFrom(g.ctx, c.Err, failStageTTS)
 				return stopped
 			}
 			for _, b := range framer.Write(c.PCM) {
@@ -763,6 +832,6 @@ func (st *ttsStage) endedWithoutFinal() speakResult {
 		return st.restartResult(e)
 	default:
 	}
-	st.g.fail(CauseProvider)
+	st.g.fail(CauseProvider, failStageTTS, "STREAM_ENDED")
 	return stopped
 }

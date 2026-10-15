@@ -236,6 +236,24 @@ func (s *sttState) MarkTurn(onsetMs int64) {
 	s.onsetMs = onsetMs
 }
 
+// MarkTurnFrom starts a user turn that barged in on the AI (§7.6.5, stt.MarkTurn(onsetMs)): the
+// turn text is what STT gave since the onset, final segments included, judged like the detector's
+// TextSince (segments after the last answered commit received at audio time >= onsetMs). What
+// came before is the AI's echo or the previous turn.
+func (s *sttState) MarkTurnFrom(onsetMs int64) {
+	mark := len(s.segments)
+	for i := s.commitIdx; i < len(s.segments); i++ {
+		if s.segments[i].RecvAudioMs >= onsetMs {
+			mark = i
+			break
+		}
+	}
+	s.sttMark = max(mark, s.commitIdx)
+	s.markID = s.nextID
+	s.turn++
+	s.onsetMs = onsetMs
+}
+
 // CommitIdx is the first segment after the FINAL of the last answered commit.
 func (s *sttState) CommitIdx() int { return s.commitIdx }
 

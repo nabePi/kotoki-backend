@@ -4,6 +4,7 @@ import (
 	"context"
 
 	promtest "github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 
 	"github.com/nabePi/kotoki-backend/internal/content"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
@@ -115,4 +116,53 @@ func (m *Metrics) TurnEndReasonTotal(reason string) float64 {
 // DifficultyAdjustmentsTotal reads difficulty_adjustments_total.
 func (m *Metrics) DifficultyAdjustmentsTotal() float64 {
 	return promtest.ToFloat64(m.difficultyAdjusted)
+}
+
+// BargeInTotal reads bargein_total{source}.
+func (m *Metrics) BargeInTotal(source string) float64 {
+	return promtest.ToFloat64(m.bargeins.WithLabelValues(source))
+}
+
+// BargeInStopSamples is how many bargein_stop_seconds observations were made.
+func (m *Metrics) BargeInStopSamples() uint64 {
+	var out dto.Metric
+	if err := m.bargeinStop.Write(&out); err != nil {
+		panic(err)
+	}
+	return out.GetHistogram().GetSampleCount()
+}
+
+// LLMContentFilteredTotal reads kotoki_llm_content_filtered_total{provider}.
+func (m *Metrics) LLMContentFilteredTotal(provider string) float64 {
+	return promtest.ToFloat64(m.llmContentFilter.WithLabelValues(provider))
+}
+
+// SetAccepting sets acceptingTurns from outside the loop (the loop runs it): the state of a
+// session whose expiry grace began (Task 22 does this itself).
+func (r *Runtime) SetAccepting(ctx context.Context, on bool) error {
+	return r.call(ctx, func(r *Runtime) { r.accepting = on })
+}
+
+// GenerationExitSamples is how many generation_goroutine_exit_seconds observations were made.
+func (m *Metrics) GenerationExitSamples() uint64 {
+	var out dto.Metric
+	if err := m.genExit.Write(&out); err != nil {
+		panic(err)
+	}
+	return out.GetHistogram().GetSampleCount()
+}
+
+// BargeInBehindTheLoop runs a barge-in on the loop at a moment the loop is known to be behind the
+// generation: it closes entered, waits for proceed (the test makes the generation produce events
+// meanwhile, which the loop cannot read: it is in here) and then confirms the barge-in. It returns
+// how many generation events were still unread.
+func (r *Runtime) BargeInBehindTheLoop(ctx context.Context, entered chan<- struct{}, proceed <-chan struct{}) (int, error) {
+	var unread int
+	err := r.call(ctx, func(r *Runtime) {
+		close(entered)
+		<-proceed
+		unread = len(r.genEvents)
+		r.bargeIn(r.det.NowMs())
+	})
+	return unread, err
 }

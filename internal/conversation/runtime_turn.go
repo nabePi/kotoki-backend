@@ -9,7 +9,6 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/conversation/protocol"
 	"github.com/nabePi/kotoki-backend/internal/conversation/rtstate"
 	"github.com/nabePi/kotoki-backend/internal/memory"
-	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"github.com/nabePi/kotoki-backend/internal/provider"
 	"github.com/nabePi/kotoki-backend/internal/session"
 )
@@ -56,6 +55,11 @@ type turnRun struct {
 	hasUser    bool   // row 7 ran: userText is the text of the turn
 	userText   string // the text the generation answers
 	sttFinalMS int    // stt_final_ms of the payload; -1 after a STT_FINAL_TIMEOUT
+
+	// failed is the final row of a turn that is FAILED and waits for its APOLOGY to end (rows 11,
+	// 16, non-Japanese text); the turn is persisted and completed when the apology ends (row 15)
+	// or is cut (barge-in, end of session). nil for every other turn.
+	failed *session.TurnFinal
 }
 
 // recentTurn is one turn of the recentTurns ring (§7.7.5 step 1): what the prompt sees and what
@@ -85,7 +89,8 @@ func (r *Runtime) onDetector(ev Event) {
 		r.endUserTurn(endReasonSilence, ev.ThresholdMs)
 	case EventMaxUtterance: // row 4
 		r.endUserTurn(endReasonMaxUtterance, 0)
-	case EventBargeInConfirmed: // row 13: Task 20
+	case EventBargeInConfirmed: // row 13
+		r.onBargeInConfirmed(ev.OnsetMs)
 	}
 }
 
@@ -98,14 +103,15 @@ func (r *Runtime) onSpeechConfirmed(onsetMs int64) {
 	}
 	switch r.turnState {
 	case StateListening:
-		r.beginUserTurn(onsetMs)
+		r.beginUserTurn(onsetMs, false)
 	case StateProcessing:
 		r.onSpeechInProcessing(onsetMs)
 	}
 }
 
 // beginUserTurn is row 1: turn_seq, INSERT (async), the STT mark, speech.started and turn.started.
-func (r *Runtime) beginUserTurn(onsetMs int64) {
+// duringAI marks the turn a barge-in begins (speech.started{during_ai_speech}, §7.6.5).
+func (r *Runtime) beginUserTurn(onsetMs int64, duringAI bool) {
 	now := r.d.Clock.Now()
 	t := &turnRun{
 		id: r.d.IDs.New(), seq: r.nextTurnSeq, initiator: initiatorUser, createdAt: now,
@@ -116,11 +122,15 @@ func (r *Runtime) beginUserTurn(onsetMs int64) {
 	r.turn = t
 	r.turnCount++
 	r.submit(InsertTurn{Turn: TurnStart{ID: t.id, SessionID: r.sid, Sequence: t.seq, Generation: 0, CreatedAt: now}})
-	r.sttSt.MarkTurn(onsetMs)
+	if duringAI {
+		r.sttSt.MarkTurnFrom(onsetMs)
+	} else {
+		r.sttSt.MarkTurn(onsetMs)
+	}
 	r.det.ResetForNewTurn()
 	r.turnState = StateUserSpeaking
 	r.partialDirty = false
-	r.emit("speech.started", evMeta{turn: t}, protocol.SpeechStarted{AudioOffsetMS: onsetMs})
+	r.emit("speech.started", evMeta{turn: t}, protocol.SpeechStarted{AudioOffsetMS: onsetMs, DuringAISpeech: duringAI})
 	r.emit("turn.started", evMeta{turn: t}, protocol.TurnStarted{Initiator: initiatorUser, StartedAt: protocol.Timestamp{Time: t.startedAt}})
 	r.pushTurn()
 	r.pushRT()
@@ -229,21 +239,21 @@ func (r *Runtime) interruptOpening(onsetMs int64) {
 	fin := r.finalOf(g, session.TurnInterrupted, "")
 	r.submit(FinalizeTurn{TurnID: t.id, Final: fin})
 	r.d.Metrics.Turn(string(session.TurnInterrupted))
-	text, spoken := g.text.String(), ""
+	text, spoken := g.g.Text(), ""
 	r.emit("turn.completed", evMeta{turn: t}, protocol.TurnCompleted{
 		Status: string(session.TurnInterrupted), AssistantText: &text, AssistantSpokenText: &spoken,
 	})
 	r.turn = nil
 	r.sync.ClearTurn()
 	r.postTurn(t, session.TurnInterrupted, "", "")
-	r.beginUserTurn(onsetMs)
+	r.beginUserTurn(onsetMs, false)
 }
 
 // ---- STT ----
 
 // onSTTEvent is the entry of STT events into the turn engine: partials and finals feed sttState,
 // the FINAL of the TURN_END commit decides the text of the turn (rows 7/8), a FINAL of a DISCARD
-// commit is counted and dropped (S-8). Task 20/22 add the STT error and CLOSED handling.
+// commit is counted and dropped (S-8). An STT error ends the session (sttFailed).
 func (r *Runtime) onSTTEvent(ev provider.STTEvent) {
 	switch ev.Type {
 	case provider.STTPartial:
@@ -263,7 +273,9 @@ func (r *Runtime) onSTTEvent(ev provider.STTEvent) {
 			// the text is kept (or dropped) by sttState; nothing to do for the engine
 		}
 	case provider.STTError:
-		r.lg().Warn("stt error", "provider", string(ev.Provider)) // Task 20/22: PROVIDER_FAILURE end
+		// §7.7.6, §7.11.4: the router already rotated the vendor's connection when it could, and
+		// there is no other vendor: an STT error ends the session PROVIDER_FAILURE.
+		r.sttFailed(ev)
 	case provider.STTClosed:
 		r.lg().Info("stt closed")
 	}
@@ -357,9 +369,13 @@ func (r *Runtime) resolveUserText(timedOut, report bool) {
 	r.emit("stt.final", evMeta{turn: t}, protocol.STTFinal{
 		Text: text, EndReason: t.endReason, STTFinalMS: t.sttFinalMS, Provider: r.sttProvider(),
 	})
+	if isNonJapanese(text) { // the user did not speak Japanese: no reply, an APOLOGY, outside the failure streak
+		r.failNonJapanese()
+		return
+	}
 	if err := r.startGeneration(GenReply); err != nil {
 		r.lg().Error("start reply generation failed", "error", err.Error())
-		r.failTurn(errs.CodeAiGenerationFailed)
+		r.failReply(nil, CauseProvider)
 		return
 	}
 	r.pushTurn()
@@ -418,9 +434,15 @@ func (r *Runtime) commitBoundary(boundary string) {
 // postTurn is §7.7.5 for a turn that ended COMPLETED or INTERRUPTED: the failure streak resets, the
 // turn joins recentTurns, the adaptive state adjusts (COMPLETED only), and the rolling summary and
 // the memory refresh run in the background. assistant is the text the prompt shows for the turn
-// (the spoken text for an INTERRUPTED one, D-078); spoken is what the user heard.
+// (the spoken text for an INTERRUPTED one, D-078); spoken is what the user heard. A FAILED turn
+// joins recentTurns too (the prompt shows the user's side of it) but changes nothing else: its
+// streak was counted when it failed, and there is nothing to adapt to or to remember.
 func (r *Runtime) postTurn(t *turnRun, status session.TurnStatus, assistant, spoken string) {
-	r.failedTurns = 0
+	if status != session.TurnFailed {
+		r.failedTurns = 0
+	} else if !t.hasUser {
+		return // a FAILED opening has nothing the prompt could show
+	}
 	tc := TurnContext{Seq: t.seq, Status: string(status), AssistantText: assistant}
 	if t.hasUser {
 		u := t.userText
@@ -434,7 +456,9 @@ func (r *Runtime) postTurn(t *turnRun, status session.TurnStatus, assistant, spo
 		r.adjustAdaptive(t)
 	}
 	r.maybeSummarize()
-	r.refreshMemory(t)
+	if status != session.TurnFailed {
+		r.refreshMemory(t)
+	}
 	r.pushRT()
 }
 

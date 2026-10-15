@@ -66,11 +66,16 @@ func (r *Runtime) closeTurnForEnd() {
 	if t == nil || g == nil {
 		return
 	}
+	if t.failed != nil { // the APOLOGY is cut by the end: the turn stays FAILED
+		r.interruptGeneration("SESSION_ENDING")
+		r.completeFailedTurn(false)
+		return
+	}
 	spokenCount := r.interruptGeneration("SESSION_ENDING")
 	spoken := g.spokenText(spokenCount)
 	r.submit(FinalizeTurn{TurnID: t.id, Final: r.finalOf(g, session.TurnInterrupted, spoken)})
 	r.d.Metrics.Turn(string(session.TurnInterrupted))
-	text := g.text.String()
+	text := g.g.Text()
 	r.emit("turn.completed", evMeta{turn: t}, protocol.TurnCompleted{
 		Status: string(session.TurnInterrupted), AssistantText: &text, AssistantSpokenText: &spoken,
 	})
@@ -190,13 +195,19 @@ func (r *Runtime) failTurnSilently() {
 		return
 	}
 	var fin session.TurnFinal
-	if g != nil {
+	switch {
+	case t.failed != nil: // already FAILED (waiting for its APOLOGY): keep its own row and error code
+		fin = *t.failed
+		fin.CompletedAt = r.d.Clock.Now()
+	case g != nil:
 		fin = r.finalOf(g, session.TurnFailed, g.spokenText(0))
-	} else {
+	default:
 		fin = session.TurnFinal{CreatedAt: t.createdAt, Status: session.TurnFailed, CompletedAt: r.d.Clock.Now()}
 	}
-	c := string(errs.CodeInternalError)
-	fin.ErrorCode = &c
+	if fin.ErrorCode == nil {
+		c := string(errs.CodeInternalError)
+		fin.ErrorCode = &c
+	}
 	r.submit(FinalizeTurn{TurnID: t.id, Final: fin})
 	r.d.Metrics.Turn(string(session.TurnFailed))
 	r.turn = nil

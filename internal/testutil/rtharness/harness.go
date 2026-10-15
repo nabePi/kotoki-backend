@@ -89,6 +89,7 @@ type options struct {
 	tune          func(*config.RealtimeTuning)
 	limits        conversation.Limits
 	wrapGen       func(provider.Generation) provider.Generation
+	sleep         func(ctx context.Context, d time.Duration) error
 }
 
 // Option configures New.
@@ -127,6 +128,13 @@ func WithTuning(f func(*config.RealtimeTuning)) Option { return func(o *options)
 // a delay into one call).
 func WithGenerationWrapper(f func(provider.Generation) provider.Generation) Option {
 	return func(o *options) { o.wrapGen = f }
+}
+
+// WithSleep replaces the pacer's wait (default: the fake clock moves by the wait and it returns at
+// once). A test that blocks it holds the pacer mid-generation, so audio is parsed and queued but
+// not yet written. The clock is the test's to move then.
+func WithSleep(f func(ctx context.Context, d time.Duration) error) Option {
+	return func(o *options) { o.sleep = f }
 }
 
 // WithLimits sets the pod capacity limits (default 95/100/120).
@@ -231,6 +239,9 @@ func New(t *testing.T, opts ...Option) *H {
 		NewTicker: func(d time.Duration) conversation.Ticker { return h.Tickers.New(d) },
 		// The pacer waits on the fake clock: a sleep is the passing of that much time.
 		Sleep: func(ctx context.Context, d time.Duration) error { h.Clock.Advance(d); return ctx.Err() },
+	}
+	if o.sleep != nil {
+		h.Deps.Sleep = o.sleep
 	}
 	h.Mgr = conversation.NewManager(h.Deps)
 	h.ctx, h.cancel = context.WithCancel(context.Background())

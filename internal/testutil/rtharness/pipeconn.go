@@ -39,6 +39,7 @@ type PipeConn struct {
 	closedFlag  bool
 	closed      chan struct{}
 	closeOnce   sync.Once
+	stall       chan struct{} // non-nil while writes are stalled; closed on release
 }
 
 // NewPipeConn returns an open connection.
@@ -68,11 +69,12 @@ func (p *PipeConn) SendEvent(t testing.TB, ev protocol.ClientEvent) {
 func (p *PipeConn) EOF() { close(p.in) }
 
 // Idle reports that every message sent so far has been read and fully handled by the reader
-// (it is back in Read), so nothing is in flight between the test and the server's inputs.
+// (it is back in Read), so nothing is in flight between the test and the server's inputs. A closed
+// connection is idle: nobody reads what is still sent to it.
 func (p *PipeConn) Idle() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.processed == p.sent
+	return p.closedFlag || p.processed == p.sent
 }
 
 // Read implements conversation.Conn.
@@ -96,8 +98,39 @@ func (p *PipeConn) Read(ctx context.Context) (conversation.MessageKind, []byte, 
 	}
 }
 
+// StallWrites makes Write block (a client that reads slowly: the writer holds one frame and the
+// queue fills) until ReleaseWrites; a stalled write that times out or finds the pipe closed fails.
+func (p *PipeConn) StallWrites() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stall == nil {
+		p.stall = make(chan struct{})
+	}
+}
+
+// ReleaseWrites lets the stalled writes through.
+func (p *PipeConn) ReleaseWrites() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stall != nil {
+		close(p.stall)
+		p.stall = nil
+	}
+}
+
 // Write implements conversation.Conn.
 func (p *PipeConn) Write(ctx context.Context, kind conversation.MessageKind, b []byte) error {
+	p.mu.Lock()
+	stall := p.stall
+	p.mu.Unlock()
+	if stall != nil {
+		select {
+		case <-stall:
+		case <-p.closed:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
 	select {
 	case <-p.closed:
 		return errors.New("rtharness: pipe closed")
