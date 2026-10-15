@@ -72,6 +72,10 @@ type Metrics struct {
 var (
 	// frameProcessingBuckets is the CPU cost of one frame (given by §7.14).
 	frameProcessingBuckets = []float64{0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02}
+	// overheadBuckets resolve the server's own share of a turn: TURN_BUCKETS start at 100 ms, too coarse
+	// to tell the 50 ms e2e SLO (M5-T29) or the 150 ms alert (K2) from a healthy 5 ms. They keep the
+	// TURN_BUCKETS boundaries from 100 ms up.
+	overheadBuckets = []float64{0.005, 0.01, 0.02, 0.035, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 1, 2, 5}
 	// promptTokenBuckets is the token bucket set of §7.14.
 	promptTokenBuckets = []float64{50, 100, 200, 400, 800, 1600, 3200, 6400}
 	// queueDepthBuckets covers 0..WS_OUTBOUND_QUEUE (256); §7.14 gives none.
@@ -133,7 +137,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		llmFirstSentence: hist("llm_first_sentence_seconds", "LLM request to the first parsed sentence.", metrics.TurnBuckets, "provider", "model"),
 		ttsFirstAudio:    hist("tts_first_audio_seconds", "TTS request of the first sentence to the first PCM chunk.", metrics.TurnBuckets, "provider", "model"),
 		serverOverhead: plainHist("server_overhead_seconds",
-			"turn_end_to_first_audio minus stt_final, llm_first_sentence and tts_first_audio of a REPLY turn.", metrics.TurnBuckets),
+			"turn_end_to_first_audio minus stt_final, llm_first_sentence and tts_first_audio of a REPLY turn.", overheadBuckets),
 
 		bargeinStop: plainHist("bargein_stop_seconds", "Barge-in confirmed to the last audio frame written (D-101).", metrics.BargeBuckets),
 		bargeins:    counter("bargein_total", "Barge-ins by source.", "source"),

@@ -142,9 +142,11 @@ func TestMetricsNamesAndBuckets(t *testing.T) {
 	m.OutboundDepth(1, 2)
 	got := bucketBounds(t, reg)
 	for _, n := range []string{"turn_end_to_first_audio_seconds", "stt_final_seconds", "llm_first_token_seconds",
-		"llm_first_sentence_seconds", "tts_first_audio_seconds", "server_overhead_seconds", "reconnect_gap_seconds"} {
+		"llm_first_sentence_seconds", "tts_first_audio_seconds", "reconnect_gap_seconds"} {
 		require.Equal(t, metrics.TurnBuckets, got[metricPrefix+n], n)
 	}
+	// the overhead histogram is finer than TURN_BUCKETS below 100 ms and equal to it above
+	require.Equal(t, []float64{0.005, 0.01, 0.02, 0.035, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 1, 2, 5}, got[metricPrefix+"server_overhead_seconds"])
 	for _, n := range []string{"bargein_stop_seconds", "generation_goroutine_exit_seconds"} {
 		require.Equal(t, metrics.BargeBuckets, got[metricPrefix+n], n)
 	}

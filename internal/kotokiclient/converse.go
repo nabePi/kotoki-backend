@@ -98,7 +98,8 @@ func RunConversation(ctx context.Context, c *Client, s SessionSpec, steps []Step
 	if sink == nil {
 		sink = NopSink{}
 	}
-	r := &runner{c: c, spec: s, sink: sink, clk: s.Clock, sleep: s.Sleep, ids: s.IDs, sig: make(chan struct{}, 1)}
+	// Turn sequence numbers start at 0 (the AI_FIRST opening), so "no turn seen yet" is -1.
+	r := &runner{c: c, spec: s, sink: sink, clk: s.Clock, sleep: s.Sleep, ids: s.IDs, sig: make(chan struct{}, 1), maxTurnSeq: -1, doneTurnSeq: -1, utt: utterance{floorSeq: -1}}
 	if r.clk == nil {
 		r.clk = c.clk
 	}

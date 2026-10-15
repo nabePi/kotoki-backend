@@ -188,11 +188,12 @@ type sconn struct {
 }
 
 type evo struct {
-	seq    int64 // 0: the next sequence number (unless fixed)
-	fixed  bool  // use seq as given, even 0, and leave the counter alone
-	turn   int
-	gen    *uint32
-	replay bool
+	seq      int64 // 0: the next sequence number (unless fixed)
+	fixed    bool  // use seq as given, even 0, and leave the counter alone
+	turn     int
+	gen      *uint32
+	replay   bool
+	zeroTurn bool // the event carries turn_seq 0 (turn 0 is the AI_FIRST opening)
 }
 
 func (s *sconn) send(typ string, o evo, payload any) {
@@ -208,7 +209,7 @@ func (s *sconn) send(typ string, o evo, payload any) {
 		Type: typ, EventID: uuid.New(), ServerSeq: o.seq, SessionID: testSession, Generation: o.gen,
 		TS: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC), Replay: o.replay, Payload: payload,
 	}
-	if o.turn > 0 {
+	if o.turn > 0 || o.zeroTurn {
 		ev.TurnSeq = ptr(o.turn)
 	}
 	b, err := protocol.MarshalServer(ev)
@@ -836,4 +837,29 @@ func TestConsumeHandlesFramesBeforeALaterEvent(t *testing.T) {
 		r.consume(context.Background(), rc)
 		require.Equal(t, []int64{40}, r.rep.BargeInStopMS, "iteration %d", i)
 	}
+}
+
+// TestWaitAIDoneSeesTheAIFirstOpening: the opening of an AI_FIRST session is turn 0, and the
+// script's WaitAIDone must end when that turn completes (found by e2e E2: it waited for a turn
+// above 0 and timed out).
+func TestWaitAIDoneSeesTheAIFirstOpening(t *testing.T) {
+	h := newHarness(t, func(s *sconn) {
+		s.ready("session.start")
+		_ = s.command()
+		s.send("session.started", evo{}, protocol.SessionStarted{Status: "ACTIVE", ConversationStartMode: "AI_FIRST"})
+		open := evo{zeroTurn: true}
+		s.send("turn.started", open, protocol.TurnStarted{Initiator: "AI"})
+		s.send("ai.generation_started", evo{zeroTurn: true, gen: ptr(uint32(1))}, protocol.AIGenerationStarted{Kind: "OPENING"})
+		s.audio(1, 0, 0xC1)
+		s.send("ai.audio_completed", evo{zeroTurn: true, gen: ptr(uint32(1))}, protocol.AIAudioCompleted{FrameCount: 1, TotalAudioMS: 20, SentenceCount: 1, LLMFinished: true})
+		s.send("turn.completed", open, protocol.TurnCompleted{Status: "COMPLETED"})
+		_ = s.serve(nil, func(ev protocol.ClientEvent) {
+			if ev.Type == "session.end" {
+				s.send("session.completed", evo{}, protocol.SessionCompleted{EndReason: "USER_ENDED", ChargedSeconds: 3})
+			}
+		})
+	})
+	rep, err := h.run([]Step{WaitAIDone{Timeout: 5 * time.Second}, End{}})
+	require.NoError(t, err)
+	require.Equal(t, "COMPLETED", rep.Status)
 }

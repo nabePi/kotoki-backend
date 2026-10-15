@@ -209,13 +209,15 @@ func buildRealtime(podCtx context.Context, cfg config.Realtime, logger *slog.Log
 	// session.Service is the single writer of sessions.status; the runtime reaches it through the
 	// fenced RuntimeService facade. The realtime process never creates sessions or reads content
 	// through the resolver, so those collaborators stay unset.
+	// OpeningPrompts is the exception: BeginStart reads the PUBLISHED OPENING version (S-2).
 	sessions := postgres.NewSessionRepo(pool)
+	contentRepo := postgres.NewContentRepo(pool)
 	sessionSvc := session.NewService(session.Deps{
 		Store: store.SessionStore(), Reader: sessions, Balance: balance.NewService(store.BalanceStore(), clk, ids),
 		Control: redisstore.NewSessionControl(rdb), Clock: clk, IDs: ids, Log: logger,
-		Metrics: metrics.NewSession(reg), ServiceName: "realtime",
+		OpeningPrompts: openingPromptSource{repo: contentRepo},
+		Metrics:        metrics.NewSession(reg), ServiceName: "realtime",
 	})
-	contentRepo := postgres.NewContentRepo(pool)
 	convMetrics := conversation.NewMetrics(reg)
 	mgr := conversation.NewManager(conversation.Deps{
 		Cfg: cfg.RealtimeTuning, Clock: clk, IDs: ids, Log: logger, Metrics: convMetrics,
