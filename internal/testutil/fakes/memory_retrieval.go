@@ -81,6 +81,17 @@ func (m *MemoryRetrieval) Refreshes() int {
 	return len(m.refreshed)
 }
 
+// Refreshed returns the turns each RefreshEpisodic call was given, in call order.
+func (m *MemoryRetrieval) Refreshed() [][]memory.TurnText {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([][]memory.TurnText, len(m.refreshed))
+	for i, r := range m.refreshed {
+		out[i] = append([]memory.TurnText(nil), r...)
+	}
+	return out
+}
+
 // Reloads returns the number of ReloadCoreIfChanged calls.
 func (m *MemoryRetrieval) Reloads() int {
 	m.mu.Lock()

@@ -72,6 +72,9 @@ type Deps struct {
 	// ProviderSessionGrace is PROVIDER_SESSION_GRACE: a generation is cut at
 	// expires_at + this (§7.7.4). Zero → 15 s.
 	ProviderSessionGrace time.Duration
+	// STTFinalTimeout is PROVIDER_TIMEOUT_STT_FINAL: the turn goes on with the running text when
+	// the FINAL of the TURN_END commit takes longer (§7.6.2). Zero → 1.5 s.
+	STTFinalTimeout time.Duration
 }
 
 // withDefaults fills what a partial wiring leaves out; the tuning keeps the spec §7.2 defaults
@@ -94,6 +97,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.ProviderSessionGrace <= 0 {
 		d.ProviderSessionGrace = defaultProviderSessionGrace
+	}
+	if d.STTFinalTimeout <= 0 {
+		d.STTFinalTimeout = defaultSTTFinal
 	}
 	c := &d.Cfg
 	c.WSHandshakeTimeout = orDur(c.WSHandshakeTimeout, 10*time.Second)
@@ -136,12 +142,6 @@ func (e *panicError) Error() string {
 // read or change state that only the loop owns (Runtime.call, Runtime.post).
 type ctlFn func(r *Runtime)
 
-// frameEvent is what the audio pipeline reports to the loop (frameEvents, cap 64). Task 19 adds
-// the VAD/detector fields; Task 18 only carries the barrier of Runtime.Barrier.
-type frameEvent struct {
-	barrier chan struct{}
-}
-
 // sttMsg is one STT event on its way to the loop, or the marker of Runtime.Barrier.
 type sttMsg struct {
 	ev     provider.STTEvent
@@ -153,7 +153,7 @@ type sttMsg struct {
 // (spec 7.7.2). A zero time is unarmed. Adding a deadline is: a field here, a branch in
 // checkDeadlines and a handler; the tasks that extend the runtime do exactly that:
 //
-//	Task 19: sttFinal (STT_FINAL_TIMEOUT 1.5 s after the TURN_END commit)
+//	Task 19: sttFinal (STT_FINAL_TIMEOUT 1.5 s after the TURN_END commit; armed in endUserTurn)
 //	Task 21: reconnect (RECONNECT_WINDOW 30 s after a disconnect)
 //	Task 22: grace (expires_at + SESSION_EXPIRY_GRACE) and the flush deadline of finish()
 //	Task 23: safepoint (DRAIN_SAFEPOINT_TIMEOUT)
@@ -164,6 +164,7 @@ type deadlines struct {
 	expiry   time.Time // expires_at (§7.11.2)
 	balance  time.Time // next balance.tick (aligned to elapsed multiples of 10 s)
 	playback time.Time // row 14: estimated end of playback + PLAYBACK_FINISH_GRACE_MS
+	sttFinal time.Time // STT_FINAL_TIMEOUT after the TURN_END commit (rows 3 → 7)
 }
 
 // timedCancel is a context cancellation armed against the runtime clock (see cancelAt).
@@ -220,11 +221,12 @@ type Runtime struct {
 
 	// Loop inputs that do not belong to a connection.
 	ctl         chan ctlFn
-	startDone   chan startResult // startup goroutine → loop (cap 1)
-	fenceLost   chan error       // persister/redisSync callbacks → loop (cap 1, non-blocking send)
-	fatalCh     chan error       // persister fatal callback → loop (cap 1, non-blocking send)
-	frameEvents chan frameEvent  // audio pipeline → loop (cap 64)
-	sttEvents   chan sttMsg      // sttReceiver → loop (cap 64)
+	startDone   chan startResult       // startup goroutine → loop (cap 1)
+	fenceLost   chan error             // persister/redisSync callbacks → loop (cap 1, non-blocking send)
+	fatalCh     chan error             // persister fatal callback → loop (cap 1, non-blocking send)
+	frameEvents chan frameEvent        // audio pipeline → loop (cap 64)
+	sttPipe     atomic.Pointer[sttBox] // the STT stream for the audio goroutine; the loop stores it
+	sttEvents   chan sttMsg            // sttReceiver → loop (cap 64)
 	sttSync     chan chan struct{}
 	genEvents   chan GenEvent // generation goroutines → loop (cap 128)
 	wg          sync.WaitGroup
@@ -277,7 +279,23 @@ type Runtime struct {
 	stt       provider.RoutedSTTSession
 	sttCancel context.CancelFunc
 	sttSt     *sttState
-	audioMs   int64 // audio clock of sttSt; the detector replaces it in Task 19
+	det       *Detector // the turn detector (§7.6.2): audio time is its frames × 20 ms
+	audioMs   int64     // audio clock of sttSt = det.NowMs()
+	// lastFrameAt is when the reader received the last upstream frame the loop handled (the
+	// starvation watchdog of §7.5.2).
+	lastFrameAt   time.Time
+	lastPartialAt time.Time // stt.partial throttle
+	partialDirty  bool      // a partial was held back by the throttle
+	sttAudioBase  int64     // Stats().AudioMsSent at the end of the previous turn (stt_audio_ms)
+	failedTurns   int       // consecutiveFailedTurns (§7.6.1); Task 20 raises it, a good turn resets it
+
+	// Post-turn state (§7.7.5, §7.8): the recentTurns ring, the rolling summary and the memory jobs.
+	recent         []recentTurn
+	summary        string
+	coveredUntil   int
+	summarizer     *Summarizer
+	summaryRunning bool
+	memBusy        bool
 	// discardAt remembers which boundary (ai_speaking, listening) each DISCARD commit was for.
 	discardAt map[CommitID]string
 
@@ -311,6 +329,7 @@ func newRuntime(parent context.Context, d Deps, rec session.RuntimeRecord, fence
 		turnState:   StateListening,
 		adaptive:    AdaptiveState{Current: parseAdaptive(rec.AdaptiveDifficulty)},
 		discardAt:   map[CommitID]string{},
+		det:         NewDetector(DetectorConfigFrom(d.Cfg)),
 	}
 	r.firstConn = cs.id
 	r.log = d.Log.With("session_id", rec.ID.String(), "conn_id", cs.id)
@@ -458,6 +477,9 @@ func (r *Runtime) drain() {
 func (r *Runtime) onTick(now time.Time) {
 	r.fireCancels(now)
 	r.checkDeadlines(now)
+	r.checkStarvation(now)
+	r.flushPartial(now)
+	r.flushDueText(now)
 	if r.cs != nil && !now.Before(r.nextSample) {
 		r.nextSample = now.Add(queueSampleEvery)
 		r.d.Metrics.OutboundDepth(r.cs.out.ControlLen(), r.cs.out.AudioLen())
@@ -493,6 +515,10 @@ func (r *Runtime) checkDeadlines(now time.Time) {
 	if due(r.dl.playback) {
 		r.dl.playback = time.Time{}
 		r.onPlaybackDeadline()
+	}
+	if due(r.dl.sttFinal) {
+		r.dl.sttFinal = time.Time{}
+		r.onSTTFinalTimeout()
 	}
 }
 
@@ -677,37 +703,6 @@ func (r *Runtime) adoptConn(cs *connState) {
 	r.disconnectedAt = time.Time{}
 	r.startAudio(cs)
 	r.log = r.d.Log.With("session_id", r.sid.String(), "conn_id", cs.id)
-}
-
-// startAudio runs the audio side of a connection: it consumes audioIn. Task 18 only discards the
-// frames and carries Runtime.Barrier markers; Task 19 replaces the body with the audioPipeline
-// (decode 16 kHz, seq dup/gap/PLC, VAD, stt.SendAudio → frameEvents) and keeps the marker.
-func (r *Runtime) startAudio(cs *connState) {
-	cs.goSafe("audio", func() error {
-		for {
-			select {
-			case <-cs.ctx.Done():
-				return nil
-			case a := <-cs.audioIn:
-				if a.Barrier == nil {
-					continue
-				}
-				select {
-				case r.frameEvents <- frameEvent{barrier: a.Barrier}:
-				case <-cs.ctx.Done():
-					return nil
-				}
-			}
-		}
-	})
-}
-
-func (r *Runtime) onFrameEvent(fe frameEvent) {
-	if fe.barrier != nil { // a Barrier marker is not input: it must not move Handled
-		close(fe.barrier)
-		return
-	}
-	r.handled++
 }
 
 // onConnExit handles the end of the current connection. A fatal violation found by the reader is
@@ -997,40 +992,4 @@ func (r *Runtime) goSafe(who string, fn func()) {
 		}()
 		fn()
 	}()
-}
-
-// onSTTEvent is the entry of STT events into the turn engine. Task 18 keeps the session-level
-// bookkeeping only: partials and finals feed sttState, a FINAL of a DISCARD commit is counted
-// and dropped (S-8). Task 19 adds the detector view, stt.partial/stt.final events and rows 7–8;
-// Task 20/22 the STT error and CLOSED handling.
-func (r *Runtime) onSTTEvent(ev provider.STTEvent) {
-	switch ev.Type {
-	case provider.STTPartial:
-		r.sttSt.OnPartial(ev)
-	case provider.STTFinal:
-		res := r.sttSt.OnFinal(ev)
-		if res.Outcome == FinalDiscarded {
-			r.d.Metrics.STTDiscarded(r.discardAt[res.Commit])
-			delete(r.discardAt, res.Commit)
-		}
-	case provider.STTError:
-		r.lg().Warn("stt error", "provider", string(ev.Provider)) // Task 20/22: PROVIDER_FAILURE end
-	case provider.STTClosed:
-		r.lg().Info("stt closed")
-	}
-}
-
-// commitBoundary is the S-8 commit at the (b) entry into AI_SPEAKING and (c) return to LISTENING:
-// stt.Finalize with purpose DISCARD, so a FINAL from audio before the boundary (an echo of the AI)
-// never becomes the text of a turn. boundary is the label of stt_discarded_commits_total.
-func (r *Runtime) commitBoundary(boundary string) {
-	if r.stt == nil {
-		return
-	}
-	if err := r.stt.Finalize(); err != nil {
-		r.lg().Warn("stt finalize at boundary failed", "boundary", boundary, "error", err.Error())
-		return
-	}
-	id := r.sttSt.Commit(CommitDiscard)
-	r.discardAt[id] = boundary
 }

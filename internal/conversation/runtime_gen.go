@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/nabePi/kotoki-backend/internal/conversation/protocol"
 	"github.com/nabePi/kotoki-backend/internal/conversation/rtstate"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
@@ -22,15 +20,6 @@ const (
 	initiatorUser = "USER"
 )
 
-// turnRun is the turn in progress (one session_turns row, §7.6.6). Only Runtime.loop touches it.
-// Task 19 adds the user side (onset, user text, end reason, STT timing) next to the AI side.
-type turnRun struct {
-	id        uuid.UUID
-	seq       int
-	initiator string
-	createdAt time.Time
-}
-
 // genRun is the generation of the turn in progress and what the loop keeps while it runs: the
 // transcript the events build (assistant_text, per-sentence text for assistant_spoken_text) and
 // the timing of the latency columns. The Generation itself is the pipeline of Task 12.
@@ -42,8 +31,16 @@ type genRun struct {
 	// static is the S-2 opening: opening_line spoken without an LLM (llm_provider stays NULL).
 	static    bool
 	startedAt time.Time
+	// t0 is the start of turn_end_to_first_audio: the turn end detected by the detector (REPLY),
+	// the start of the generation otherwise (§7.14).
+	t0 time.Time
 
 	text         strings.Builder // assistant_text: every clean delta
+	pending      strings.Builder // text not yet sent as ai.text_delta (coalesced to 100 ms)
+	pendingSince time.Time       // when the first pending delta arrived
+	lastFlush    time.Time       // when ai.text_delta last went out
+	firstSent    bool            // llm_first_sentence_seconds was observed
+	llmSentence  time.Duration   // request → first sentence (llm_first_sentence_seconds)
 	sentences    map[int]string  // parsed sentence text by index
 	audioStarted bool
 	audioAt      time.Time
@@ -95,10 +92,11 @@ func (r *Runtime) startGeneration(kind GenKind) error {
 	var req provider.LLMRequest
 	if kind != GenApology && !static {
 		mode := ModeConversation
+		userText := t.userText
 		if kind == GenOpening {
-			mode = ModeOpening
+			mode, userText = ModeOpening, ""
 		}
-		bp, err := r.buildPrompt(mode)
+		bp, err := r.buildPrompt(mode, userText)
 		if err != nil {
 			return fmt.Errorf("conversation: build prompt: %w", err)
 		}
@@ -120,6 +118,10 @@ func (r *Runtime) startGeneration(kind GenKind) error {
 	}
 	g := newGeneration(p)
 	run := &genRun{g: g, kind: kind, number: n, turn: t, static: static, startedAt: r.d.Clock.Now(), sentences: map[int]string{}}
+	run.t0 = run.startedAt
+	if kind == GenReply && !t.endAt.IsZero() {
+		run.t0 = t.endAt
+	}
 	// §7.7.4: the generation context ends at expires_at + PROVIDER_SESSION_GRACE, on the runtime clock.
 	run.cancelID = r.cancelAt(r.expiresAt.Add(r.d.ProviderSessionGrace), g.Cancel)
 	r.gen = run
@@ -137,16 +139,17 @@ func (r *Runtime) startGeneration(kind GenKind) error {
 	return nil
 }
 
-// buildPrompt assembles ConversationInput from the runtime caches (no I/O, §7.8.2). Task 19 adds
-// the recent turns, the rolling summary and the current user text.
-func (r *Runtime) buildPrompt(mode Mode) (BuiltPrompt, error) {
+// buildPrompt assembles ConversationInput from the runtime caches (no I/O, §7.8.2): the recent
+// turns window, the rolling summary and the user text the reply answers (empty for the opening).
+func (r *Runtime) buildPrompt(mode Mode, userText string) (BuiltPrompt, error) {
 	pv := r.snap.PromptVersion
 	if mode == ModeOpening && r.snap.Opening != nil {
 		pv = *r.snap.Opening
 	}
 	bp, err := r.d.Builder.BuildConversation(ConversationInput{
 		Mode: mode, Prompt: pv, Config: r.snap.SessionConfig, Learner: r.learnerCtx, Adaptive: r.adaptive.Current,
-		Memory: r.mem, RemainingSeconds: r.remainingSeconds(), Budget: prompt.DefaultBudget,
+		Memory: r.mem, RollingSummary: r.summary, RecentTurns: SelectRecentWindow(r.recentContexts(), r.coveredUntil),
+		CurrentUserText: userText, RemainingSeconds: r.remainingSeconds(), Budget: prompt.DefaultBudget,
 		DurationMinutes: (r.rec.DurationSeconds + 59) / 60, SessionMode: string(r.rec.ConversationStartMode),
 	})
 	if err != nil {
@@ -199,6 +202,7 @@ func (r *Runtime) interruptGeneration(reason string) int {
 	if r.cs != nil {
 		spoken = r.cs.writer.SentencesWritten(g.number)
 	}
+	r.flushText(g) // the text the generation produced reaches the client before it is interrupted
 	r.cancelGeneration()
 	r.emit("ai.interrupted", genMeta(g.turn, g.number), protocol.AIInterrupted{
 		Reason: reason, ActiveGeneration: r.generation, SpokenSentenceCount: spoken,
@@ -218,20 +222,58 @@ func (r *Runtime) onGenEvent(ev GenEvent) {
 	switch e := ev.(type) {
 	case EvTextDelta:
 		g.text.WriteString(e.Clean)
-		r.emit("ai.text_delta", genMeta(g.turn, g.number), protocol.AITextDelta{Text: e.Clean})
+		g.pending.WriteString(e.Clean)
+		now := r.d.Clock.Now()
+		if g.pendingSince.IsZero() {
+			g.pendingSince = now
+		}
+		if g.lastFlush.IsZero() || now.Sub(g.lastFlush) >= partialEvery {
+			r.flushText(g)
+		}
 		r.pushTurn()
 	case EvSentence:
 		g.sentences[e.Sentence.Index] = e.Sentence.Text
+		if !g.firstSent {
+			g.firstSent = true
+			if sum := g.g.Summary(); !g.static && sum.LLMProvider != "" {
+				g.llmSentence = r.d.Clock.Now().Sub(g.startedAt)
+				r.d.Metrics.LLMFirstSentence(string(sum.LLMProvider), sum.LLMModel, g.llmSentence)
+			}
+		}
 	case EvFirstAudio:
+		r.flushText(g)
 		r.onFirstAudio(g)
 	case EvSentenceAudio:
+		r.flushText(g)
 		r.emit("ai.sentence", genMeta(g.turn, g.number), protocol.AISentence{
 			SentenceIndex: e.Index, Text: g.sentences[e.Index], FirstFrameSeq: e.FirstFrameSeq, StartMS: int(e.FirstFrameSeq) * FrameMs,
 		})
 	case EvAudioDone:
+		r.flushText(g)
 		r.onAudioDone(g, e)
 	case EvGenFailed:
+		r.flushText(g)
 		r.onGenFailed(g, e)
+	}
+}
+
+// flushText sends the coalesced ai.text_delta of the generation (spec §7.4.5: coalesce 100 ms).
+// Every other event of the generation goes out after it, so the order of the stream is kept.
+func (r *Runtime) flushText(g *genRun) {
+	if g == nil || g.pending.Len() == 0 {
+		return
+	}
+	text := g.pending.String()
+	g.pending.Reset()
+	g.pendingSince = time.Time{}
+	g.lastFlush = r.d.Clock.Now()
+	r.emit("ai.text_delta", genMeta(g.turn, g.number), protocol.AITextDelta{Text: text})
+}
+
+// flushDueText sends the text a generation has been holding back for 100 ms (on the loop tick).
+func (r *Runtime) flushDueText(now time.Time) {
+	if g := r.gen; g != nil && g.pending.Len() > 0 && now.Sub(g.pendingSince) >= partialEvery {
+		r.flushText(g)
 	}
 }
 
@@ -245,12 +287,16 @@ func (r *Runtime) onFirstAudio(g *genRun) {
 	})
 	sum := g.g.Summary()
 	kind := strings.ToLower(string(g.kind))
-	r.d.Metrics.TurnEndToFirstAudio(kind, sum.UsedFallback, now.Sub(g.startedAt))
+	r.d.Metrics.TurnEndToFirstAudio(kind, sum.UsedFallback, now.Sub(g.t0))
 	if !g.static && sum.LLMFirstTokenMs > 0 {
 		r.d.Metrics.LLMFirstToken(string(sum.LLMProvider), sum.LLMModel, time.Duration(sum.LLMFirstTokenMs)*time.Millisecond)
 	}
 	if sum.TTSFirstAudioMs > 0 {
 		r.d.Metrics.TTSFirstAudio(string(sum.TTSProvider), sum.TTSModel, time.Duration(sum.TTSFirstAudioMs)*time.Millisecond)
+	}
+	if t := g.turn; g.kind == GenReply && !g.static && t.sttFinalMS >= 0 && g.llmSentence > 0 { // server_overhead_seconds (§7.14)
+		providers := time.Duration(t.sttFinalMS)*time.Millisecond + g.llmSentence + time.Duration(sum.TTSFirstAudioMs)*time.Millisecond
+		r.d.Metrics.ServerOverhead(max(0, now.Sub(g.t0)-providers))
 	}
 	r.commitBoundary("ai_speaking") // S-8 (b)
 	r.pushTurn()
@@ -301,29 +347,56 @@ func (r *Runtime) onPlaybackDeadline() {
 	r.closeTurn(session.TurnCompleted)
 }
 
-// closeTurn finishes the turn after its audio played (row 15): persist, turn.completed, S-8 (c)
-// and back to LISTENING. Task 19 adds the post-turn tasks (recent turns, adaptive, summary,
-// memory refresh) and the failed-counter reset.
+// closeTurn finishes the turn after its audio played (row 15): persist, turn.completed, S-8 (c),
+// the post-turn tasks of §7.7.5 and back to LISTENING.
 func (r *Runtime) closeTurn(status session.TurnStatus) {
 	t, g := r.turn, r.gen
 	if t == nil || g == nil {
 		return
 	}
-	spoken := g.spokenText(len(g.sentences))
+	// assistant_spoken_text: the sentences whose last frame the writer has written. A fragment the
+	// parser never cut (DONE{TRUNCATED}, S-7) is in assistant_text but was never spoken.
+	spokenCount := len(g.sentences)
+	if r.cs != nil {
+		spokenCount = min(spokenCount, r.cs.writer.SentencesWritten(g.number))
+	}
+	spoken := g.spokenText(spokenCount)
+	r.flushText(g)
 	fin := r.finalOf(g, status, spoken)
 	r.submit(FinalizeTurn{TurnID: t.id, Final: fin})
 	r.d.Metrics.Turn(string(status))
 	text, spokenText := g.text.String(), spoken
-	r.emit("turn.completed", evMeta{turn: t}, protocol.TurnCompleted{
-		Status: string(status), AssistantText: &text, AssistantSpokenText: &spokenText,
-	})
+	tc := protocol.TurnCompleted{Status: string(status), AssistantText: &text, AssistantSpokenText: &spokenText}
+	if t.hasUser {
+		u := t.userText
+		tc.UserText = &u
+		tc.Latency = r.latencyOf(t, fin)
+	}
+	r.emit("turn.completed", evMeta{turn: t}, tc)
 	r.dropCancel(g.cancelID)
 	r.gen, r.turn = nil, nil
 	r.dl.playback = time.Time{}
 	r.sync.ClearTurn()
+	r.sttAudioBase = r.sttAudioTotal()
 	r.commitBoundary("listening") // S-8 (c)
 	r.turnState = StateListening
+	r.postTurn(t, status, text, spoken)
 	r.pushRT()
+}
+
+// latencyOf is the optional latency object of turn.completed.
+func (r *Runtime) latencyOf(t *turnRun, fin session.TurnFinal) *protocol.Latency {
+	l := &protocol.Latency{STTFinalMS: t.sttFinalMS}
+	if fin.TurnEndToFirstAudioMS != nil {
+		l.TurnEndToFirstAudioMS = *fin.TurnEndToFirstAudioMS
+	}
+	if fin.LLMFirstTokenMS != nil {
+		l.LLMFirstTokenMS = *fin.LLMFirstTokenMS
+	}
+	if fin.TTSFirstAudioMS != nil {
+		l.TTSFirstAudioMS = *fin.TTSFirstAudioMS
+	}
+	return l
 }
 
 // onGenFailed is GENERATION_FAILED. Row 12 (OPENING) is handled here: turn 0 FAILED, back to
@@ -349,6 +422,7 @@ func (r *Runtime) failTurn(code errs.Code) {
 	}
 	var fin session.TurnFinal
 	if g != nil {
+		r.flushText(g)
 		fin = r.finalOf(g, session.TurnFailed, g.spokenText(0))
 		r.cancelGeneration()
 	} else {
@@ -362,6 +436,7 @@ func (r *Runtime) failTurn(code errs.Code) {
 	r.emit("turn.completed", evMeta{turn: t}, protocol.TurnCompleted{Status: string(session.TurnFailed)})
 	r.turn = nil
 	r.sync.ClearTurn()
+	r.sttAudioBase = r.sttAudioTotal()
 	r.commitBoundary("listening")
 	r.turnState = StateListening
 	r.pushRT()
@@ -378,7 +453,7 @@ func (r *Runtime) finalOf(g *genRun, status session.TurnStatus, spoken string) s
 		UsedFallback: sum.UsedFallback, CompletedAt: r.d.Clock.Now(),
 	}
 	if g.audioStarted {
-		f.TurnEndToFirstAudioMS = ptrInt(int(g.audioAt.Sub(g.startedAt) / time.Millisecond))
+		f.TurnEndToFirstAudioMS = ptrInt(int(g.audioAt.Sub(g.t0) / time.Millisecond))
 	}
 	if sum.TTSCharacters > 0 {
 		f.TTSCharacters = ptrInt(sum.TTSCharacters)

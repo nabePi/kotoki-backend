@@ -17,7 +17,6 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/provider"
 	"github.com/nabePi/kotoki-backend/internal/session"
 	"github.com/nabePi/kotoki-backend/internal/testutil/fakes"
-	"github.com/nabePi/kotoki-backend/internal/testutil/replay"
 	"github.com/nabePi/kotoki-backend/internal/testutil/rtharness"
 )
 
@@ -652,19 +651,6 @@ func TestFenceLostWhileStarting(t *testing.T) {
 	require.Empty(t, h.Events("session.started"))
 	require.NotContains(t, h.Calls.Calls(), "FailStart", "a lost fence writes nothing more")
 	h.WaitFor("runtime gone", func() bool { return h.Mgr.Active() == 0 })
-}
-
-func TestSpeakIsDiscardedUntilTheAudioPipeline(t *testing.T) {
-	// Task 19 gives the frames a meaning; until then they are consumed and dropped, and the
-	// barrier still passes through the audio path.
-	h := rtharness.New(t, rtharness.WithTimeline(replay.Timeline{}))
-	h.Connect(h.StartCmd())
-	h.WaitEvents("session.started", 1)
-	h.Speak("ja_greeting_short")
-	h.Silence(200)
-	h.Sync()
-	require.Equal(t, conversation.StateListening, h.View().TurnState)
-	require.Equal(t, []string{"session.ready", "session.started"}, h.Types())
 }
 
 func TestProtocolViolationAfterStart(t *testing.T) {

@@ -98,3 +98,21 @@ func SetResumeHook(m *Manager, f func(lastServerSeq int64)) {
 		return h.fail(errs.CodeServiceUnavailable)
 	}
 }
+
+// AudioFramesInTotal reads audio_frames_in_total{result}.
+func (m *Metrics) AudioFramesInTotal(result string) float64 {
+	return promtest.ToFloat64(m.audioFramesIn.WithLabelValues(result))
+}
+
+// TurnResumedTotal reads turn_resumed_total.
+func (m *Metrics) TurnResumedTotal() float64 { return promtest.ToFloat64(m.turnResumed) }
+
+// TurnEndReasonTotal reads turn_end_reason_total{reason}.
+func (m *Metrics) TurnEndReasonTotal(reason string) float64 {
+	return promtest.ToFloat64(m.turnEndReason.WithLabelValues(reason))
+}
+
+// DifficultyAdjustmentsTotal reads difficulty_adjustments_total.
+func (m *Metrics) DifficultyAdjustmentsTotal() float64 {
+	return promtest.ToFloat64(m.difficultyAdjusted)
+}

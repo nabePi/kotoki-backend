@@ -347,6 +347,7 @@ func (r *Runtime) onStarted(res startResult) {
 	r.snap, r.learnerCtx, r.mem = res.snap, res.learner, res.mem
 	r.voice = voiceSelection(res.snap.Snapshot.Character)
 	r.stt, r.sttCancel = res.stt, res.sttCancel
+	r.sttPipe.Store(&sttBox{s: res.stt})
 	r.startSTTReceiver(res.stt)
 	r.startedAt, r.expiresAt = res.startedAt, res.expiresAt
 	r.status, r.turnState, r.accepting, r.nextTurnSeq = session.StatusActive, StateListening, true, 1

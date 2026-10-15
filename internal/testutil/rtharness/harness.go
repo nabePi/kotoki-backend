@@ -15,6 +15,7 @@ package rtharness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -138,6 +139,7 @@ type Gates struct {
 	Learner chan struct{} // LearnerContextProvider.PromptContext
 	Memory  chan struct{} // memory.RetrievalService.BuildSessionContext
 	STT     chan struct{} // RealtimeRouter.OpenSTT
+	Refresh chan struct{} // memory.RetrievalService.RefreshEpisodic (the post-turn memory job)
 }
 
 // H is one running harness.
@@ -380,6 +382,34 @@ func (h *H) Speak(fixture string) {
 	}
 }
 
+// SpeakSlice sends the part [fromMs, toMs) of a fixture, for a test that needs a short or partial
+// utterance (a 300 ms "ん" of a longer recording).
+func (h *H) SpeakSlice(fixture string, fromMs, toMs int) {
+	h.T.Helper()
+	pcm, _ := audiofx.LoadFixture(h.T, fixture)
+	if pcm.Rate != 48000 {
+		h.T.Fatalf("rtharness: fixture %s is %d Hz, want 48000", fixture, pcm.Rate)
+	}
+	const block = 960 // 20 ms at 48 kHz
+	from, to := fromMs*48, min(toMs*48, len(pcm.Samples))
+	for off := from; off+block <= to; off += block {
+		h.sendFrame(pcm.Samples[off : off+block])
+	}
+}
+
+// SendRawUpstream sends opus as the next upstream packet (the sequence advances), whatever it
+// holds: an undecodable packet for the AUDIO_FRAME_INVALID tests.
+func (h *H) SendRawUpstream(opus []byte) {
+	h.T.Helper()
+	h.Conn.Send(conversation.MessageBinary, protocol.EncodeUpstream(h.upSeq, opus))
+	h.upSeq++
+	h.Clock.Advance(20 * time.Millisecond)
+}
+
+// SkipUpstream advances the upstream sequence by n without sending: the next frame shows a gap of
+// n frames (a client that dropped them, §7.5.2).
+func (h *H) SkipUpstream(n int) { h.upSeq += uint32(n) } //nolint:gosec // a test passes a small count
+
 // Silence sends ms of digital silence as Opus frames (a muted microphone, D-071).
 func (h *H) Silence(ms int) {
 	h.T.Helper()
@@ -400,6 +430,14 @@ func (h *H) sendFrame(block []int16) {
 	h.Clock.Advance(20 * time.Millisecond)
 	if h.upSeq%25 == 0 { // never let audioIn overflow (the reader drops the newest frame when it is full)
 		h.WaitFor("pipe idle", h.Conn.Idle)
+		// ...and let the loop catch up with the audio and STT events every 500 ms of audio, so a
+		// timeline step (a FINAL) is handled before the frames that follow it, as it would be
+		// with a real-time client.
+		if r, ok := h.Runtime(); ok {
+			ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+			_ = r.Barrier(ctx) // a stopped runtime has nothing to catch up with
+			cancel()
+		}
 	}
 }
 
@@ -665,6 +703,13 @@ func (m memoryGate) BuildSessionContext(ctx context.Context, in memory.SessionCo
 	return m.MemoryRetrieval.BuildSessionContext(ctx, in)
 }
 
+func (m memoryGate) RefreshEpisodic(ctx context.Context, userID, sessionID uuid.UUID, recent []memory.TurnText) ([]memory.ContextItem, error) {
+	if err := m.h.wait(ctx, m.h.Gates.Refresh); err != nil {
+		return nil, err
+	}
+	return m.MemoryRetrieval.RefreshEpisodic(ctx, userID, sessionID, recent)
+}
+
 // ContentLoader is the content.SessionConfigLoader and prompt-version source of the harness: the
 // seeded topic, scenario and prompt versions, never a PUBLISHED lookup and never a characters row
 // (the character comes from the session snapshot, D-014).
@@ -739,6 +784,8 @@ type Router struct {
 	mu       sync.Mutex
 	sessions []*replay.ScriptedSTT
 	configs  []provider.STTSessionConfig
+	summary  string
+	texts    []provider.TextRequest
 }
 
 var _ provider.RealtimeRouter = (*Router)(nil)
@@ -766,6 +813,32 @@ func (r *Router) NewGeneration(sid uuid.UUID, gen int64, voice provider.VoiceSel
 		return r.wrap(g)
 	}
 	return g
+}
+
+// CompleteText implements provider.RealtimeRouter for the rolling summary: it answers the text set
+// by SetSummary (an error while none is set) and records the request.
+func (r *Router) CompleteText(_ context.Context, req provider.TextRequest) (provider.TextResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.texts = append(r.texts, req)
+	if r.summary == "" {
+		return provider.TextResult{}, errors.New("rtharness: no summary scripted")
+	}
+	return provider.TextResult{Text: r.summary, Provider: provider.FakePrimary}, nil
+}
+
+// SetSummary sets the text CompleteText returns.
+func (r *Router) SetSummary(text string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.summary = text
+}
+
+// TextRequests returns the CompleteText requests so far.
+func (r *Router) TextRequests() []provider.TextRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]provider.TextRequest(nil), r.texts...)
 }
 
 // SetOpenError changes the error OpenSTT returns (nil: succeed).
