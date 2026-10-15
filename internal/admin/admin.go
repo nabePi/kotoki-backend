@@ -16,7 +16,10 @@ const (
 	ActionBalanceAdjustment = "BALANCE_ADJUSTMENT"
 	ActionUserStatusChange  = "USER_STATUS_CHANGE"
 
-	TargetUser = "USER"
+	ActionSessionTranscriptView = "SESSION_TRANSCRIPT_VIEW"
+
+	TargetUser    = "USER"
+	TargetSession = "SESSION"
 )
 
 // AuditLog mirrors admin_audit_logs. It is append-only.

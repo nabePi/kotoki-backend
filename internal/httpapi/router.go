@@ -37,6 +37,7 @@ func NewRouter(d Deps) http.Handler {
 			RateLimit(d.Limiter, ratelimit.Get("admin_user"), UserSubject, d.Log),
 			RequireAdmin(d.AdminGate, d.Log))
 		registerAdminRoutes(adminGroup, &adminHandler{svc: d.Admin, clk: d.Clock})
+		registerAdminSessionRoutes(adminGroup, &adminSessionHandler{svc: d.AdminSessions, audit: d.AdminAudit, clk: d.Clock})
 		registerAdminContentRoutes(adminGroup, &adminContentHandler{svc: d.ContentAdmin})
 	})
 	return r

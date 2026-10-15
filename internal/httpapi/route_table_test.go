@@ -70,10 +70,10 @@ var routeTable = []routeRow{
 	{"POST", "/admin/users/{user_id}/balance-grants", grpAdmin, []string{"admin_user"}, true, ""},
 	{"POST", "/admin/users/{user_id}/balance-adjustments", grpAdmin, []string{"admin_user"}, true, ""},
 	{"GET", "/admin/users/{user_id}/balance/transactions", grpAdmin, []string{"admin_user"}, true, ""},
-	{"GET", "/admin/users/{user_id}/sessions", grpAdmin, []string{"admin_user"}, false, ""},
-	{"GET", "/admin/sessions/{session_id}", grpAdmin, []string{"admin_user"}, false, ""},
-	{"GET", "/admin/sessions/{session_id}/turns", grpAdmin, []string{"admin_user"}, false, ""},
-	{"GET", "/admin/sessions/{session_id}/events", grpAdmin, []string{"admin_user"}, false, ""},
+	{"GET", "/admin/users/{user_id}/sessions", grpAdmin, []string{"admin_user"}, true, ""},
+	{"GET", "/admin/sessions/{session_id}", grpAdmin, []string{"admin_user"}, true, ""},
+	{"GET", "/admin/sessions/{session_id}/turns", grpAdmin, []string{"admin_user"}, true, ""},
+	{"GET", "/admin/sessions/{session_id}/events", grpAdmin, []string{"admin_user"}, true, ""},
 	{"GET", "/admin/audit-logs", grpAdmin, []string{"admin_user"}, true, ""},
 	{"GET", "/admin/content/validation-report", grpAdmin, []string{"admin_user"}, true, ""},
 	{"GET", "/admin/content/characters/{id}", grpAdmin, []string{"admin_user"}, true, ""},
@@ -210,4 +210,27 @@ func TestRouteTableUserGroupPrefixes(t *testing.T) {
 	sort.Strings(want)
 	require.Equal(t, want, got)
 	require.Len(t, got, 11)
+}
+
+func TestRouteTable_AdminSessions(t *testing.T) {
+	e := newAPI(t)
+	userAuthz := bearerOf(t, e.register(t, "hana@example.com"))
+	var got []string
+	require.NoError(t, chi.Walk(e.handler.(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if strings.Contains(route, "/admin/sessions") || strings.HasSuffix(route, "/sessions") && strings.Contains(route, "/admin/") {
+			got = append(got, method+" "+route)
+		}
+		return nil
+	}))
+	sort.Strings(got)
+	require.Equal(t, []string{
+		"GET /api/v1/admin/sessions/{session_id}",
+		"GET /api/v1/admin/sessions/{session_id}/events",
+		"GET /api/v1/admin/sessions/{session_id}/turns",
+		"GET /api/v1/admin/users/{user_id}/sessions",
+	}, got)
+	for _, route := range got {
+		path := concrete(strings.TrimPrefix(strings.TrimPrefix(route, "GET "), "/api/v1"))
+		require.Equal(t, 403, e.do(http.MethodGet, path, "", "Authorization", userAuthz).Code, route)
+	}
 }

@@ -90,6 +90,7 @@ type apiEnv struct {
 	ticketTargets *fakes.TicketSessionReader
 	gate          *fakes.UserGate
 	sessionSvc    *session.Service
+	adminStore    *fakes.AdminStore
 }
 
 const apiTerms = "2026-10-01"
@@ -117,7 +118,8 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 	users := auth.NewUserService(store, hasher, deleter, clk, log, apiTerms)
 	limiter := &recordingLimiter{deny: map[string]bool{}}
 	balSvc := balance.NewService(bal, clk, ids)
-	adminSvc := admin.NewService(fakes.NewAdminStore(store, bal), balSvc, clk, ids, log)
+	adminStore := fakes.NewAdminStore(store, bal)
+	adminSvc := admin.NewService(adminStore, balSvc, clk, ids, log)
 
 	contentRepo := fakes.NewContentRepo()
 	contentStore := fakes.NewContentStore(contentRepo)
@@ -138,6 +140,7 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 	deps := httpapi.Deps{
 		Session: sessSvc, SessionQuery: session.NewQueryService(fakes.NewSessionViews(sessStore, contentRepo), sessStore.TurnReader(), clk, 180), Tickets: ticketSvc,
 		Content: catalog, ContentAdmin: contentAdmin,
+		AdminSessions: session.NewAdminQueryService(fakes.NewSessionAdmin(sessStore, contentRepo), clk, 180), AdminAudit: adminSvc,
 		Log: log, Limiter: limiter, Tokens: tokens, Clock: clk, Auth: svc, Users: users, Balance: balSvc, Admin: adminSvc, AdminGate: allowAdmin{},
 		Cfg: httpapi.Config{
 			CORSOrigins: []string{"http://localhost:3000"}, BodyLimit: 64 << 10,
@@ -149,7 +152,7 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 	}
 	return &apiEnv{handler: httpapi.NewRouter(deps), limiter: limiter, clk: clk, store: store, bal: bal, mail: fm, deleter: deleter,
 		tokens: tokens, logs: logs, svc: svc, users: users, deps: deps, content: contentRepo, contentStore: contentStore,
-		sessions: sessStore, ticketTargets: ticketTargets, gate: gate, sessionSvc: sessSvc}
+		sessions: sessStore, ticketTargets: ticketTargets, gate: gate, sessionSvc: sessSvc, adminStore: adminStore}
 }
 
 type allowAdmin struct{}

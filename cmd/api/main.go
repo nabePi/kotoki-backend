@@ -230,6 +230,7 @@ func buildAPI(ctx context.Context, cfg config.API, logger *slog.Logger, pool *pg
 	// the admin account-deletion path cancels a RESERVED session through the session service
 	store.SetSessionCanceller(sessionSvc)
 	sessionQuery := session.NewQueryService(postgres.NewSessionViewRepo(pool), postgres.NewTurnRepo(pool), clk, cfg.RetentionTranscriptDays)
+	adminSessions := session.NewAdminQueryService(postgres.NewSessionAdminRepo(pool), clk, cfg.RetentionTranscriptDays)
 	tickets := auth.NewTicketService(store.AuthStore(), postgres.NewTicketSessionReader(pool), redisstore.NewTicketStore(rdb, clk), clk,
 		auth.TicketConfig{TTL: cfg.WSTicketTTL, RealtimeURL: cfg.RealtimePublicURL})
 
@@ -243,6 +244,7 @@ func buildAPI(ctx context.Context, cfg config.API, logger *slog.Logger, pool *pg
 		Auth: authSvc, Users: userSvc, Balance: balanceSvc, Admin: adminSvc, AdminGate: adminSvc,
 		Content: contentSvcs.catalog, ContentAdmin: contentSvcs.admin,
 		Session: sessionSvc, SessionQuery: sessionQuery, Tickets: tickets,
+		AdminSessions: adminSessions, AdminAudit: adminSvc,
 	})
 	return router, dispatcher, nil
 }

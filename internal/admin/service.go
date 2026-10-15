@@ -183,3 +183,16 @@ func validationError(field, reason string) error {
 	return errs.WithDetails(errs.New(errs.CodeValidationFailed, "invalid "+field),
 		map[string]any{"fields": []map[string]any{{"field": field, "reason": reason}}})
 }
+
+// RecordTranscriptView writes the SESSION_TRANSCRIPT_VIEW audit row of an admin reading a session's
+// transcript (spec 3.12). It runs in its own short transaction after the read succeeded; a failure is
+// returned so the handler answers 500 instead of handing out the transcript unaudited.
+func (s *Service) RecordTranscriptView(ctx context.Context, adminID, sessionID, ownerID uuid.UUID, meta RequestMeta) (err error) {
+	ctx, span := otel.Start(ctx, "admin.RecordTranscriptView")
+	defer otel.End(span, &err)
+	row := s.audit(adminID, ActionSessionTranscriptView, ownerID, meta, "", "", nil)
+	row.TargetType, row.TargetID = TargetSession, sessionID.String()
+	return s.store.WithinTx(ctx, func(ctx context.Context, tx Tx) error {
+		return tx.Audit().Insert(ctx, row)
+	})
+}

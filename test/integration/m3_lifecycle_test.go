@@ -128,6 +128,7 @@ func newLifecycle(t *testing.T) *lifecycle {
 		Cfg:     httpapi.Config{CORSOrigins: []string{"http://localhost:3000"}, BodyLimit: 64 << 10, Cookie: httpapi.CookieConfig{Secure: false, MaxAge: 720 * time.Hour}},
 		Auth:    authSvc, Users: userSvc, Balance: balSvc, Admin: adminSvc, AdminGate: adminSvc,
 		Content: content.NewCatalogService(cached, rcfg), ContentAdmin: contentAdmin, Session: sessions, SessionQuery: query, Tickets: tickets,
+		AdminSessions: session.NewAdminQueryService(postgres.NewSessionAdminRepo(pool), clk, 180), AdminAudit: adminSvc,
 	})
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)

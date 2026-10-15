@@ -57,3 +57,9 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - Kandidat aturan (b) memakai bentuk §9.9.2 (semua sesi `ACTIVE` non-handoff, LIMIT 5000, heartbeat dicek in-process via MGET per 500 key; kandidat bila heartbeat hilang/usang > 45 s **dan** `started_at < now − 45 s`), bukan teks §5.6.4 (LIMIT 2000 dan filter `started_at` di SQL). `ListActiveForHeartbeat(ctx, limit)` tidak menerima cutoff.
 - Probe konektivitas Redis untuk `HeartbeatGuard` = `HeartbeatReader.Read(ctx, nil)` (adapter Redis menjalankan `PING`), bukan method terpisah, agar port `HeartbeatReader` tetap satu method.
 - Aturan (e) memakai `Service.EndStaleHandoff`, yang memeriksa ulang `handoff_at IS NOT NULL AND handoff_at < cutoff` di bawah row lock (spec §9.9.2); sesi yang sudah di-claim runtime baru → no-op.
+
+## M3-T24 — admin sesi
+- Audit `SESSION_TRANSCRIPT_VIEW` ditulis **setelah** query turns berhasil (sesuai brief plan), bukan "sebelum data dikembalikan" secara harfiah di §3.12: 404/410 tidak meninggalkan baris audit; bila penulisan audit gagal, handler membalas 500 dan transcript tidak dikirim. `admin.Service.RecordTranscriptView` memakai transaksi singkatnya sendiri.
+- Respons admin menyensor `provider_name`/`model_name`/`voice_id`/`voice.fallback` menjadi `"[REDACTED]"` (D-015, §5.9.8) dengan men-decode lalu meng-encode ulang `config_snapshot`, sehingga urutan key di respons alfabetis, bukan urutan spec; `voice.fallback` yang `null`/tidak ada dibiarkan.
+- `status` turn yang sedang berjalan adalah `null` di respons admin (respons user tidak pernah memuat turn itu).
+- Cursor events = `[created_at RFC 3339 nano, id]` (bukan milidetik) agar mikrodetik `timestamptz` tidak hilang di keyset; limit events default dan maks 100, limit turns 50/100 seperti endpoint user, list sesi 20/100.

@@ -106,6 +106,19 @@ type sessionQueryService interface {
 	Turns(ctx context.Context, userID, id uuid.UUID, afterSeq *int, limit int) ([]session.TurnRecord, error)
 }
 
+// adminSessionService is the admin read side of sessions; *session.AdminQueryService satisfies it.
+type adminSessionService interface {
+	ListByUser(ctx context.Context, userID uuid.UUID, statuses []session.Status, after *uuid.UUID, limit int) ([]session.AdminView, error)
+	Get(ctx context.Context, id uuid.UUID) (session.AdminView, error)
+	Turns(ctx context.Context, id uuid.UUID, afterSeq *int, limit int) ([]session.TurnRecord, error)
+	Events(ctx context.Context, id uuid.UUID, after *session.EventCursor, limit int) ([]session.Event, error)
+}
+
+// transcriptAuditor writes the SESSION_TRANSCRIPT_VIEW audit row; *admin.Service satisfies it.
+type transcriptAuditor interface {
+	RecordTranscriptView(ctx context.Context, adminID, sessionID, ownerID uuid.UUID, meta admin.RequestMeta) error
+}
+
 // ticketService issues WebSocket tickets; *auth.TicketService satisfies it.
 type ticketService interface {
 	Issue(ctx context.Context, userID, sessionID uuid.UUID) (auth.TicketResult, error)
@@ -131,4 +144,7 @@ type Deps struct {
 	Session      sessionService
 	SessionQuery sessionQueryService
 	Tickets      ticketService
+
+	AdminSessions adminSessionService
+	AdminAudit    transcriptAuditor
 }
