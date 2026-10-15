@@ -186,7 +186,7 @@ func (r *Runtime) settleDisconnected(ctx context.Context) bool {
 	r.discCounted = true
 	if r.submitDisconnected(r.disconnectedAt, r.d.Clock.Now()) {
 		if err := r.persister.Flush(ctx); errors.Is(err, session.ErrFenceLost) {
-			r.onFenceLost(err)
+			r.onFenceLost(err) //nolint:contextcheck // the terminal path reads the status under its own bound (ioCtx)
 			return false
 		}
 	}
@@ -212,7 +212,7 @@ func (r *Runtime) onReconnectTimeout(now time.Time) {
 		return
 	}
 	r.d.Metrics.Reconnect("timeout", "", now.Sub(r.disconnectedAt))
-	r.endWith(session.EndReconnectTimeout, 0) // endWith adds the disconnected seconds first
+	r.endWith(session.EndReconnectTimeout) // endWith adds the disconnected seconds first
 }
 
 // ---- resume on the pod that holds the runtime (§7.10.2) ----

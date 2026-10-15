@@ -27,11 +27,18 @@ import (
 // barge-in tests use). The returned gate lets a test free the pacer again.
 func speakingSession(t *testing.T, opts ...rtharness.Option) (*rtharness.H, *gatedSleep) {
 	t.Helper()
+	return speakingSessionHeldAt(t, 40, opts...)
+}
+
+// speakingSessionHeldAt is speakingSession with the pacer held after `limit` waits (a script with
+// less audio than the first sentence of longScript needs a lower one).
+func speakingSessionHeldAt(t *testing.T, limit int64, opts ...rtharness.Option) (*rtharness.H, *gatedSleep) {
+	t.Helper()
 	gs := &gatedSleep{}
 	opts = append([]rtharness.Option{rtharness.WithScript(longScript), rtharness.WithSleep(gs.sleep)}, opts...)
 	h := rtharness.New(t, opts...)
 	gs.clk = h.Clock
-	gs.limit.Store(40)
+	gs.limit.Store(limit)
 	started(t, h)
 	userSays(h, questionJA)
 	h.WaitEvents("ai.audio_started", 1)
@@ -550,12 +557,16 @@ func TestOldConnClosed4011(t *testing.T) {
 }
 
 func TestResumeRejectedWhenEnding(t *testing.T) {
-	h := rtharness.New(t)
-	started(t, h)
-	r, _ := h.Runtime()
+	// The expiry grace of an AI that is still speaking is the ENDING status; a client that lost its
+	// connection in it finds the session not resumable (§7.10.2 step 3).
+	h, _ := speakingSession(t, rtharness.WithDuration(120))
 	lastSeq := lastSeen(h)
+	h.AdvanceClock(rtharness.T0.Add(120 * time.Second).Sub(h.Clock.Now()))
+	h.Tick()
+	h.Sync()
+	require.Equal(t, session.StatusEnding, h.View().Status)
 	detach(t, h)
-	require.NoError(t, r.SetEnding(t.Context())) // the end has begun (Task 22 reaches it during the expiry grace)
+	require.Equal(t, session.StatusEnding, h.View().Status, "a connection lost in the grace does not end it early")
 
 	h.Reconnect()
 	h.Connect(h.ResumeCmd(lastSeq))

@@ -262,3 +262,12 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`AddDisconnected` di jalur akhir sesi** dikirim lewat persister lalu `Flush` (I/O ≤ 5 s di loop) sebelum `BeginEnding`, agar urutannya pasti.
 - **Metrik** `reconnect_total` label `replay` kosong untuk `timeout`/`rejected`.
 - **Masalah terbuka:** (1) `onFenceLost` selalu menutup 4011; varian 4010 saat status sesi sudah terminal (§7.9.3) belum ada (butuh baca status). (2) Admission/drain penuh tetap Task 23 (hanya `reserveUpTo(HardMax)` untuk takeover). (3) Resume saat ENDING dengan grace nyata menunggu Task 22. (4) `Hold` pada `TurnRepo`/`SetEnding` adalah seam tes.
+
+## M5-T22 — Akhir sesi: expiry, user end, kegagalan fatal
+- **`session.ending{ENDING}` untuk semua kegagalan fatal** (PROVIDER_FAILURE dan SERVER_ERROR). Tabel §7.11.4 menyebutnya untuk baris STT/`MAX_CONSECUTIVE_FAILED_TURNS`, tidak untuk baris panic; §7.4.5 mendefinisikannya sebagai "transisi ACTIVE→ENDING" dengan `reason` PROVIDER_FAILURE/SERVER_ERROR, jadi dikirim konsisten untuk keduanya.
+- **Flush akhir asinkron di clock runtime.** Plan: "tunggu persister ≤ 5 s"; diimplementasikan sebagai goroutine dengan deadline `ctxWithDeadline` (ikut tick/fake clock) agar loop tak terblokir dan dapat diuji tanpa sleep. Flush yang gagal/timeout tetap diikuti `Complete`/`Fail`. Hard stop pod di tengah ekor akhir meninggalkan sesi ENDING untuk sweeper/resume (drain yang benar = T23); panic di loop memakai jalur sinkron.
+- **Turn tanpa jawaban saat berakhir:** COMPLETED dengan `assistant_*` NULL dan tanpa kolom LLM/TTS (token generation yang dibatalkan tidak dicatat); turn 0 (opening) yang belum terdengar INTERRUPTED (preseden baris 9b); `generation` tetap dicatat via `finalize`.
+- **Koneksi yang putus saat grace tidak mempercepat akhir:** sesi tetap ENDING sampai playback/final selesai atau grace habis (resume → 4010); `session.completed` hanya ke replay.
+- **`onFenceLost` 4010:** status terminal dibaca lewat `GetForAttach` (satu baca, tanpa tulis) hanya bila bukan pesan TAKEOVER; baca gagal → 4011.
+- **STT error saat ENDING diabaikan** (sesi sudah berakhir normal); `STTClosed` sudah ditangani T21.
+- **Masalah terbuka:** drain/handoff saat ENDING (T23); hard stop saat ekor akhir berjalan tidak menyelesaikan settle.

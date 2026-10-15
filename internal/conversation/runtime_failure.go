@@ -25,6 +25,10 @@ func (r *Runtime) onGenFailed(g *genRun, e EvGenFailed) {
 	default:
 	}
 	r.lg().Warn("generation failed", "kind", string(g.kind), "cause", string(e.Cause))
+	if r.end != nil { // the session is ending: no apology and no failure count, the turn is cut as it is (§7.11.2)
+		r.cutTurnForEnd(r.d.Clock.Now())
+		return
+	}
 	switch g.kind {
 	case GenOpening:
 		r.failTurn(errs.CodeAiGenerationFailed, e.Cause, string(g.g.Summary().LLMProvider))
@@ -183,7 +187,9 @@ func (r *Runtime) completeFailedTurn(toListening bool) {
 		r.commitBoundary("listening") // S-8 (c)
 		r.turnState = StateListening
 	}
-	r.postTurn(t, session.TurnFailed, "", "")
+	if r.end == nil {
+		r.postTurn(t, session.TurnFailed, "", "")
+	}
 }
 
 // countFailure applies the counter rule of §7.6.1 to a turn that became FAILED and reports whether

@@ -305,20 +305,39 @@ func TestClientBargeInHintOnly(t *testing.T) {
 }
 
 func TestBargeInDisabledAfterExpiry(t *testing.T) {
-	// Row 13 guard: with acceptingTurns false (the grace after expiry) nothing interrupts the AI.
-	h := rtharness.New(t, rtharness.WithTimeline(timelineOf(t, "ja_question")))
-	speaking(t, h)
-	r, _ := h.Runtime()
-	require.NoError(t, r.SetAccepting(context.Background(), false))
-	bargeIn(h, "あす")
-	h.Sync()
-	require.Empty(t, h.Events("ai.interrupted"))
-	require.Equal(t, conversation.StateAISpeaking, h.View().TurnState)
+	// Row 13 guard: once the expiry grace has begun (acceptingTurns false) nothing interrupts the AI
+	// that is still speaking, whatever the user's microphone says; before it, the same sound does.
+	for _, expired := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before the expiry", true: "in the grace"}[expired], func(t *testing.T) {
+			h, gs := speakingSession(t, rtharness.WithDuration(120), rtharness.WithTimeline(timelineOf(t, "ja_question")))
+			old := lastGeneration(t, h)
+			if expired {
+				h.AdvanceClock(rtharness.T0.Add(120 * time.Second).Sub(h.Clock.Now()))
+				h.Tick()
+				h.Sync()
+				v := h.View()
+				require.Equal(t, session.StatusEnding, v.Status, "the grace is the ENDING status")
+				require.False(t, v.Accepting)
+				require.Equal(t, conversation.StateAISpeaking, v.TurnState)
+			}
+			bargeIn(h, "あす")
+			if !expired {
+				h.WaitEvents("ai.interrupted", 1)
+				return
+			}
+			h.Sync()
+			require.Empty(t, h.Events("ai.interrupted"))
+			require.Equal(t, conversation.StateAISpeaking, h.View().TurnState)
+			require.Zero(t, h.Metrics.BargeInTotal("server"))
 
-	require.NoError(t, r.SetAccepting(context.Background(), true)) // control: the same sound interrupts
-	h.Silence(400)
-	bargeIn(h, "あすす")
-	h.WaitEvents("ai.interrupted", 1)
+			// The AI finishes what it was saying and the session ends in the grace.
+			gs.limit.Store(1 << 40)
+			h.WaitEvents("ai.audio_completed", 1)
+			h.Send(h.PlaybackFinishedCmd(old))
+			h.WaitEvents("session.completed", 1)
+			require.Empty(t, h.Events("ai.interrupted"))
+		})
+	}
 }
 
 func TestBargeInDuringApology(t *testing.T) {

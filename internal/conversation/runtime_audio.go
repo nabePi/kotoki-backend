@@ -240,7 +240,7 @@ func (r *Runtime) pushFrame(voiced bool) {
 // user is speaking (a muted or stalled client), the loop injects the missing silence so the turn
 // can still end. Detector time is audio time, so the injected ms are those that passed.
 func (r *Runtime) checkStarvation(now time.Time) {
-	if !r.connected || r.status != session.StatusActive || r.turnState != StateUserSpeaking || r.lastFrameAt.IsZero() {
+	if !r.connected || !r.hearsUser() || r.turnState != StateUserSpeaking || r.lastFrameAt.IsZero() {
 		return
 	}
 	el := now.Sub(r.lastFrameAt)

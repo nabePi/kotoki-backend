@@ -275,7 +275,12 @@ func (r *Runtime) onSTTEvent(ev provider.STTEvent) {
 		}
 	case provider.STTError:
 		// §7.7.6, §7.11.4: the router already rotated the vendor's connection when it could, and
-		// there is no other vendor: an STT error ends the session PROVIDER_FAILURE.
+		// there is no other vendor: an STT error ends the session PROVIDER_FAILURE. A session that
+		// is already ending normally settles as it is: the words still owed fall to the grace.
+		if r.end != nil {
+			r.lg().Warn("stt error while the session is ending", "provider", string(ev.Provider))
+			return
+		}
 		r.sttFailed(ev)
 	case provider.STTClosed:
 		// The runtime stops reading a stream before it closes it (dropSTT, exit), so a CLOSED that
@@ -354,7 +359,7 @@ func (r *Runtime) resolveUserText(timedOut, report bool) {
 	t.sttFinalMS = -1
 	var sttFinal *int
 	if timedOut {
-		if report && r.stt != nil {
+		if report && r.stt != nil && r.end == nil { // a final cut short by the end is not the vendor's fault
 			r.stt.ReportFinalTimeout()
 		}
 	} else {
@@ -377,6 +382,10 @@ func (r *Runtime) resolveUserText(timedOut, report bool) {
 	r.emit("stt.final", evMeta{turn: t}, protocol.STTFinal{
 		Text: text, EndReason: t.endReason, STTFinalMS: t.sttFinalMS, Provider: r.sttProvider(),
 	})
+	if r.end != nil { // the session is ending: the words are kept, nobody answers them
+		r.completeUserOnly(t)
+		return
+	}
 	if isNonJapanese(text) { // the user did not speak Japanese: no reply, an APOLOGY, outside the failure streak
 		r.failNonJapanese()
 		return
@@ -417,7 +426,9 @@ func (r *Runtime) discardTurn() {
 	r.turn = nil
 	r.sync.ClearTurn()
 	r.sttAudioBase = r.sttAudioTotal()
-	r.commitBoundary("listening") // S-8 (c)
+	if r.end == nil {
+		r.commitBoundary("listening") // S-8 (c)
+	}
 	r.turnState = StateListening
 	r.pushRT()
 }

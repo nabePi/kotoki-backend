@@ -172,7 +172,8 @@ type sttRecv struct {
 //
 //	Task 19: sttFinal (STT_FINAL_TIMEOUT 1.5 s after the TURN_END commit; armed in endUserTurn)
 //	Task 21: reconnect (RECONNECT_WINDOW 30 s after a disconnect), takeBy (the budget of a takeover)
-//	Task 22: grace (expires_at + SESSION_EXPIRY_GRACE) and the flush deadline of finish()
+//	Task 22: grace (expires_at + SESSION_EXPIRY_GRACE, or the 2 s of a user end); the flush deadline of
+//	         the end (ioTimeout) is a clock-driven context of the flush goroutine, not a field
 //	Task 23: safepoint (DRAIN_SAFEPOINT_TIMEOUT)
 type deadlines struct {
 	startBy  time.Time   // STARTING must be ACTIVE by now + SESSION_START_TIMEOUT (§7.6.3 step 4)
@@ -188,6 +189,9 @@ type deadlines struct {
 	// takeBy is the budget of the loads of a takeover (§7.10.3 step 7, 3 s); a takeover that is
 	// not ready by then ends the session SERVER_ERROR.
 	takeBy time.Time
+	// grace is the hard deadline of an end in progress (§7.11.2): the turn that is still running is
+	// cut there. Zero while the session is not ending.
+	grace time.Time
 }
 
 // timedCancel is a context cancellation armed against the runtime clock (see cancelAt).
@@ -219,8 +223,8 @@ type timedCancel struct {
 //   - Barge-in and failures (Task 20): onGenFailed branches for REPLY/APOLOGY, bargeIn.
 //   - Disconnect, resume, takeover (Task 21): runtime_conn.go (detachConn, attach, takeover start),
 //     Manager.attachResume/takeover, replay.go.
-//   - End (Task 22): endSession/fatal/finish in runtime_end.go (grace, USER_SPEAKING/PROCESSING
-//     handling, expiry), panic recovery for generation goroutines.
+//   - End (Task 22): endWith/fatal/finish in runtime_end.go (grace, USER_SPEAKING/PROCESSING
+//     handling, expiry, the flush before the settlement).
 //   - Manager (Task 23): admission/drain around Manager.Attach and Runtime.drain.
 type Runtime struct {
 	d   Deps
@@ -288,8 +292,14 @@ type Runtime struct {
 	handled        uint64 // inputs handled, for Runtime.Barrier's quiescence check
 	pendingEnd     bool   // session.end received while STARTING (§7.11.3)
 	ending         bool
-	stopped        bool
-	startAborted   bool // the loop gave up on the startup (timeout) before it reported
+	// end is the normal end in progress (user end, expiry, reconnect timeout) or the tail of a fatal
+	// one (§7.11); nil while the session is not ending.
+	end     *endRun
+	stopped bool
+	// syncEnd: the loop is dying from a panic and ends the session on its own goroutine, so the
+	// flush of the end cannot be handed to another one (recoverLoop).
+	syncEnd      bool
+	startAborted bool // the loop gave up on the startup (timeout) before it reported
 	// discCounted: the seconds of the current disconnection are already with the persister
 	// (AddDisconnected is submitted once per episode, §7.10.1).
 	discCounted bool
@@ -469,6 +479,7 @@ func (r *Runtime) loop() {
 		case x := <-r.connExits:
 			r.onConnExit(x)
 		}
+		r.advanceEnd()
 	}
 }
 
@@ -483,6 +494,7 @@ func (r *Runtime) recoverLoop() {
 	r.log.Error("panic in the runtime loop", "error", pe.Error(), "stack", string(pe.stack))
 	func() {
 		defer func() { _ = recover() }() // the state may be what panicked: stopping matters more than ending cleanly
+		r.syncEnd = true
 		r.fatal(session.EndServerError, errs.CodeInternalError, pe)
 	}()
 	r.stopped = true
@@ -516,6 +528,7 @@ func (r *Runtime) drain() {
 		default:
 			return
 		}
+		r.advanceEnd()
 	}
 }
 
@@ -536,10 +549,10 @@ func (r *Runtime) onTick(now time.Time) {
 // checkDeadlines fires what is due, in priority order. A handler may arm or clear deadlines.
 func (r *Runtime) checkDeadlines(now time.Time) {
 	due := func(t time.Time) bool { return !t.IsZero() && !now.Before(t) }
-	switch {
-	case r.stopped:
+	if r.stopped {
 		return
-	case r.status == session.StatusStarting && due(r.dl.startBy):
+	}
+	if r.status == session.StatusStarting && due(r.dl.startBy) {
 		r.dl.startBy = time.Time{}
 		r.onStartTimeout()
 	}
@@ -547,26 +560,38 @@ func (r *Runtime) checkDeadlines(now time.Time) {
 		r.dl.takeBy = time.Time{}
 		r.onTakeoverTimeout()
 	}
-	if r.stopped || r.status != session.StatusActive {
+	switch {
+	case r.stopped:
 		return
-	}
-	if due(r.dl.expiry) {
-		r.dl.expiry = time.Time{}
-		r.onExpiry()
+	case r.status == session.StatusActive:
+		if due(r.dl.expiry) {
+			r.dl.expiry = time.Time{}
+			r.onExpiry()
+			return
+		}
+		if due(r.dl.reconnect) {
+			r.dl.reconnect = time.Time{}
+			r.onReconnectTimeout(now)
+			return
+		}
+		for len(r.dl.warn) > 0 && due(r.dl.warn[0]) {
+			off := r.dl.warnOff[0]
+			r.dl.warn, r.dl.warnOff = r.dl.warn[1:], r.dl.warnOff[1:]
+			r.onWarning(off)
+		}
+		if due(r.dl.balance) {
+			r.onBalanceTick(now)
+		}
+	case r.status == session.StatusEnding && r.end != nil && !r.end.started:
+		// The end is waiting for the turn it let finish (§7.11.2): no balance.tick and no warning (the
+		// session is not billed any more), only the hard deadline and the timers of that turn.
+		if due(r.dl.grace) {
+			r.dl.grace = time.Time{}
+			r.onGraceDeadline()
+			return
+		}
+	default:
 		return
-	}
-	if due(r.dl.reconnect) {
-		r.dl.reconnect = time.Time{}
-		r.onReconnectTimeout(now)
-		return
-	}
-	for len(r.dl.warn) > 0 && due(r.dl.warn[0]) {
-		off := r.dl.warnOff[0]
-		r.dl.warn, r.dl.warnOff = r.dl.warn[1:], r.dl.warnOff[1:]
-		r.onWarning(off)
-	}
-	if due(r.dl.balance) {
-		r.onBalanceTick(now)
 	}
 	if due(r.dl.playback) {
 		r.dl.playback = time.Time{}

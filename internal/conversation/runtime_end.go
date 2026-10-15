@@ -4,20 +4,41 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nabePi/kotoki-backend/internal/conversation/protocol"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"github.com/nabePi/kotoki-backend/internal/session"
 )
 
-// userEndGrace is the grace_seconds of session.ending for USER_ENDED (§7.11.3).
+// userEndGrace is the grace_seconds of session.ending for USER_ENDED (§7.11.3): the hard deadline
+// of the end, within which the final of a user who was speaking is waited for.
 const userEndGrace = 2
 
-// This file is the end of a session: the paths that make the runtime stop. Task 18 implements
-// the shape every later case needs (BeginEnding → settle → events → close → exit) with the
-// simplest turn handling; Task 22 refines endWith for the turn states of §7.11.2/§7.11.3
-// (USER_SPEAKING and PROCESSING, the grace deadline, AI_SPEAKING finishing its sentences) and
-// adds panic recovery for generation goroutines.
+// endReasonSessionEnding is stt.final.end_reason of a turn the end of the session cut (§7.4.5).
+const endReasonSessionEnding = "SESSION_ENDING"
+
+// This file is the end of a session (spec §7.11): the paths that make the runtime stop. A normal end
+// (endWith: user end, expiry, reconnect timeout) is ACTIVE → ENDING at once, which is where billing
+// stops, then the turn in progress is given what §7.11.2/§7.11.3 allow it: nothing (cut now), or
+// until the end of its audio, or until the final of the user's words, never past the grace
+// deadline. Once no turn is left, finish flushes the persister (≤ 5 s on the runtime clock) and
+// settles the session (Complete). A fatal end (fatal) cancels everything, fails the turn, goes
+// ENDING, flushes and settles with Fail (§7.11.4).
+
+// endRun is the end of the session in progress after BeginEnding. started is set once the tail (the
+// flush and the settlement) has begun: nothing of the turn engine acts after that.
+type endRun struct {
+	reason  session.EndReason
+	graceBy time.Time // the hard deadline of the turn still running (§7.11.2: expires_at + 10 s)
+	started bool
+}
+
+// hearsUser: the session is ACTIVE, or ending and still letting a turn finish. The detector, the
+// starvation watchdog and the turn engine only act then.
+func (r *Runtime) hearsUser() bool {
+	return r.status == session.StatusActive || (r.status == session.StatusEnding && r.end != nil && !r.end.started)
+}
 
 // onSessionEnd is session.end (§7.11.3): remembered while STARTING, ignored once ending.
 func (r *Runtime) onSessionEnd() {
@@ -32,14 +53,41 @@ func (r *Runtime) onSessionEnd() {
 }
 
 // userEnd ends the session at the user's request.
-func (r *Runtime) userEnd() { r.endWith(session.EndUserEnded, userEndGrace) }
+func (r *Runtime) userEnd() { r.endWith(session.EndUserEnded) }
 
 // onExpiry is `expires_at` reached (§7.11.2).
-func (r *Runtime) onExpiry() { r.endWith(session.EndDurationElapsed, 0) }
+func (r *Runtime) onExpiry() { r.endWith(session.EndDurationElapsed) }
 
-// endWith is ACTIVE → ENDING → COMPLETED for a normal end (user end, expiry): BeginEnding, the
-// session.ending event, the turn in progress closed, then finish.
-func (r *Runtime) endWith(reason session.EndReason, graceSeconds int) {
+// graceFor is the hard deadline of the end for reason.
+func (r *Runtime) graceFor(reason session.EndReason, now time.Time) time.Time {
+	switch reason {
+	case session.EndDurationElapsed:
+		return r.expiresAt.Add(r.d.Cfg.SessionExpiryGrace)
+	case session.EndUserEnded:
+		return now.Add(userEndGrace * time.Second)
+	}
+	return now
+}
+
+// graceSeconds is session.ending.grace_seconds: 2 for a user end, for an expiry 0 when nothing is
+// running and else what is left of the grace (§7.11.2), nothing for the rest.
+func (r *Runtime) graceSeconds(e *endRun, now time.Time) int {
+	switch e.reason {
+	case session.EndUserEnded:
+		return userEndGrace
+	case session.EndDurationElapsed:
+		if r.turn == nil {
+			return 0
+		}
+		return max(0, int((e.graceBy.Sub(now)+time.Second-1)/time.Second))
+	}
+	return 0
+}
+
+// endWith is ACTIVE → ENDING for a normal end (§7.11.2/§7.11.3): turns are no longer accepted,
+// BeginEnding (billing stops here, whatever the grace takes), session.ending, then the turn in
+// progress is handled by driveEnd and, when none is left, the session is finished.
+func (r *Runtime) endWith(reason session.EndReason) {
 	if r.ending || r.stopped {
 		return
 	}
@@ -53,52 +101,207 @@ func (r *Runtime) endWith(reason session.EndReason, graceSeconds int) {
 		r.endCallFailed("BeginEnding", err)
 		return
 	}
+	now := r.d.Clock.Now()
 	r.status = session.StatusEnding
 	r.moveState(SessionEnding)
+	e := &endRun{reason: reason, graceBy: r.graceFor(reason, now)}
+	r.end = e
 	r.emit("session.ending", evMeta{}, protocol.SessionEnding{
-		Stage: "ENDING", Reason: string(reason), RemainingSeconds: r.remainingSeconds(), GraceSeconds: graceSeconds,
+		Stage: "ENDING", Reason: string(reason), RemainingSeconds: r.remainingSeconds(), GraceSeconds: r.graceSeconds(e, now),
 	})
-	r.closeTurnForEnd()
+	r.pushRT()
+	r.dl.grace = e.graceBy
+	r.driveEnd(now)
+	r.advanceEnd()
+}
+
+// driveEnd gives the turn in progress what the end allows (§7.11.2 for an expiry, §7.11.3 for a
+// user end and every other normal end). An expiry lets the turn run to its natural end within the
+// grace: the user's speech until the detector ends it, the AI's sentences until they have played;
+// everything else is cut now.
+func (r *Runtime) driveEnd(now time.Time) {
+	t, g := r.turn, r.gen
+	if t == nil {
+		return // LISTENING: advanceEnd finishes
+	}
+	expiry := r.end.reason == session.EndDurationElapsed
+	switch {
+	case t.failed != nil || (g != nil && g.kind == GenApology):
+		// The APOLOGY of a FAILED turn: short and fixed, so an expiry lets it play out; any other end
+		// cuts it and the turn stays FAILED.
+		if !expiry {
+			r.cutTurnForEnd(now)
+		}
+	case t.waitingFinal:
+		r.dl.sttFinal = now.Add(r.d.STTFinalTimeout) // the grace deadline cuts it anyway if that comes first
+	case r.turnState == StateUserSpeaking:
+		if !expiry { // the detector goes on for an expiry; a user end finalizes at once
+			r.forceEndUser(now, min(r.d.STTFinalTimeout, r.end.graceBy.Sub(now)))
+		}
+	case g != nil && g.audioStarted && expiry:
+		// AI_SPEAKING: no new sentence, the parsed ones are still synthesized and played, and the turn
+		// closes when the playback is over (onPlaybackFinished / onPlaybackDeadline).
+		g.g.LLMCancel()
+	default:
+		r.cutTurnForEnd(now)
+	}
+}
+
+// onGraceDeadline is `expires_at + 10 s` (or the 2 s of a user end): whatever still runs is cut.
+func (r *Runtime) onGraceDeadline() {
+	r.cutTurnForEnd(r.d.Clock.Now())
+	r.advanceEnd()
+}
+
+// advanceEnd finishes the session once the end has no turn left to wait for. The loop calls it after
+// every input it handles, so the close of the last turn (playback over, final received, turn cut)
+// leads straight to the settlement.
+func (r *Runtime) advanceEnd() {
+	if e := r.end; e == nil || e.started || r.stopped || r.turn != nil {
+		return
+	}
 	r.finish()
 }
 
-// closeTurnForEnd closes the turn in progress when the session ends: the generation is cancelled
-// (ai.interrupted{SESSION_ENDING}) and the turn becomes INTERRUPTED with what was spoken.
-func (r *Runtime) closeTurnForEnd() {
+// forceEndUser ends the user turn that is being spoken because the session ends (stt.final
+// end_reason SESSION_ENDING): the STT is finalized and its final waited for up to wait (never
+// past the grace); with no time to wait the turn goes on with the text it has.
+func (r *Runtime) forceEndUser(now time.Time, wait time.Duration) {
+	t := r.turn
+	if t == nil || r.turnState != StateUserSpeaking {
+		return
+	}
+	t.endReason, t.endAt, t.userEndedAt, t.noMerge = endReasonSessionEnding, now, now, true
+	r.turnState = StateProcessing
+	t.waitingFinal = true
+	if wait > 0 && r.stt != nil {
+		err := r.stt.Finalize()
+		if err == nil {
+			t.commit = r.sttSt.Commit(CommitTurnEnd)
+			t.finalizeAt = now
+			r.dl.sttFinal = now.Add(wait)
+			r.pushTurn()
+			return
+		}
+		r.lg().Warn("stt finalize failed at the end of the session: using the running text", "error", err.Error())
+	}
+	r.resolveUserText(true, false)
+}
+
+// cutTurnForEnd closes the turn in progress now, with what it has (§7.11.2/§7.11.3 and the grace
+// deadline): the user's words are kept (COMPLETED, no answer), an AI turn that was heard is
+// INTERRUPTED with what was spoken, a turn that was never heard has no AI side, and a FAILED turn
+// stays FAILED. A running generation is cancelled with ai.interrupted{SESSION_ENDING}.
+func (r *Runtime) cutTurnForEnd(now time.Time) {
 	t, g := r.turn, r.gen
-	if t == nil || g == nil {
+	if t == nil {
 		return
 	}
-	if t.failed != nil { // the APOLOGY is cut by the end: the turn stays FAILED
-		r.interruptGeneration("SESSION_ENDING")
+	switch {
+	case t.failed != nil: // the APOLOGY is cut by the end: the turn stays FAILED
+		if g != nil {
+			r.interruptGeneration("SESSION_ENDING")
+		}
 		r.completeFailedTurn(false)
-		return
+	case g != nil:
+		heard := g.audioStarted
+		spokenCount := r.interruptGeneration("SESSION_ENDING")
+		switch {
+		case heard || t.initiator == initiatorAI: // the AI side was heard, or turn 0 has nothing else
+			r.interruptedForEnd(t, g, spokenCount)
+		default: // the reply never played: the turn is the user's words alone
+			r.completeUserOnly(t)
+		}
+	case t.waitingFinal: // the end is not waited for any more: the turn goes on with the running text
+		r.dl.sttFinal = time.Time{}
+		r.resolveUserText(true, false)
+	case r.turnState == StateUserSpeaking:
+		r.forceEndUser(now, 0)
 	}
-	spokenCount := r.interruptGeneration("SESSION_ENDING")
+}
+
+// interruptedForEnd finalizes the turn whose speaking the end cut: INTERRUPTED with the sentences
+// the user heard.
+func (r *Runtime) interruptedForEnd(t *turnRun, g *genRun, spokenCount int) {
 	spoken := g.spokenText(spokenCount)
 	r.finalize(t.id, r.finalOf(g, session.TurnInterrupted, spoken))
 	r.d.Metrics.Turn(string(session.TurnInterrupted))
 	text := g.g.Text()
-	r.emit("turn.completed", evMeta{turn: t}, protocol.TurnCompleted{
-		Status: string(session.TurnInterrupted), AssistantText: &text, AssistantSpokenText: &spoken,
-	})
+	tc := protocol.TurnCompleted{Status: string(session.TurnInterrupted), AssistantText: &text, AssistantSpokenText: &spoken}
+	if t.hasUser {
+		u := t.userText
+		tc.UserText = &u
+	}
+	r.emit("turn.completed", evMeta{turn: t}, tc)
 	r.turn = nil
 	r.sync.ClearTurn()
 }
 
-// finish is the common tail of a normal end (§7.11.2): the persister is flushed (≤ 5 s), the
-// session is settled (Complete), session.completed goes out, the redis state is closed and the
-// connection is closed 1000. The runtime stops after it.
-func (r *Runtime) finish() {
-	ctx, cancel := r.ioCtx()
-	defer cancel()
-	if err := r.persister.Flush(ctx); err != nil {
-		if errors.Is(err, session.ErrFenceLost) {
-			r.onFenceLost(err)
-			return
-		}
+// completeUserOnly finalizes a user turn the end left without an answer: COMPLETED with the user's
+// text and no assistant side (§7.11.2 PROCESSING / USER_SPEAKING).
+func (r *Runtime) completeUserOnly(t *turnRun) {
+	r.finalize(t.id, TurnFinal{CreatedAt: t.createdAt, Status: session.TurnCompleted, CompletedAt: r.d.Clock.Now()})
+	r.d.Metrics.Turn(string(session.TurnCompleted))
+	tc := protocol.TurnCompleted{Status: string(session.TurnCompleted)}
+	if t.hasUser {
+		u := t.userText
+		tc.UserText = &u
+	}
+	r.emit("turn.completed", evMeta{turn: t}, tc)
+	r.turn = nil
+	r.sync.ClearTurn()
+}
+
+// finish is the common tail of a normal end (§7.11.2): the persister is flushed (≤ 5 s on the
+// runtime clock), then the session is settled (Complete), session.completed goes out, the redis
+// state is closed and the connection is closed 1000. The runtime stops after it.
+func (r *Runtime) finish() { r.flushThen(r.completeAfterFlush) }
+
+// flushThen starts the tail of the end: nothing of the turn engine runs after this, the persister
+// is flushed on its own goroutine under a deadline of the runtime clock (so the loop is never
+// blocked and a test moves it with the fake clock), and next runs on the loop with the result.
+func (r *Runtime) flushThen(next func(error)) {
+	r.end.started = true
+	r.dl.grace, r.dl.sttFinal, r.dl.playback = time.Time{}, time.Time{}, time.Time{}
+	r.settleBargeIn(r.d.Clock.Now()) // the BARGE_IN row of a barge-in this close to the end is still written
+	if r.syncEnd {                   // the loop is dying (a panic): nobody is left to receive the result
+		ctx, cancel := r.ioCtx()
+		defer cancel()
+		next(r.persister.Flush(ctx))
+		return
+	}
+	ctx, cancel := r.ctxWithDeadline(r.ctx, ioTimeout)
+	r.goSafe("session end flush", func() {
+		err := r.persister.Flush(ctx)
+		cancel(nil)
+		r.post(r.ctx, func(*Runtime) { next(err) }) //nolint:contextcheck // the settlement runs on the loop under its own bound (ioCtx), as the other terminal calls do
+	})
+}
+
+// flushed reports what the flush before a settlement came to; false when the runtime must stop
+// instead (a lost fence). A flush that failed or timed out settles anyway: the session is over, the
+// settlement must not wait for a database that does not answer (§7.11.2: ≤ 5 s).
+func (r *Runtime) flushed(err error) bool {
+	if r.stopped {
+		return false
+	}
+	if errors.Is(err, session.ErrFenceLost) {
+		r.onFenceLost(err)
+		return false
+	}
+	if err != nil {
 		r.lg().Error("persister flush before settlement failed", "error", err.Error())
 	}
+	return true
+}
+
+// completeAfterFlush is the settlement of a normal end.
+func (r *Runtime) completeAfterFlush(flushErr error) {
+	if !r.flushed(flushErr) {
+		return
+	}
+	ctx, cancel := r.ioCtx()
+	defer cancel()
 	st, err := r.d.Session.Complete(ctx, r.sid, r.fence)
 	if err != nil {
 		r.endCallFailed("Complete", err)
@@ -147,9 +350,11 @@ func (r *Runtime) failStart(reason session.EndReason, code errs.Code, cause erro
 	r.stopped = true
 }
 
-// fatal ends an ACTIVE or ENDING session with a failure (§7.11.4): turns stop, the turn in
-// progress is FAILED, BeginEnding(reason), the persister is flushed (≤ 5 s), Fail(reason), then
-// session.failed and the error go out and the connection closes with the code of the error.
+// fatal ends an ACTIVE or ENDING session with a failure (§7.11.4): turns stop, everything is
+// cancelled, the turn in progress is FAILED, BeginEnding(reason), the persister is flushed (≤ 5 s),
+// Fail(reason), then session.failed and the error go out and the connection closes with the code of
+// the error. A fatal error while the tail of an end is already under way changes nothing: that end
+// settles the session.
 func (r *Runtime) fatal(reason session.EndReason, code errs.Code, cause error) {
 	if r.stopped {
 		return
@@ -158,11 +363,12 @@ func (r *Runtime) fatal(reason session.EndReason, code errs.Code, cause error) {
 		r.failStart(reason, code, cause)
 		return
 	}
-	if r.ending && r.status != session.StatusEnding {
+	if (r.ending && r.status != session.StatusEnding) || (r.end != nil && r.end.started) {
 		return
 	}
 	r.lg().Error("session failed", "reason", string(reason), "code", string(code), "error", cause.Error())
 	r.ending, r.accepting = true, false
+	r.dl.grace, r.dl.sttFinal, r.dl.playback = time.Time{}, time.Time{}, time.Time{}
 	r.cancelGeneration()
 	r.failTurnSilently()
 	ctx, cancel := r.ioCtx()
@@ -176,10 +382,20 @@ func (r *Runtime) fatal(reason session.EndReason, code errs.Code, cause error) {
 	}
 	r.status = session.StatusEnding
 	r.moveState(SessionEnding)
-	if err := r.persister.Flush(ctx); err != nil && errors.Is(err, session.ErrFenceLost) {
-		r.onFenceLost(err)
+	r.end = &endRun{reason: reason}
+	r.emit("session.ending", evMeta{}, protocol.SessionEnding{
+		Stage: "ENDING", Reason: string(reason), RemainingSeconds: r.remainingSeconds(),
+	})
+	r.flushThen(func(err error) { r.failAfterFlush(err, reason, code) })
+}
+
+// failAfterFlush is the settlement of a fatal end.
+func (r *Runtime) failAfterFlush(flushErr error, reason session.EndReason, code errs.Code) {
+	if !r.flushed(flushErr) {
 		return
 	}
+	ctx, cancel := r.ioCtx()
+	defer cancel()
 	st, err := r.d.Session.Fail(ctx, r.sid, r.fence, reason)
 	if err != nil {
 		r.endCallFailed("Fail", err)
@@ -235,7 +451,9 @@ func (r *Runtime) endCallFailed(call string, err error) {
 }
 
 // onFenceLost is §7.9.3: a newer owner has the session (ErrFenceLost, a refused owner key or a
-// TAKEOVER message). The runtime stops without writing anything else.
+// TAKEOVER message). The runtime stops without writing anything else. The client is told 4011
+// SESSION_TAKEN_OVER, or 4010 SESSION_NOT_RESUMABLE when the session is already in a terminal status
+// (the sweeper settled it): only that read is made.
 func (r *Runtime) onFenceLost(err error) {
 	if r.stopped {
 		return
@@ -246,10 +464,23 @@ func (r *Runtime) onFenceLost(err error) {
 	r.sync.Abort()
 	r.cancelGeneration()
 	if r.cs != nil {
-		r.emitError(errs.CodeSessionTakenOver, nil, nil)
-		r.closeConn(protocol.CloseCode(errs.CodeSessionTakenOver), string(errs.CodeSessionTakenOver))
+		code := errs.CodeSessionTakenOver
+		if !errors.Is(err, errTakenOver) && r.sessionIsTerminal() {
+			code = errs.CodeSessionNotResumable
+		}
+		r.emitError(code, nil, nil)
+		r.closeConn(protocol.CloseCode(code), string(code))
 	}
 	r.stopped = true
+}
+
+// sessionIsTerminal reads the status of the session: true when it is COMPLETED, FAILED, CANCELLED or
+// ABANDONED. A read that fails says nothing, and the runtime then assumes a takeover.
+func (r *Runtime) sessionIsTerminal() bool {
+	ctx, cancel := r.ioCtx()
+	defer cancel()
+	rec, err := r.d.Session.GetForAttach(ctx, r.sid)
+	return err == nil && rec.Status.Terminal()
 }
 
 // onFatalSignal is a SERVER_ERROR reported from another goroutine: the persister (stuck for 30 s,

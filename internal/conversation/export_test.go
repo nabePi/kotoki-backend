@@ -139,12 +139,6 @@ func (m *Metrics) LLMContentFilteredTotal(provider string) float64 {
 	return promtest.ToFloat64(m.llmContentFilter.WithLabelValues(provider))
 }
 
-// SetAccepting sets acceptingTurns from outside the loop (the loop runs it): the state of a
-// session whose expiry grace began (Task 22 does this itself).
-func (r *Runtime) SetAccepting(ctx context.Context, on bool) error {
-	return r.call(ctx, func(r *Runtime) { r.accepting = on })
-}
-
 // GenerationExitSamples is how many generation_goroutine_exit_seconds observations were made.
 func (m *Metrics) GenerationExitSamples() uint64 {
 	var out dto.Metric
@@ -179,15 +173,13 @@ func (r *Runtime) AdaptiveForTest(ctx context.Context) (learner.AdaptiveDifficul
 	return ad, err
 }
 
-// SetEnding makes the runtime look like a session whose end has begun (ENDING, no turns), without
-// ending it: the state a resume must refuse (§7.10.2 step 3). Task 22 reaches it for real while the
-// expiry grace of an AI that is still speaking runs.
-func (r *Runtime) SetEnding(ctx context.Context) error {
-	return r.call(ctx, func(r *Runtime) { r.ending, r.accepting, r.status = true, false, session.StatusEnding })
-}
-
 // HandleTakeover is what the TAKEOVER subscriber does with a message, called synchronously.
 func HandleTakeover(m *Manager, t rtstate.Takeover) { m.onTakeover(t) }
 
 // PersisterPending is how many jobs wait behind the one the persister is writing.
 func (r *Runtime) PersisterPending() int { return r.persister.Pending() }
+
+// PanicOnLoop makes the loop panic: the panic of Runtime.loop itself (§7.7.2) that recoverLoop ends.
+func (r *Runtime) PanicOnLoop(ctx context.Context) error {
+	return r.call(ctx, func(*Runtime) { panic("scripted panic in the runtime loop") })
+}

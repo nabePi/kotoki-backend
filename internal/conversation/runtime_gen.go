@@ -362,7 +362,17 @@ func (r *Runtime) onPlaybackFinished(p protocol.ClientPlaybackFinished) {
 	if r.turnState != StateAISpeaking || g == nil || !g.audioDone || p.Generation != g.number {
 		return
 	}
-	r.closeTurn(session.TurnCompleted)
+	r.closeTurn(r.playedOutStatus(g))
+}
+
+// playedOutStatus is the status of a turn whose audio played to the end: COMPLETED, except that a
+// turn the end of the session cut short (the LLM was stopped at expires_at, §7.11.2) is
+// INTERRUPTED. A TRUNCATED answer of a session that goes on is COMPLETED (S-7).
+func (r *Runtime) playedOutStatus(g *genRun) session.TurnStatus {
+	if r.end != nil && !g.audio.LLMFinished {
+		return session.TurnInterrupted
+	}
+	return session.TurnCompleted
 }
 
 // onPlaybackDeadline is row 15 by timeout: no playback_finished came (playback_finished_missing).
@@ -371,7 +381,7 @@ func (r *Runtime) onPlaybackDeadline() {
 		return
 	}
 	r.d.Metrics.PlaybackFinishedMissing()
-	r.closeTurn(session.TurnCompleted)
+	r.closeTurn(r.playedOutStatus(r.gen))
 }
 
 // closeTurn finishes the turn after its audio played (row 15): persist, turn.completed, S-8 (c),
@@ -382,7 +392,7 @@ func (r *Runtime) closeTurn(status session.TurnStatus) {
 		return
 	}
 	if t.failed != nil { // the APOLOGY of a FAILED turn ended: the turn stays FAILED
-		r.completeFailedTurn(true)
+		r.completeFailedTurn(r.end == nil)
 		return
 	}
 	// assistant_spoken_text: the sentences whose last frame the writer has written. A fragment the
@@ -405,9 +415,11 @@ func (r *Runtime) closeTurn(status session.TurnStatus) {
 	r.dl.playback = time.Time{}
 	r.sync.ClearTurn()
 	r.sttAudioBase = r.sttAudioTotal()
-	r.commitBoundary("listening") // S-8 (c)
 	r.turnState = StateListening
-	r.postTurn(t, status, text, spoken)
+	if r.end == nil { // an ending session has nothing left to listen for or to learn from
+		r.commitBoundary("listening") // S-8 (c)
+		r.postTurn(t, status, text, spoken)
+	}
 	r.pushRT()
 }
 
