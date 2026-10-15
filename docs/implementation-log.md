@@ -946,3 +946,7 @@ Tanggal: 2026-10-14
 - `errors.go`: `Spec{Fatal, Close, Retryable}`, `Catalog` (tabel §7.4.8), `CloseCode`, `NewError(code, requestID, ref, details, ...ErrorOption)` + `WithRetryable`. `request_id` = `ref` bila ada; pesan dari `errs.Messages`. `SESSION_STATE_CONFLICT.Retryable=false` di katalog, pemanggil menimpa `WithRetryable(true)` hanya untuk status `STARTING`.
 - `Catalog[code].Fatal` adalah penentu durable-nya event `error` (durable hanya bila non-fatal, §7.4.3); `IsDurable("error")` tetap false.
 - Golden `testdata/api/ws/frames/{upstream_audio,downstream_audio}.hex`. Tes: `TestBinaryFrameGolden`, `TestUpstreamValidation`, `TestDownstreamValidation`, `TestCatalog`, `TestNewErrorFormat`; lint bersih.
+
+## M5-T5 — Audio: Opus, framer, PCM, WAV (cgo)
+- `internal/conversation/audio/{opus,framer,pcm,wav}.go` — satu-satunya paket cgo M5 (`gopkg.in/hraban/opus.v2`, libopus 1.6.1). `Decoder` 16 kHz mono (`Decode` hanya valid 320 sampel selain itu `ErrBadFrame`, `DecodePLC` 320 sampel), `Encoder` (`AppVoIP`, DTX/FEC off, panjang blok `sampleRate/50` atau `ErrBlockSize`), `Framer` (menahan byte ganjil, `Flush` pad nol), `Int16ToBytes/BytesToInt16/Decimate48to16/Resample`, `ReadWAV` (hanya PCM16 mono), `OutFrame`.
+- Tes: `TestEncodeDecodeRoundTrip`, `TestDecodeInvalid`, `TestPLC`, `TestEncoderBlockSizeError`, `TestFramerCarriesOddByte`, `TestFramerFlushPads`, `TestDecimate`, `TestResampleAndBytes`, `TestReadWAV`; `-race` hijau, `make lint` dan `make arch-check` hijau (aturan depguard/arch untuk paket cgo sudah ada, tidak diubah).
