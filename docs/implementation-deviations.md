@@ -284,3 +284,13 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Metrik:** `kotoki_realtime_drain_duration_seconds` diamati pada drain pertama yang selesai (clock `Deps.Clock`); `draining` gauge di-set 1 saat mulai.
 - **Capacity test memakai `Manager.HoldSlots` (export_test)** untuk melintasi 95/100/120 dengan batas asli tanpa 120 runtime.
 - **Masalah terbuka:** hard stop (`Close`) setelah `Drain` yang kehabisan `ctx` tetap meninggalkan sesi ENDING/ACTIVE untuk sweeper; `cmd/realtime` (T26) harus memanggil `StartSubscriber`, `PodInfoLoop`, `Drain` (SIGTERM) lalu `Close`; header/`Set-Cookie` HTTP 503 dan penghitungan `rejected_draining` di gerbang adalah T24.
+
+## M5-T24 — `wsgateway`: handshake, adapter Conn, redaksi ticket
+- **Lokasi limiter.** Tugas menyebut `internal/ratelimit`; paket sebenarnya `internal/platform/ratelimit` (`Limiter`, `Policy`, `Get`, `Catalog`). Handler memakainya apa adanya.
+- **Ticket cacat tidak sampai ke store.** Nilai `ticket` yang kosong atau bukan 43 karakter base64url dijawab 4001 `TICKET_INVALID` tanpa memanggil `Tickets.Consume` (ticket asli tak mungkin berbentuk itu; menghemat satu round-trip Redis). Hasil di klien sama dengan ticket tak dikenal.
+- **Kolom tambahan `Handler`.** Selain field plan: `TrustedProxies` (subjek `ws_connect_ip` lewat `httpapi.ClientIP`, sama dengan limiter REST), `IDs` dan `Clock` (opsional; default UUIDv7 dan jam sistem) untuk `event_id`/`request_id`/`ts` event error setelah upgrade. `Log` dan `Metrics` boleh nil (log dibuang, `Metrics` nil-safe).
+- **Limiter yang error = fail-open** (WARN), mengikuti `httpapi.RateLimit` dan D-NEW-13-7; spec §7.3.1 tidak menyebut kasus ini. Redis down tetap ditolak di langkah 5b oleh ticket store, bukan oleh limiter.
+- **`Set-Cookie` ditulis sebagai string persis spec** (`Max-Age=0` sebelum `Path`), bukan lewat `http.SetCookie` yang mengurutkan atribut berbeda.
+- **Metrik gateway:** `rejected_unavailable` juga dihitung gateway pada langkah 5b (Manager menghitungnya untuk kegagalan baca sesi); `rejected_ratelimit` mencakup langkah 2 dan 6; `ws_close_total` dihitung untuk close yang dikirim gateway (4001/4503/4029).
+- **Penutupan setelah `Attach`:** handler memanggil `CloseNow` sesudah `Attach` kembali sebagai pengaman (idempoten); tidak ada span di sini, tracing (`ws.connection`) tetap bagian T25.
+- **Masalah terbuka:** `OriginPatterns` memakai host dari `WS_ALLOWED_ORIGINS` (dicek ulang oleh library setelah pemeriksaan exact langkah 1); pola dengan karakter glob di allowlist akan diperlakukan sebagai pola oleh library, tetapi langkah 1 tetap exact sehingga tidak melonggarkan apa pun. `cmd/realtime` (T25) mengisi `Origins/AllowEmptyOrigin/TrustedProxies` dan memanggil `Mgr.StartSubscriber/PodInfoLoop/Drain/Close`.
