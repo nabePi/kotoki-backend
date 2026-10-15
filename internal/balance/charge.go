@@ -30,10 +30,7 @@ func ComputeCharge(reserved int64, startedAt, billableEnd time.Time, disconnecte
 		if activeMs < 60_000 {
 			return 0
 		}
-		charged -= 30
-		if charged < 0 {
-			charged = 0
-		}
+		charged -= 30 // activeMs ≥ 60 s here, so charged ≥ 60 and never goes negative
 	}
 	if charged > reserved {
 		charged = reserved
