@@ -2,25 +2,26 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Membangun lapisan provider (port, error taxonomy, router dengan breaker/fallback/replay STT/Generation, metering, fake provider lengkap + fault injection, `providertest`) dan paket `internal/prompt` (Render, token estimator, budget, parser kalimat + tag ekspresi, template v1) sehingga M5 dapat menjalankan percakapan end-to-end dengan `PROVIDER_MODE=fake`.
-**Architecture:** `internal/provider` (paket fitur) hanya mengimpor stdlib, `uuid`, `x/sync/semaphore`, `prometheus`, `platform/clock`; sub-paket `pricing`, `httpx`, `fake`, `providertest` mengimpor `provider` (tidak pernah sebaliknya); data luar masuk lewat port `ExpressionCatalog` dan `PriceTable` yang di-inject `cmd/*` lewat `RouterDeps`. `internal/prompt` tidak mengimpor paket fitur lain. Adapter vendor nyata BUKAN bagian milestone ini (M9); `providertest` ditulis agar M9 memakainya apa adanya.
-**Tech Stack:** Go 1.25, `golang.org/x/sync/semaphore`, `prometheus/client_golang`, `google/uuid`, `text/template`, `gopkg.in/yaml.v3` (D-003, hanya `provider/pricing`), `testify`, `go-redis/v9` (hanya `internal/redisstore/fakefaults.go`), testcontainers-redis (hanya integration), `caarlos0/env/v11` (tag struct; test parse).
-**Spec:** docs/superpowers/specs/2026-10-12-kotoki-backend-design.md — Bab 8 kecuali §8.4.1–8.4.11 & §8.10 (M9), §6.6.2–6.6.3 (`ResolveTTSParams`), §6.8 (prompt), §7.7.3 (parser), §7.8.1/7.8.3 (`EstimateTokens`, `Budget`), §14.6/14.8 (coverage), D-040–D-043, D-080, D-081, S-7, S-9, S-12, S-13.
+**Goal:** Membangun lapisan provider (port, error taxonomy, router satu vendor aktif per kapabilitas (dari flag `*_ENABLED`, tanpa fallback vendor STT/LLM, D-017) dengan breaker, rotasi koneksi STT vendor sama, Generation (LLM tanpa fallback; TTS fallback opsional per karakter), metering, fake provider lengkap + fault injection, `providertest`) dan paket `internal/prompt` (Render, token estimator, budget, parser kalimat tanpa tag, template v1) sehingga M5 dapat menjalankan percakapan end-to-end dengan `PROVIDER_MODE=fake`.
+**Architecture:** `internal/provider` (paket fitur) hanya mengimpor stdlib, `uuid`, `x/sync/semaphore`, `prometheus`, `platform/clock`; sub-paket `pricing`, `httpx`, `fake`, `providertest` mengimpor `provider` (tidak pernah sebaliknya); data luar masuk lewat port `PriceTable` yang di-inject `cmd/*` lewat `RouterDeps`. `internal/prompt` tidak mengimpor paket fitur lain. Adapter vendor nyata BUKAN bagian milestone ini (M9); `providertest` ditulis agar M9 memakainya apa adanya.
+**Tech Stack:** Go 1.27, `golang.org/x/sync/semaphore`, `prometheus/client_golang`, `google/uuid`, `text/template`, `gopkg.in/yaml.v3` (D-003, hanya `provider/pricing`), `testify`, `go-redis/v9` (hanya `internal/redisstore/fakefaults.go`), testcontainers-redis (hanya integration), `caarlos0/env/v11` (tag struct; test parse).
+**Spec:** docs/superpowers/specs/2026-10-12-kotoki-backend-design.md — Bab 8 (router §8.5, fake §8.9) kecuali §8.4.1–8.4.11 & §8.10 (M9), §6.8 (prompt), §7.7.3 (parser), §7.8.1/7.8.3 (`EstimateTokens`, `Budget`), §14.6/14.8 (coverage), §8.4.12, §8.4.14 (Cartesia, kontrak saja; adapter di M9), D-014, D-015, D-017, D-040–D-043, D-080 (bagian rotation buffer), D-081, S-7, S-9, S-12, S-13.
 **Master plan:** docs/superpowers/plans/2026-10-13-kotoki-backend-00-master.md (Global Constraints di sana berlaku untuk semua task)
 **Depends on:** M1 saja — `clock.Clock` (`Now() time.Time`) dan `clock.NewFake(t0)` dengan method `Advance(d time.Duration)` (kontrak M1, dijamin tersedia), paket provider TIDAK memakai `errs` (error provider = `*provider.Error`; konstanta M1 bernama `errs.Code<Pascal>` tidak relevan di milestone ini). Tidak bergantung pada M2/M3 (paralel diizinkan).
 
 ## Global Constraints
 
 - Master Global Constraints berlaku.
-- `provider.Name`: `ELEVENLABS DEEPGRAM OPENAI GEMINI AZURE FAKE_PRIMARY FAKE_FALLBACK NONE`; `Capability`: `STT LLM TTS EVALUATION EMBEDDING PRONUNCIATION`; `ProfileName`: `PREMIUM STANDARD` — semua UPPERCASE di Go, JSON, label metrik, kunci fault (D-040, §8.2.1).
+- `provider.Name`: `ELEVENLABS CARTESIA OPENAI DEEPSEEK FAKE_PRIMARY FAKE_FALLBACK` (D-017; Deepgram, Gemini, OpenAI TTS tidak ada; `FAKE_FALLBACK` hanya slot `voice.fallback` TTS); `Capability`: `STT LLM TTS EVALUATION EMBEDDING`; semua nilai enum UPPERCASE di Go, JSON, label metrik, kunci fault (D-040, §8.2.1).
 - Paket `internal/provider` DILARANG mengimpor `net/http`, `coder/websocket`, `go-redis`, paket fitur lain (termasuk `content`, `prompt`), maupun sub-paketnya; `fake` tidak mengimpor go-redis maupun `httpx` (§8.1 butir 1, 5). `time.Now()` dilarang di `internal/provider/**` selain adapter vendor (forbidigo): pakai `clock.Clock`.
-- Audio: STT input PCM16LE mono **16000 Hz** (`STTSampleRate`), TTS output PCM16LE mono **24000 Hz** (`TTSSampleRate`), pronunciation WAV 16 kHz; panjang PCM selalu genap (§8.2).
-- Timeout default: STT connect 3s, STT final 1500ms, LLM first token 2s, LLM total 15s, TTS first audio 1500ms, TTS sentence total 10s, Evaluation 60s, Embedding 5s, Pronunciation 15s, `PROVIDER_SESSION_GRACE` 15s (§8.6.1).
+- Audio: STT input PCM16LE mono **16000 Hz** (`STTSampleRate`), TTS output PCM16LE mono **24000 Hz** (`TTSSampleRate`); panjang PCM selalu genap (§8.2).
+- Timeout default: STT connect 3s, STT final 1500ms, LLM first token 2s, LLM total 15s, TTS first audio 1500ms, TTS sentence total 10s, Evaluation 60s, Embedding 5s, `PROVIDER_SESSION_GRACE` 15s (§8.6.1).
 - Breaker per (vendor, kapabilitas) per proses: threshold 5, window 30s, open 20s, half-open probes 1 (D-043, §8.5.4).
-- Konkurensi default per pod: STT 125 (tunggu 0 ms), LLM 60, TTS 80 (tunggu 100 ms realtime), Evaluation 8, Embedding 16, Pronunciation 8, LLM worker 8 (tunggu 30 s async) (§8.5.6).
-- Retry async: GenerateJSON 2+2 attempt (backoff 1s, 4s ±20% jitter), CompleteText worker 2+2 / realtime 1+1, Embedding 3 (500ms, 2s), Pronunciation 2 (2s), `Evaluation().Primary()/Fallback()` 1 attempt/panggilan; `Retry-After` dihormati ≤ 30s (§8.6.2).
-- Ring buffer PCM STT 15 s = 480.000 byte; replay dalam potongan 100 ms = 3.200 byte (§8.5.8).
-- `EstimateTokens(s) = ceil(1.1 × rune ≥ U+3000 + rune lain / 3.5)`; `ItemOverheadTokens = 4`; `DefaultBudget` total input 6.950 (§7.8.1). Parser: `MaxRunes 60`, `SoftMin 20`, terminator `。！？!?\n`, closer `」』）)"'”’】` (§7.7.3).
+- TTS per karakter (D-015): vendor/model/voice dipilih router dari `VoiceSelection{Primary, Fallback*}` (snapshot karakter), BUKAN dari env global; tidak ada `PROVIDER_TTS_PRIMARY/_FALLBACK`; `RouterConfig` memuat sakelar `*_ENABLED` per vendor/kapabilitas + model per vendor (D-017; tepat satu STT, tepat satu LLM, minimal satu TTS) dan tidak ada selection primary/fallback STT/LLM (D-016, tanpa tier; `TextRequest.Model` override opsional).
+- Konkurensi default per pod (hanya untuk (vendor, kapabilitas) yang enabled): STT 125 (tunggu 0 ms), LLM 60, TTS 80 per vendor TTS enabled (`ELEVENLABS`, `CARTESIA`; tunggu 100 ms realtime), Evaluation 8, Embedding 16, LLM worker 8 (tunggu 30 s async) (§8.5.6).
+- Retry async (selalu vendor aktif yang sama, tanpa fallback vendor): GenerateJSON 3 attempt (backoff 1s, 4s ±20% jitter), CompleteText worker 3 / realtime 1, Embedding 3 (500ms, 2s), `Evaluation()` 1 attempt/panggilan; maks 2 panggilan LLM logis per delivery (utama + repair JSON); `Retry-After` dihormati ≤ 30s (§8.6.2).
+- Rotation buffer PCM STT 15 s = 480.000 byte; replay rotasi koneksi vendor sama dalam potongan 100 ms = 3.200 byte (§8.5.8).
+- `EstimateTokens(s) = ceil(1.1 × rune ≥ U+3000 + rune lain / 3.5)`; `ItemOverheadTokens = 4`; `DefaultBudget` total input 6.450 (§7.8.1). Parser: `MaxRunes 60`, `SoftMin 20`, terminator `。！？!?\n`, closer `」』）)"'”’】` (§7.7.3).
 - Template prompt: `text/template`, `missingkey=error`, hanya `{{.FieldName}}`; hasil render CONVERSATION fixture maksimum ≤ 12.000 karakter; `users.full_name`/email MUST NOT ada di struct data (S-4).
 - Tidak ada teks user/AI/prompt/audio di log, label metrik, maupun pesan `Error.Message` yang dibuat router (§8.4.0, §13.7.1).
 - Sub-paket adapter yang dibangun M9 memakai `providertest` ini tanpa perubahan signature (kontrak M9).
@@ -29,39 +30,38 @@
 
 (Dari master Review Focus #5 bagian provider + kondisi tersirat; tiap butir punya test di task pemilik.)
 
-1. **LLM diblokir content filter / provider mengembalikan hasil tak layak (master #5, sisi provider):** `CONTENT_FILTERED` (`DONE` maupun `ERROR`) tidak memicu fallback, tidak dihitung breaker, tidak membuat `RESET` — `TestGenerationContentFilteredNoFallback` (Task 16); taksonomi `FallbackEligible`/`CountsForBreaker` (Task 1, 4).
-2. **Fallback hanya sebelum audio terkirim (D-042):** setelah `MarkAudioSent` tidak ada `RESET`, tidak ada pergantian `TTSEpoch`, error → chunk/`ERROR` apa adanya; vendor TTS dipin per generation — `TestGenerationNoFallbackAfterAudioSent` (Task 16), `TestTTSNoEpochSwitchAfterAudioSent`, `TestTTSVendorPinnedPerGeneration` (Task 17).
-3. **`DONE{TRUNCATED}` bukan error (S-7):** deadline LLM total/sesi **sesudah** `MarkAudioSent` → `DONE{TRUNCATED}` + usage, deadline sesi tidak dihitung breaker; **sebelum** audio → fallback/`ERROR` — `TestGenerationTruncatedAfterAudioSent`, `TestGenerationDeadlineBeforeAudioFallsBack` (Task 16).
+1. **LLM diblokir content filter / provider mengembalikan hasil tak layak (master #5, sisi provider):** `CONTENT_FILTERED` (`DONE` maupun `ERROR`) diteruskan apa adanya (generation FAILED di runtime), tidak dihitung breaker, tanpa pindah vendor — `TestGenerationContentFilteredFailsNoBreaker` (Task 15); taksonomi `CountsForBreaker` (Task 1, 4).
+2. **Fallback TTS per karakter hanya sebelum audio terkirim (D-042, D-017):** LLM tidak punya fallback/`RESET` (`TestGenerationNoResetEventExists`, Task 15); setelah `MarkAudioSent` tidak ada pergantian `TTSEpoch`, error → chunk apa adanya; voice (vendor+model+voice_id) TTS dipin per generation, fallback hanya ke `voice.fallback` karakter dan tanpa itu → `ERROR` (generation FAILED → APOLOGY) — `TestTTSNoEpochSwitchAfterAudioSent`, `TestTTSVendorPinnedPerGeneration` (Task 16).
+3. **`DONE{TRUNCATED}` bukan error (S-7):** deadline LLM total/sesi **sesudah** `MarkAudioSent` → `DONE{TRUNCATED}` + usage, deadline sesi tidak dihitung breaker; **sebelum** audio → `ERROR` (tanpa pindah vendor) — `TestGenerationTruncatedAfterAudioSent`, `TestGenerationDeadlineBeforeAudioIsError` (Task 15).
 4. **Breaker tidak "menempel" salah:** semua 9 transisi tabel §8.5.4, kegagalan `CANCELLED`/`CONTENT_FILTERED`/`local_concurrency` diabaikan, probe half-open dilepas bila cancel — `TestBreakerStateMachine` (Task 4).
-5. **STT tidak kehilangan/menggandakan audio saat switch & sticky lintas resume:** offset logis, `ReplayFromMs`/`ReplayTruncated`, FINAL lama tidak diteruskan setelah switch, `StartWith=FALLBACK` — `TestResilientSTTSwitchReplay*`, `TestOpenSTTStartWithFallback` (Task 18); fault injection tidak "menempel" saat Redis hilang (> 10 s) — `TestPollerClearsAfterStaleWindow` (Task 9).
+5. **STT tidak kehilangan/menggandakan audio saat rotasi koneksi vendor sama:** offset logis, replay dari FINAL terakhir/rotation buffer, FINAL lama tidak diteruskan setelah rotasi, tanpa pindah vendor — `TestRotation*`, `TestVendorErrorForwardedNoSwitch` (Task 17); fault injection tidak "menempel" saat Redis hilang (> 10 s) — `TestPollerClearsAfterStaleWindow` (Task 8).
 
 ## File Structure
 
 ```text
 internal/provider/
-  provider.go errors.go stt.go llm.go tts.go evaluation.go embedding.go pronunciation.go   # tipe & port (T1)
+  provider.go errors.go stt.go llm.go tts.go evaluation.go embedding.go   # tipe & port (T1)
   text.go pcm.go            # NormalizeJA; WAV/resample/RMS/pcmRing (T2)
   config.go                 # RouterConfig + Validate (T3)
   breaker.go                # Breaker/Ticket (T4)
   semaphore.go health.go    # semaphoreSlot; HealthTracker (T5)
   metrics.go                # Metrics + ObserveLLMFirstSentence (T6)
-  tts_params.go             # ExpressionCatalog + ResolveTTSParams (T7)
-  pricer.go                 # PriceTable port (T8)
-  router.go                 # RealtimeRouter/AsyncRouter interface + Router/RouterDeps/NewRouter (T15)
-  generation.go             # Generation + fallback D-042 (T16–17)
-  resilient_stt.go          # ResilientSTTSession (T18)
-  async.go                  # doAsync, GenerateJSON, CompleteText, Embed, AssessPronunciation, EvaluationRoute (T19)
+  pricer.go                 # PriceTable port (T7)
+  router.go                 # RealtimeRouter/AsyncRouter interface + Router/RouterDeps/NewRouter (T14)
+  generation.go             # Generation: LLM satu vendor (T15), TTS + fallback per karakter D-042 (T16)
+  stt_session.go            # rotatingSTT / RoutedSTTSession (T17)
+  async.go                  # doAsync, GenerateJSON, CompleteText, Embed, Evaluation() (T18)
   importrules_test.go       # guard §8.1 (T1)
-  pricing/                  # Table + prices.yaml (T8)
-  fake/                     # config.go faults.go llm.go tts.go stt.go eval.go embedding.go pronunciation.go fixtures/ (T9–13)
-  providertest/             # suite per port (T10–13)
-  httpx/                    # NewClient, ClassifyHTTP, SSEReader (T20)
-internal/redisstore/fakefaults.go                  # FakeFaults (T14)
+  pricing/                  # Table + prices.yaml (T7)
+  fake/                     # config.go faults.go llm.go tts.go stt.go eval.go embedding.go fixtures/ (T8–12)
+  providertest/             # suite per port (T9–12)
+  httpx/                    # NewClient, ClassifyHTTP, SSEReader (T19)
+internal/redisstore/fakefaults.go                  # FakeFaults (T13)
 internal/prompt/
-  tokens.go budget.go learner_context.go data.go text.go   # T21
-  render.go funcs.go fixtures.go                            # T22
-  core.go phrases.go templates_v1.go                        # T23
-  sentence_parser.go                                        # T24–25
+  tokens.go budget.go learner_context.go data.go text.go   # T20
+  render.go funcs.go fixtures.go                            # T21
+  core.go phrases.go templates_v1.go                        # T22
+  sentence_parser.go                                        # T23
 ```
 
 Konvensi test: test yang butuh `fake` memakai paket eksternal `provider_test` (menghindari siklus impor); test unit internal (breaker, semaphore, health, pcm) memakai `package provider`. Timer ctx (`context.WithTimeout`) dengan durasi ≤ 50 ms boleh dipakai di test timeout; backoff & jitter diinjeksi (`RouterDeps.Sleep`, `RouterDeps.Jitter`) sehingga tidak ada `time.Sleep` di test.
@@ -71,11 +71,11 @@ Konvensi test: test yang butuh `fake` memakai paket eksternal `provider_test` (m
 ### Task 1: Tipe umum, port, error taxonomy, guard aturan impor
 
 **Files:**
-- Create: `internal/provider/provider.go`, `errors.go`, `stt.go`, `llm.go`, `tts.go`, `evaluation.go`, `embedding.go`, `pronunciation.go`
+- Create: `internal/provider/provider.go`, `errors.go`, `stt.go`, `llm.go`, `tts.go`, `evaluation.go`, `embedding.go`
 - Test: `internal/provider/errors_test.go`, `internal/provider/importrules_test.go`
 
 **Interfaces:**
-- Produces: seluruh tipe & interface §8.2.1–8.2.7 persis (`Name`, `Capability`, `ProfileName`, `Message`, `TokenUsage`, `STTSessionConfig`+`STTRole`, `STTProvider`, `STTSession`, `STTEvent`+tipe event, `STTWord`, `STTStats`, `ErrSessionClosed`, `LLMRequest/Provider/Stream/Event`, `FinishReason` (+`FinishTruncated`), `TTSRequest`, `VoiceSelection`, `VoiceBinding`, `ResolvedTTSParams`, `TTSProvider/Stream/Chunk/Usage`, `StructuredRequest/Result`, `EvaluationProvider`, `EmbeddingRequest/Result/Provider`, `Pronunciation*`, `ErrPronunciationDisabled`), konstanta `STTSampleRate=16000`, `TTSSampleRate=24000`, `PronunciationSampleRate=16000`; `ErrorKind` (8 nilai §8.3), `*Error`, `KindOf`, `IsRetryable`, `FallbackEligible`, `CountsForBreaker`, `ClassifyHTTPStatus(status int) ErrorKind`, `var ErrAllProvidersUnavailable` (nama dari plan: `*Error{Kind: UNAVAILABLE, VendorCode: "all_circuits_open"}` dibuat lewat `newAllCircuitsOpen(c Capability) *Error`).
+- Produces: seluruh tipe & interface §8.2.1–8.2.7 persis (`Name` (`ELEVENLABS CARTESIA OPENAI DEEPSEEK FAKE_PRIMARY FAKE_FALLBACK`), `Capability`, `Message`, `TokenUsage`, `STTSessionConfig`+`STTRole`, `STTProvider`, `STTSession`, `STTEvent`+tipe event, `STTWord`, `STTStats`, `ErrSessionClosed`, `LLMRequest/Provider/Stream/Event`, `FinishReason` (+`FinishTruncated`), `TTSRequest` (tanpa ekspresi, D-014; D-015: `Text, Language, Voice VoiceSelection, SpeakingRate, PreviousText, RequestID` dari pemanggil + `VoiceID, Model` diisi router dari `VoiceRef` aktif), `VoiceSelection{Primary VoiceRef; Fallback *VoiceRef}`, `VoiceRef{Provider Name; ModelName, VoiceID string}`, konstanta `ElevenLabs`, `Cartesia`, `OpenAI`, `DeepSeek`, `FakePrimary`, `FakeFallback`, `TTSProvider/Stream/Chunk/Usage`, `StructuredRequest/Result`, `EvaluationProvider`, `EmbeddingRequest/Result/Provider`), konstanta `STTSampleRate=16000`, `TTSSampleRate=24000`; `ErrorKind` (8 nilai §8.3), `*Error`, `KindOf`, `IsRetryable`, `FallbackEligible`, `CountsForBreaker`, `ClassifyHTTPStatus(status int) ErrorKind`, `newCircuitOpen(c Capability) *Error` (nama dari plan: `*Error{Kind: UNAVAILABLE, VendorCode: "circuit_open", Retryable: true}`); `FallbackEligible` hanya dipakai keputusan fallback TTS per karakter.
 
 - [ ] **Step 1: Write the failing test**
 ```go
@@ -134,21 +134,22 @@ Tambah: `TestWAVRoundTrip` (header RIFF 44 byte, `WAVDurationMs` untuk 16000 sam
 - Test: `internal/provider/config_test.go`, `internal/provider/config_env_test.go`
 
 **Interfaces:**
-- Produces: `type RouterConfig struct` dengan tag `env:"…" envDefault:"…"` persis tabel §8.5.1/§13.2.8 (field Go = nama env tanpa awalan `PROVIDER_`, PascalCase, mis. `Mode`, `ModeSTT`, `STTPrimary`, `STTFallback`, `LLMPrimary`, …, `FallbackEnabled`, `PremiumLLMModel`, `PremiumLLMFallbackModel`, `PremiumLLMMaxTokens`, `PremiumLLMTemperature`, `PremiumTTSModel`, `PremiumTTSFallbackModel`, `Standard*` kembarannya, `STTElevenLabsModel`, `STTDeepgramModel`, `EvaluationOpenAIModel`, `EvaluationGeminiModel`, `EmbeddingOpenAIModel`, `EmbeddingDimensions`, `Timeout*` (`time.Duration`), `SessionGrace`, `STTReplaySpeed`, `CBFailureThreshold`, `CBWindow`, `CBOpenDuration`, `CBHalfOpenProbes`, `PricesFile`, kunci `ElevenLabsAPIKey…AzureSpeechKey`, `AzureSpeechEndpoint`) plus `Concurrency ConcurrencyConfig` berisi field eksplisit `PROVIDER_CONCURRENCY_<VENDOR>_<CAP>` untuk 11 kombinasi nyata (ELEVENLABS_STT, DEEPGRAM_STT, OPENAI_LLM, GEMINI_LLM, ELEVENLABS_TTS, DEEPGRAM_TTS, OPENAI_TTS, OPENAI_EVALUATION, GEMINI_EVALUATION, OPENAI_EMBEDDING, AZURE_PRONUNCIATION) dengan default per kapabilitas (125/60/80/8/16/8); `func (c ConcurrencyConfig) Limit(n Name, cap Capability) int` (instance FAKE_* memakai default kapabilitas); `func (c RouterConfig) Validate() error` (pesan menyebut nama env); `func (c RouterConfig) ModeFor(cap Capability) string` → `"real"|"fake"` (override `PROVIDER_MODE_<CAP>` menang atas `PROVIDER_MODE`); `func (c RouterConfig) Selection(cap Capability) Selection` (mode fake → `FakePrimary`/`FakeFallback`; `FallbackEnabled=false` → Fallback `""`); `type Selection struct{ Primary, Fallback Name }`.
+- Produces: `type RouterConfig struct` dengan tag `env:"…" envDefault:"…"` persis katalog §8.5.1 (D-017; field Go = nama env PascalCase tanpa awalan `PROVIDER_` bila ada): `Mode`/`ModeSTT`/`ModeLLM`/`ModeTTS`/`ModeEvaluation`/`ModeEmbedding` (`PROVIDER_MODE`, `PROVIDER_MODE_<CAP>`); sakelar vendor bool `OpenAISTTEnabled` (`OPENAI_STT_ENABLED`, true), `ElevenLabsSTTEnabled` (false), `CartesiaSTTEnabled` (false), `OpenAILLMEnabled` (`OPENAI_LLM_ENABLED`, true), `DeepSeekLLMEnabled` (false), `ElevenLabsTTSEnabled` (true), `CartesiaTTSEnabled` (true), `OpenAIEmbeddingEnabled` (true); model `OpenAISTTModel`, `ElevenLabsSTTModel`, `CartesiaSTTModel`, `OpenAILLMModel`, `DeepSeekLLMModel`, `OpenAIEvaluationModel`, `DeepSeekEvaluationModel`, `OpenAIEmbeddingModel`, `EmbeddingDimensions` (1536), `LLMMaxOutputTokens` (`LLM_MAX_OUTPUT_TOKENS`, 300), `LLMTemperature` (`LLM_TEMPERATURE`, 0.8), `RollingSummaryLLMModel`, `OpenAILLMOmitSampling`, `OpenAILLMReasoningEffort`, `DeepSeekLLMThinking`, `DeepSeekEvaluationThinking`; `TTSFallbackEnabled` (`PROVIDER_TTS_FALLBACK_ENABLED`, true); `Timeout*` (`time.Duration`), `SessionGrace`, `RotationReplaySpeed` (`PROVIDER_ROTATION_REPLAY_SPEED`), `CBFailureThreshold`, `CBWindow`, `CBOpenDuration`, `CBHalfOpenProbes`, `PricesFile`; kunci/URL `OpenAIAPIKey`, `DeepSeekAPIKey`, `ElevenLabsAPIKey`, `CartesiaAPIKey`, `OpenAIBaseURL`/`OpenAIWSBaseURL`, `DeepSeekBaseURL`, `ElevenLabsBaseURL`/`ElevenLabsWSBaseURL`, `CartesiaBaseURL`/`CartesiaWSBaseURL`, `CartesiaVersion` (`2026-08-14`). TIDAK ada `PROVIDER_STT_*`, `PROVIDER_LLM_*`, `PROVIDER_TTS_PRIMARY/_FALLBACK`, `PROVIDER_PROFILE_*`, maupun model TTS (D-015/D-017). `Concurrency ConcurrencyConfig` berisi `PROVIDER_CONCURRENCY_<VENDOR>_<CAP>` untuk kombinasi nyata (OPENAI_STT, ELEVENLABS_STT, CARTESIA_STT, OPENAI_LLM, DEEPSEEK_LLM, ELEVENLABS_TTS, CARTESIA_TTS, OPENAI_EVALUATION, DEEPSEEK_EVALUATION, OPENAI_EMBEDDING; default per kapabilitas 125/60/80/8/16/8); `func (c ConcurrencyConfig) Limit(n Name, cap Capability) int` (instance FAKE_* memakai default kapabilitas); `func (c RouterConfig) Validate() error` (pesan menyebut nama env); `func (c RouterConfig) ModeFor(cap Capability) string` (override `PROVIDER_MODE_<CAP>` menang atas `PROVIDER_MODE`; `_LLM` berlaku juga untuk EVALUATION bila `_EVALUATION` kosong); `func (c RouterConfig) ActiveSTT() (Name, error)`, `ActiveLLM() (Name, error)` (vendor yang flag-nya `true`), `TTSVendors() []Name` (vendor TTS enabled), `LLMModel() string` (model LLM vendor aktif), `EvaluationModel() string`, `STTModel() string`.
 
-- [ ] **Step 1: Write the failing test** — table-driven `TestRouterConfigValidate`, satu kasus per aturan §8.5.1: primary==fallback → error menyebut `PROVIDER_LLM_PRIMARY`; nilai lowercase `openai` → error; `FAKE_PRIMARY` diisi manual di env → error; mode real tanpa `OPENAI_API_KEY` → error `OPENAI_API_KEY`; mode `fake` tanpa key → OK; `PRONUNCIATION_PRIMARY=NONE` tanpa `AZURE_SPEECH_*` → OK; `EmbeddingDimensions=1024` → error; model profile kosong (real) → error; timeout ≤ 0 → error; limit konkurensi 0 → error.
+- [ ] **Step 1: Write the failing test** — table-driven `TestRouterConfigValidate`, satu kasus per aturan §8.5.1 (mode real): ketiga STT `false` → error `exactly one of OPENAI_STT_ENABLED, ELEVENLABS_STT_ENABLED, CARTESIA_STT_ENABLED must be true`; dua STT `true` → error; dua LLM `true` / nol LLM `true` → error menyebut `OPENAI_LLM_ENABLED`/`DEEPSEEK_LLM_ENABLED`; kedua TTS `false` → error; `OPENAI_EMBEDDING_ENABLED=false` → error; nilai bool invalid (`yes`) → error menyebut nama variabel (parse); `OPENAI_API_KEY` kosong → error (Embedding selalu enabled); `DEEPSEEK_LLM_ENABLED=true` tanpa `DEEPSEEK_API_KEY` → error; `ELEVENLABS_STT_ENABLED` atau `ELEVENLABS_TTS_ENABLED` tanpa `ELEVENLABS_API_KEY` → error; sama untuk `CARTESIA_API_KEY`; model kosong untuk kapabilitas enabled (`OPENAI_STT_MODEL`, `OPENAI_LLM_MODEL`, dst.) → error; `EmbeddingDimensions=1024` → error; timeout ≤ 0 → error; limit konkurensi 0 → error. Mode fake: flag vendor kapabilitas itu TIDAK divalidasi (`ModeSTT="fake"` dengan tiga STT `false` → OK; key tidak diminta).
 ```go
-func TestSelectionFakeModeIgnoresVendorEnv(t *testing.T) {
-	c := validRealConfig(); c.ModeLLM = "fake"
-	require.Equal(t, provider.Selection{Primary: provider.FakePrimary, Fallback: provider.FakeFallback}, c.Selection(provider.CapLLM))
-	require.Equal(t, provider.Selection{Primary: provider.ElevenLabs, Fallback: provider.Deepgram}, c.Selection(provider.CapSTT))
+func TestExactlyOneSTTEnabled(t *testing.T) {
+	c := validRealConfig(); c.OpenAISTTEnabled, c.CartesiaSTTEnabled = false, true
+	require.NoError(t, c.Validate()); n, _ := c.ActiveSTT(); require.Equal(t, provider.Cartesia, n)
+	c.OpenAISTTEnabled = true
+	require.ErrorContains(t, c.Validate(), "exactly one of OPENAI_STT_ENABLED, ELEVENLABS_STT_ENABLED, CARTESIA_STT_ENABLED must be true")
 }
 ```
-`config_env_test.go`: `env.Parse(&cfg)` tanpa env set → default persis (`CBFailureThreshold==5`, `CBWindow==30*time.Second`, `TimeoutSTTFinal==1500*time.Millisecond`, `PremiumLLMModel=="gpt-4.1"`, `Concurrency.Limit(ElevenLabs,CapSTT)==125`, `…(OpenAI,CapLLM)==60`), env `PROVIDER_CB_WINDOW=10s` terbaca.
-- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run 'RouterConfig|Selection'`. Expected: FAIL (undefined).
-- [ ] **Step 3: Implement** `config.go` (tanpa mengimpor `caarlos0/env`; hanya tag). Vendor valid per kapabilitas: STT {ELEVENLABS,DEEPGRAM}, LLM/EVALUATION {OPENAI,GEMINI}, TTS {ELEVENLABS,DEEPGRAM,OPENAI}, EMBEDDING {OPENAI}, PRONUNCIATION {AZURE,NONE}.
+`TestRouterConfigHasNoVendorSelectionOrTTSProfile` (reflect: tidak ada field bernama `*Primary`/`*Fallback` untuk STT/LLM, tidak ada `TTSPrimary`/`TTSFallback`/model TTS; env `PROVIDER_STT_PRIMARY`, `FAKE_PRIMARY` manual tidak dikenal). `config_env_test.go`: `env.Parse(&cfg)` tanpa env → default persis (`OpenAISTTEnabled==true`, `ElevenLabsSTTEnabled==false`, `DeepSeekLLMEnabled==false`, `ElevenLabsTTSEnabled && CartesiaTTSEnabled`, `OpenAILLMModel=="gpt-4.1"`, `DeepSeekLLMModel=="deepseek-flash"`, `OpenAISTTModel=="gpt-live-transcribe"`, `CartesiaSTTModel=="ink-2"`, `LLMMaxOutputTokens==300`, `CBFailureThreshold==5`, `CBWindow==30*time.Second`, `TimeoutSTTFinal==1500*time.Millisecond`, `Concurrency.Limit(ElevenLabs,CapSTT)==125`, `…(OpenAI,CapLLM)==60`, `…(Cartesia,CapTTS)==80`, `CartesiaVersion=="2026-08-14"`), env `PROVIDER_CB_WINDOW=10s` terbaca. `TestModeFor` (`PROVIDER_MODE_LLM=fake` berlaku juga untuk EVALUATION).
+- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run 'RouterConfig|ExactlyOne|ModeFor'`. Expected: FAIL (undefined).
+- [ ] **Step 3: Implement** `config.go` (tanpa mengimpor `caarlos0/env`; hanya tag). Validasi flag/key/model hanya untuk kapabilitas yang mode-nya `real`. Vendor TTS per karakter tidak divalidasi saat startup (data karakter, §8.5.1): validator konten/resolver menolak karakter dengan `provider_name` yang TTS-nya tidak enabled (`CONTENT_MISCONFIGURED`/`CHARACTER_NOT_AVAILABLE`, M3/M6).
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/ -race` → PASS.
-- [ ] **Step 5: Commit** — `git commit -am "feat(provider): RouterConfig, validasi startup, seleksi mode"`
+- [ ] **Step 5: Commit** — `git commit -am "feat(provider): RouterConfig, sakelar vendor *_ENABLED, validasi startup"`
 
 ---
 
@@ -215,9 +216,9 @@ Tambah: wait 100 ms dengan ctx dibatalkan → `CANCELLED`; `TestHealthWindow60s`
 - Test: `internal/provider/metrics_test.go`
 
 **Interfaces:**
-- Produces: `type Metrics struct`; `NewMetrics(reg prometheus.Registerer) *Metrics` (daftarkan SEMUA metrik §8.8.1 + §8.7.4 dengan nama & label persis; bucket latency `0.05,0.1,0.2,0.3,0.4,0.5,0.75,1,1.5,2,3,5,10,20,60`; `kotoki_session_cost_usd` bucket `0.005…2` (nama dari plan: `0.005,0.01,0.025,0.05,0.1,0.25,0.5,1,2`)); helper `ObserveCall(p Name, c Capability, model, task, outcome string, kind ErrorKind, vendorCode string)`, `ObserveLatency(p, c, model, phase string, d time.Duration)`, `ObserveFallback(c Capability, from, to Name, reason string)`, `SetCircuit(p, c, BreakerState)`, `Usage(p, c, model, unit string, n float64)`, `CostUSD(p, c, model string, usd float64)`, `ConcurrencyWait/Rejected`, `StreamDisconnect`, `STTReplay(from, to Name, seconds float64)`, `STTRotation(p)`, `TTSExpressionDegraded(p Name, from, to string)`, `TTSEpochRestart(from, to Name)`; fungsi paket `ObserveLLMFirstSentence(m *Metrics, p Name, model string, d time.Duration)` (nama dari plan: method `(*Metrics).ObserveLLMFirstSentence`, spesifikasi §8.8.1 menyebut helper `provider.ObserveLLMFirstSentence(provider, model, d)` → sediakan juga fungsi paket yang memakai `Metrics` default via `SetDefaultMetrics`). `vendor_code` di luar daftar yang dikenal → `other` (`knownVendorCodes` = `insufficient_quota, rate_limit_exceeded, local_concurrency, circuit_open, all_circuits_open, voice_binding_missing, tts_provider_switched, session_time_limit_exceeded, insufficient_audio_activity`).
+- Produces: `type Metrics struct`; `NewMetrics(reg prometheus.Registerer) *Metrics` (daftarkan SEMUA metrik §8.8.1 + §8.7.4 dengan nama & label persis; bucket latency `0.05,0.1,0.2,0.3,0.4,0.5,0.75,1,1.5,2,3,5,10,20,60`; `kotoki_session_cost_usd` bucket `0.005…2` (nama dari plan: `0.005,0.01,0.025,0.05,0.1,0.25,0.5,1,2`), tanpa label (D-016) via helper `ObserveSessionCost(totalUSD, perMinuteUSD float64)`); helper `ObserveCall(p Name, c Capability, model, task, outcome string, kind ErrorKind, vendorCode string)`, `ObserveLatency(p, c, model, phase string, d time.Duration)`, `ObserveFallback(from, to Name, reason string)` (hanya TTS, capability tetap `TTS`), `SetCircuit(p, c, BreakerState)`, `Usage(p, c, model, unit string, n float64)`, `CostUSD(p, c, model string, usd float64)`, `ConcurrencyWait/Rejected`, `StreamDisconnect`, `STTReplay(p Name, seconds float64)` (rotasi koneksi), `STTRotation(p)`, `TTSEpochRestart(from, to Name)`; fungsi paket `ObserveLLMFirstSentence(m *Metrics, p Name, model string, d time.Duration)` (nama dari plan: method `(*Metrics).ObserveLLMFirstSentence`, spesifikasi §8.8.1 menyebut helper `provider.ObserveLLMFirstSentence(provider, model, d)` → sediakan juga fungsi paket yang memakai `Metrics` default via `SetDefaultMetrics`). `vendor_code` di luar daftar yang dikenal → `other` (`knownVendorCodes` = `insufficient_quota, rate_limit_exceeded, local_concurrency, circuit_open, circuit_open, voice_binding_missing, tts_provider_switched, session_time_limit_exceeded, insufficient_audio_activity`).
 
-- [ ] **Step 1: Write the failing test** — `TestMetricsRegistered`: `reg := prometheus.NewRegistry(); m := NewMetrics(reg)`, panggil satu helper per metrik, `testutil.GatherAndCompare`/`reg.Gather()` memuat nama: `kotoki_provider_requests_total, kotoki_provider_errors_total, kotoki_provider_latency_seconds, kotoki_provider_active, kotoki_provider_concurrency_wait_seconds, kotoki_provider_concurrency_rejected_total, kotoki_provider_fallback_total, kotoki_provider_circuit_state, kotoki_provider_circuit_transitions_total, kotoki_provider_stream_disconnects_total, kotoki_provider_ratelimit_remaining, kotoki_stt_replay_seconds, kotoki_stt_rotations_total, kotoki_tts_expression_degraded_total, kotoki_tts_epoch_restarts_total, kotoki_provider_usage_total, kotoki_provider_cost_usd_total, kotoki_session_cost_usd, kotoki_session_cost_per_minute_usd`. Tambah `TestMetricsNoHighCardinalityLabels` (tidak ada label `session_id`/`user_id` di semua descriptor), `TestUnknownVendorCodeBecomesOther`, `TestFallbackReasonLabelValues` (`CIRCUIT_OPEN`, `CALLER_DIRECTED`, ErrorKind).
+- [ ] **Step 1: Write the failing test** — `TestMetricsRegistered`: `reg := prometheus.NewRegistry(); m := NewMetrics(reg)`, panggil satu helper per metrik, `testutil.GatherAndCompare`/`reg.Gather()` memuat nama: `kotoki_provider_requests_total, kotoki_provider_errors_total, kotoki_provider_latency_seconds, kotoki_provider_active, kotoki_provider_concurrency_wait_seconds, kotoki_provider_concurrency_rejected_total, kotoki_provider_fallback_total, kotoki_provider_circuit_state, kotoki_provider_circuit_transitions_total, kotoki_provider_stream_disconnects_total, kotoki_provider_ratelimit_remaining, kotoki_stt_replay_seconds, kotoki_stt_rotations_total, kotoki_tts_epoch_restarts_total, kotoki_provider_usage_total, kotoki_provider_cost_usd_total, kotoki_session_cost_usd, kotoki_session_cost_per_minute_usd`. Tambah `TestMetricsNoHighCardinalityLabels` (tidak ada label `session_id`/`user_id` di semua descriptor), `TestSessionCostNoLabels` (`kotoki_session_cost_usd` terisi; tanpa label), `TestUnknownVendorCodeBecomesOther`, `TestFallbackReasonLabelValues` (`CIRCUIT_OPEN`, ErrorKind; label `capability` hanya `TTS`).
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run Metrics`. Expected: FAIL.
 - [ ] **Step 3: Implement** `metrics.go` (registry diinjeksi; tidak memakai `prometheus.DefaultRegisterer`). `NewMetrics(nil)` → registry privat (untuk test lain).
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/ -race` → PASS.
@@ -225,36 +226,7 @@ Tambah: wait 100 ms dengan ctx dibatalkan → `CANCELLED`; `TestHealthWindow60s`
 
 ---
 
-### Task 7: `ExpressionCatalog` dan `ResolveTTSParams`
-
-**Files:**
-- Create: `internal/provider/tts_params.go`
-- Test: `internal/provider/tts_params_test.go`
-
-**Interfaces:**
-- Produces: `type ExpressionCatalog interface{ Lookup(expr string) (degradeTo string, nonVerbal bool, ok bool) }`; `func ResolveTTSParams(cat ExpressionCatalog, expr string, vendor Name, b VoiceBinding, speakingRate float64) ResolvedTTSParams` (Bab 6 §6.6.2 langkah 1–4; `ProviderVoiceID = b.ProviderVoiceID`); `func vendorSpeedRange(v Name) (min, max float64)` (ELEVENLABS 0.70–1.20, OPENAI 0.70–1.30, DEEPGRAM 0.70–1.50).
-
-- [ ] **Step 1: Write the failing test** — katalog tes `stubCatalog` sesuai §6.3.7 (laugh→amused→happy→neutral, `laugh`/`chuckle`/`sigh` nonVerbal). Kasus table-driven:
-```go
-b := VoiceBinding{ProviderVoiceID: "v1", Capabilities: []string{"SPEED", "STYLE_PARAMS"},
-	Settings: map[string]any{"stability": 0.5}, ExpressionMappings: map[string]map[string]any{
-		"amused": {"stability": 0.35, "style": 0.55}, "laugh": {"audio_tag": "laughs"},
-		"thinking": {"speed_multiplier": 0.92}}}
-r := ResolveTTSParams(cat, "laugh", ElevenLabs, b, 0.90)
-require.Equal(t, "amused", r.EffectiveExpression)         // tanpa AUDIO_TAGS: laugh→amused
-require.Equal(t, 0.35, r.Params["stability"]); require.InDelta(t, 0.90, r.Params["speed"], 1e-9)
-r = ResolveTTSParams(cat, "thinking", ElevenLabs, b, 0.90)
-require.InDelta(t, 0.828, r.Params["speed"], 1e-9)         // 0.90×0.92 (contoh §6.6.3 ≈ 0.83)
-```
-Kasus lain: dengan `AUDIO_TAGS` → `audio_tag:"laughs"` dan `EffectiveExpression:"laugh"`; ekspresi tanpa mapping → `neutral` dan params = salinan `Settings`; `neutral` → mapping `{}`; clamp: rate 1.05 × multiplier 1.20 di ELEVENLABS → 1.20, di DEEPGRAM 1.26 (≤1.50) tak terpotong, rate 0.80 × 0.80 → 0.70 (min); tanpa kapabilitas `SPEED` → key `speed` tidak ada; `INSTRUCTIONS`: `instructions` = `join(settings.instructions, m.instructions, " ")` (kedua ada / salah satu / kosong); hasil tidak memutasi `b.Settings` (salinan); `expr==""` diperlakukan `neutral`; `nil` catalog tidak boleh panic (semua ekspresi dianggap tak dikenal → neutral).
-- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run ResolveTTSParams`. Expected: FAIL.
-- [ ] **Step 3: Implement** mengikuti pseudocode §6.6.2 (loop degradasi: `ok && (!nonVerbal || AUDIO_TAGS∈caps)` berhenti; selain itu `e = degradeTo`; berhenti di `neutral`). Fungsi murni tanpa I/O.
-- [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/ -race -run ResolveTTSParams` → PASS.
-- [ ] **Step 5: Commit** — `git commit -am "feat(provider): ExpressionCatalog dan ResolveTTSParams"`
-
----
-
-### Task 8: `PriceTable` port dan `pricing.Table`
+### Task 7: `PriceTable` port dan `pricing.Table`
 
 **Files:**
 - Create: `internal/provider/pricer.go`, `internal/provider/pricing/pricing.go`, `internal/provider/pricing/prices.yaml`
@@ -268,7 +240,7 @@ Kasus lain: dengan `AUDIO_TAGS` → `audio_tag:"laughs"` dan `EffectiveExpressio
 func TestWildcardAndZeroPrice(t *testing.T) {
 	tb, err := pricing.Load("")                          // embed; semua harga 0
 	require.NoError(t, err)
-	usd, ok := tb.TTS(provider.Deepgram, "aura-2-minerva-ja", 100)   // entri model:"*"
+	usd, ok := tb.TTS(provider.Cartesia, "sonic-3", 100)   // entri model:"*"
 	require.True(t, ok); require.Zero(t, usd)
 	_, ok = tb.LLM(provider.OpenAI, provider.CapLLM, "model-tak-ada", provider.TokenUsage{})
 	require.False(t, ok)
@@ -276,13 +248,13 @@ func TestWildcardAndZeroPrice(t *testing.T) {
 ```
 Tambah (file YAML sementara via `t.TempDir()`): hitungan `LLM` = `input/1e6×in + output/1e6×out`; `TTS` = `chars/1e6×per_1m_characters`; `Audio` = `audioMs/3.6e6×per_audio_hour`; loader menolak `provider: openai` (lowercase) dan `capability: llm`; entri sama dua kali → error; `Missing` mengembalikan kombinasi tanpa entri atau berharga 0. `var _ provider.PriceTable = (*pricing.Table)(nil)`.
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/pricing/ -race`. Expected: FAIL.
-- [ ] **Step 3: Implement.** `prices.yaml` = isi §8.7.2 (10 entri, harga 0, `version: "2026-10-12"`). Loader memakai `gopkg.in/yaml.v3` (`yaml.Unmarshal` ke struct dengan `KnownFields` ketat via `yaml.NewDecoder(...).KnownFields(true)`; field tak dikenal → error). Validasi UPPERCASE `provider`/`capability`, duplikat (provider, capability, model) → error.
+- [ ] **Step 3: Implement.** `prices.yaml` = isi §8.7.2 (entri `OPENAI` STT/LLM/EVALUATION/EMBEDDING, `DEEPSEEK` LLM/EVALUATION, `ELEVENLABS` STT/TTS, `CARTESIA` STT/TTS; harga 0, `version: "2026-10-12"`). Loader memakai `gopkg.in/yaml.v3` (`yaml.Unmarshal` ke struct dengan `KnownFields` ketat via `yaml.NewDecoder(...).KnownFields(true)`; field tak dikenal → error). Validasi UPPERCASE `provider`/`capability`, duplikat (provider, capability, model) → error.
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/... -race -run 'Pricing|Wildcard|Price'` → PASS; `go build ./internal/provider/...`.
 - [ ] **Step 5: Commit** — `git commit -am "feat(provider): PriceTable port dan pricing.Table"`
 
 ---
 
-### Task 9: Fake — konfigurasi umum, keputusan gagal, fault injection, poller
+### Task 8: Fake — konfigurasi umum, keputusan gagal, fault injection, poller
 
 **Files:**
 - Create: `internal/provider/fake/config.go`, `internal/provider/fake/faults.go`
@@ -292,7 +264,7 @@ Tambah (file YAML sementara via `t.TempDir()`): hitungan `LLM` = `input/1e6×in 
 - Consumes: `provider.Name/Capability/ErrorKind/Error/ClassifyHTTPStatus`, `clock.Clock`.
 - Produces:
   - `type Config struct` (tag env `FAKE_SEED` 42, `FAKE_STT_MODE`, `FAKE_STT_FIXTURE_DIR`, `FAKE_STT_MATCH_THRESHOLD` 0.8, `FAKE_STT_ENERGY_DBFS` -40, `FAKE_STT_PHRASES` (dipisah `|`), `FAKE_LLM_TOKEN_INTERVAL_MS` 30, `FAKE_LLM_TEMPLATES_FILE`, `FAKE_TTS_MS_PER_CHAR` 120, `FAKE_TTS_CHUNK_INTERVAL_MS` 5, `FAKE_TTS_WAVEFORM` tone, `FAKE_EVAL_FIXTURE_DIR`, `FAKE_FAULTS_REDIS_KEY` `kotoki:fake:faults`, `FAKE_FAULTS_POLL_INTERVAL` 1s) dengan default §13.2.9;
-  - `type CapConfig struct{ LatencyMS, JitterMS int; FailureRate float64; FailEveryN int; FailureKind provider.ErrorKind; FailurePhase string; FailAfter int; ConnectMS int }`; `func LoadCapConfig(lookup func(string) (string, bool), inst provider.Name, cap provider.Capability) (CapConfig, error)` (baca `FAKE_<PRIMARY|FALLBACK>_<CAP>_*`; default latency per kapabilitas: STT 150, LLM 300, TTS 150, EVALUATION 500, EMBEDDING 20, PRONUNCIATION 300; STT connect 50; `FailureKind` default `UNAVAILABLE`, phase `start`, `FailAfter` 3);
+  - `type CapConfig struct{ LatencyMS, JitterMS int; FailureRate float64; FailEveryN int; FailureKind provider.ErrorKind; FailurePhase string; FailAfter int; ConnectMS int }`; `func LoadCapConfig(lookup func(string) (string, bool), inst provider.Name, cap provider.Capability) (CapConfig, error)` (baca `FAKE_<PRIMARY|FALLBACK>_<CAP>_*` (`FALLBACK` hanya `TTS`; kombinasi lain → error; TTS fake: slot PRIMARY = voice utama, FALLBACK = `voice.fallback` karakter; D-015); default latency per kapabilitas: STT 150, LLM 300, TTS 150, EVALUATION 500, EMBEDDING 20; STT connect 50; `FailureKind` default `UNAVAILABLE`, phase `start`, `FailAfter` 3);
   - `type Deps struct{ Clock clock.Clock; Faults FaultSource; Log *slog.Logger; Seed int64 }`;
   - `type decider` (tak-ekspor) `newDecider(seed int64, inst provider.Name, cap provider.Capability, c CapConfig) *decider` dengan `next(f *Fault) (fail bool, plan failPlan)` — `FailEveryN>0` → `counter%N==0`; selain itu `hash64 / 2^64 < rate` dengan `hash64 = FNV-64a("<seed>|<inst>|<cap>|<counter>")` (nama dari plan; spec tidak menetapkan fungsi hash), counter atomic;
   - `type Fault struct{ Mode string; Rate float64; AfterMs int64; Status int; Kind provider.ErrorKind; DelayMs int }`, `type FaultSet struct{ ... }` dengan `Lookup(cap provider.Capability, inst provider.Name) (*Fault, bool)`, `type FaultSource interface{ Current() *FaultSet }`, `var NoFaults FaultSource`, `ParseFaultSet(b []byte, now time.Time, warn func(string)) *FaultSet` (mode valid: `error timeout slow fail_after_first_audio disconnect_mid_stream`; kombinasi mode/kapabilitas di luar tabel §8.9.6 → entri diabaikan + warn; `until` lewat → set kosong; `status` → Kind via `ClassifyHTTPStatus`, default 503; `kind` eksplisit menimpa), `type Poller` (`NewPoller(fetch func(ctx context.Context) ([]byte, bool, error), interval time.Duration, clk clock.Clock, log *slog.Logger) *Poller`, `Run(ctx)`, `Current()`, `PollOnce(ctx)`).
@@ -322,7 +294,7 @@ Tambah: rate deterministik (`FailureRate:0.5` seed sama → urutan sama dua kali
 
 ---
 
-### Task 10: Fake LLM + `providertest.LLMSuite`
+### Task 9: Fake LLM + `providertest.LLMSuite`
 
 **Files:**
 - Create: `internal/provider/fake/llm.go`, `internal/provider/providertest/llm.go`
@@ -340,15 +312,15 @@ func TestFakeLLMDeterministicTemplate(t *testing.T) {
 	require.Equal(t, a, b); require.Contains(t, templates, a)    // idx = fnv32(lastUserMessage) % 5
 }
 ```
-`LLMSuite` (generik, juga untuk M9) berisi subtest: `StreamReturnsBeforeFirstToken` (Stream kembali ≤ 50 ms walau latency 300 ms); `EndsWithDoneWithUsage` (event terakhir `DONE`, `Usage != nil`, channel tertutup); `MaxTokensTruncatesToFinishMaxTokens`; `StopSequenceCutsBeforeMatch`; `CancelEmitsCancelledDoneWithin50ms` (cancel ctx → `DONE{CANCELLED}` ≤ 50 ms lalu channel tertutup; Close idempotent); `SyncErrorIsProviderError` (bila vendor dikonfigurasi gagal `start` → `errors.As(*provider.Error)`). Kasus fake: opening (tanpa pesan user) memakai template opening `<e:happy>こんにちは！今日はどんな一日でしたか？`; pesan user berisi `#long` → jawaban diulang 5×; DELTA 3 rune; `InputTokens` = total rune semua pesan, `OutputTokens` = rune output, `Estimated=false`; phase `before_first` → `ERROR` sebelum DELTA; `mid` + `FailAfter=2` → 2 DELTA lalu `ERROR`; `hang` → tidak ada event sampai ctx habis; fault runtime `{"mode":"slow","delay_ms":50}` menambah latency; `FAKE_LLM_TEMPLATES_FILE` menimpa template (via `Config` + `t.TempDir()`); `ReceivedAt` dari `clock`.
+`LLMSuite` (generik, juga untuk M9) berisi subtest: `StreamReturnsBeforeFirstToken` (Stream kembali ≤ 50 ms walau latency 300 ms); `EndsWithDoneWithUsage` (event terakhir `DONE`, `Usage != nil`, channel tertutup); `MaxTokensTruncatesToFinishMaxTokens`; `StopSequenceCutsBeforeMatch`; `CancelEmitsCancelledDoneWithin50ms` (cancel ctx → `DONE{CANCELLED}` ≤ 50 ms lalu channel tertutup; Close idempotent); `SyncErrorIsProviderError` (bila vendor dikonfigurasi gagal `start` → `errors.As(*provider.Error)`). Kasus fake: opening (tanpa pesan user) memakai template opening `こんにちは！今日はどんな一日でしたか？` (teks polos, tanpa tag); pesan user berisi `#long` → jawaban diulang 5×; DELTA 3 rune; `InputTokens` = total rune semua pesan, `OutputTokens` = rune output, `Estimated=false`; phase `before_first` → `ERROR` sebelum DELTA; `mid` + `FailAfter=2` → 2 DELTA lalu `ERROR`; `hang` → tidak ada event sampai ctx habis; fault runtime `{"mode":"slow","delay_ms":50}` menambah latency; `FAKE_LLM_TEMPLATES_FILE` menimpa template (via `Config` + `t.TempDir()`); `ReceivedAt` dari `clock`.
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/fake/ -race -run FakeLLM`. Expected: FAIL (undefined).
-- [ ] **Step 3: Implement.** Lima template §8.9.3 persis (opening + 4 reguler + `<e:concerned>…` = 5 reguler total: ikuti urutan daftar spec; template opening terpisah). Goroutine producer; `select` pada `ctx.Done()` di tiap DELTA; first token setelah `LatencyMS ± jitter` (jitter dari PRNG ber-seed `Deps.Seed`); `Close()` = cancel internal.
+- [ ] **Step 3: Implement.** Lima template §8.9.3 persis (opening + 4 reguler, teks Jepang polos tanpa tag; ikuti urutan daftar spec; template opening terpisah). Goroutine producer; `select` pada `ctx.Done()` di tiap DELTA; first token setelah `LatencyMS ± jitter` (jitter dari PRNG ber-seed `Deps.Seed`); `Close()` = cancel internal.
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/fake/ ./internal/provider/providertest/ -race -run 'FakeLLM|LLMSuite'` → PASS.
 - [ ] **Step 5: Commit** — `git commit -am "feat(provider/fake): fake LLM dan providertest.LLMSuite"`
 
 ---
 
-### Task 11: Fake TTS + `providertest.TTSSuite`
+### Task 10: Fake TTS + `providertest.TTSSuite`
 
 **Files:**
 - Create: `internal/provider/fake/tts.go`, `internal/provider/providertest/tts.go`
@@ -359,22 +331,22 @@ func TestFakeLLMDeterministicTemplate(t *testing.T) {
 
 - [ ] **Step 1: Write the failing test**
 ```go
-func TestFakeTTSDurationAndExpressionMultiplier(t *testing.T) {
-	req := provider.TTSRequest{Text: "こんにちは。", Resolved: provider.ResolvedTTSParams{Params: map[string]any{"speed": 1.0}, EffectiveExpression: "happy"}}
+func TestFakeTTSDurationFollowsSpeakingRate(t *testing.T) {
+	req := provider.TTSRequest{Text: "こんにちは。", SpeakingRate: 1.05}
 	pcm := drain(t, mustSynth(t, newTestTTS(t), req))
-	// rune=6 → max(300, 6×120)=720 ms; speed=1.0×1.05 → 685 ms ±20 ms @24 kHz PCM16
-	require.InDelta(t, 685, float64(len(pcm))/48.0, 20)
+	// rune=6 → max(300, 6×120)=720 ms; speed=SpeakingRate=1.05 → 686 ms ±20 ms @24 kHz PCM16
+	require.InDelta(t, 686, float64(len(pcm))/48.0, 20)
 }
 ```
-`TTSSuite`: `PCMLengthAlwaysEven`; `LastChunkIsFinalWithUsage` (`Final=true`, `Usage.Characters == utf8.RuneCountInString(Text)`, `Usage.AudioMs>0`); `CancelClosesChannelWithin50ms` (tidak ada chunk setelah cancel); `FirstChunkAfterLatency`; `SyncErrorIsProviderError`. Kasus fake: chunk berukuran 960 byte (20 ms) kecuali terakhir; `FAKE_TTS_WAVEFORM=silence` → semua byte nol, `tone` → RMS ≈ −20 dBFS (`provider.RMSdBFS` ±1,5); pengali: `happy 1.05, excited 1.08, sad 0.92, thinking 0.93`, lain 1.0; ekspresi ≠ neutral → frekuensi nada +20 Hz (uji via zero-crossing); `fail_after_first_audio` (fault runtime) → chunk pertama normal lalu `TTSChunk{Err.Kind: UNAVAILABLE}` sebagai chunk terakhir; phase `hang` → tidak ada chunk sampai ctx habis; interval antar-chunk = `FAKE_TTS_CHUNK_INTERVAL_MS`.
+`TTSSuite`: `PCMLengthAlwaysEven`; `LastChunkIsFinalWithUsage` (`Final=true`, `Usage.Characters == utf8.RuneCountInString(Text)`, `Usage.AudioMs>0`); `CancelClosesChannelWithin50ms` (tidak ada chunk setelah cancel); `FirstChunkAfterLatency`; `SyncErrorIsProviderError`. Kasus fake: chunk berukuran 960 byte (20 ms) kecuali terakhir; `FAKE_TTS_WAVEFORM=silence` → semua byte nol, `tone` → RMS ≈ −20 dBFS (`provider.RMSdBFS` ±1,5); `SpeakingRate==0` diperlakukan 1.0 (durasi 720 ms untuk 6 rune); tidak ada pengali/efek ekspresi (D-014); `fail_after_first_audio` (fault runtime) → chunk pertama normal lalu `TTSChunk{Err.Kind: UNAVAILABLE}` sebagai chunk terakhir; phase `hang` → tidak ada chunk sampai ctx habis; interval antar-chunk = `FAKE_TTS_CHUNK_INTERVAL_MS`.
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/fake/ -race -run FakeTTS`. Expected: FAIL.
-- [ ] **Step 3: Implement.** Durasi = `max(300 ms, rune×MsPerChar)/speed`, `speed = Params["speed"] (default 1.0) × m(EffectiveExpression)`; sinus 220 Hz (+20 Hz bila ekspresi ≠ neutral/""), amplitudo −20 dBFS; fake tidak membaca `Voice`/`Bindings`.
+- [ ] **Step 3: Implement.** Durasi = `max(300 ms, rune×MsPerChar)/speed`, `speed = req.SpeakingRate` (0 → 1.0); sinus 220 Hz, amplitudo −20 dBFS; fake tidak membaca `Voice`/`VoiceID`/`Model` (D-015: mode fake mengabaikan provider_name/model_name/voice_id karakter, termasuk `PLACEHOLDER_*`).
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/fake/ ./internal/provider/providertest/ -race -run 'FakeTTS|TTSSuite'` → PASS.
 - [ ] **Step 5: Commit** — `git commit -am "feat(provider/fake): fake TTS dan providertest.TTSSuite"`
 
 ---
 
-### Task 12: Fake STT (korelasi envelope) + `providertest.STTSuite`
+### Task 11: Fake STT (korelasi envelope) + `providertest.STTSuite`
 
 **Files:**
 - Create: `internal/provider/fake/stt.go`, `internal/provider/providertest/stt.go`
@@ -402,14 +374,14 @@ func TestFakeSTTMatchesFixtureByEnvelope(t *testing.T) {
 
 ---
 
-### Task 13: Fake Evaluation, Embedding, Pronunciation + suite
+### Task 12: Fake Evaluation, Embedding + suite
 
 **Files:**
-- Create: `internal/provider/fake/eval.go`, `fake/embedding.go`, `fake/pronunciation.go`, `fake/fixtures/kotoki_fake_example.json`, `providertest/eval.go`, `providertest/embedding.go`, `providertest/pronunciation.go`
-- Test: `internal/provider/fake/eval_test.go`, `embedding_test.go`, `pronunciation_test.go`
+- Create: `internal/provider/fake/eval.go`, `fake/embedding.go`, `fake/fixtures/kotoki_fake_example.json`, `providertest/eval.go`, `providertest/embedding.go`
+- Test: `internal/provider/fake/eval_test.go`, `embedding_test.go`
 
 **Interfaces:**
-- Produces: `fake.NewEvaluation(name, c CapConfig, cfg Config, d Deps) *Evaluation` (`//go:embed fixtures/*.json`; `FAKE_EVAL_FIXTURE_DIR` menimpa); `fake.NewEmbedding(...) *Embedding`; `fake.NewPronunciation(...) *Pronunciation`; `providertest.EvaluationSuite(t, newProvider, req provider.StructuredRequest)`, `providertest.EmbeddingSuite(t, newProvider)`, `providertest.PronunciationSuite(t, newProvider)`.
+- Produces: `fake.NewEvaluation(name, c CapConfig, cfg Config, d Deps) *Evaluation` (`//go:embed fixtures/*.json`; `FAKE_EVAL_FIXTURE_DIR` menimpa); `fake.NewEmbedding(...) *Embedding`; `providertest.EvaluationSuite(t, newProvider, req provider.StructuredRequest)`, `providertest.EmbeddingSuite(t, newProvider)`.
 
 - [ ] **Step 1: Write the failing test**
 ```go
@@ -419,22 +391,16 @@ func TestEmbeddingSimilarTextsHaveHigherCosine(t *testing.T) {
 	require.Greater(t, cosine(r.Vectors[0], r.Vectors[1]), cosine(r.Vectors[0], r.Vectors[2]))
 	require.InDelta(t, 1.0, norm(r.Vectors[0]), 1e-6)           // L2 = 1
 }
-func TestPronunciationRanges(t *testing.T) {
-	require.Equal(t, provider.PronunciationTooShort, assess(t, wavMs(400)).Status)
-	require.Equal(t, provider.PronunciationTooLong, assess(t, wavMs(30001)).Status)
-	r := assess(t, wavMs(2000)); require.Equal(t, provider.PronunciationOK, r.Status); require.Nil(t, r.ProsodyScore)
-	require.InDelta(t, r.AccuracyScore, r.PronScore, 5.0001)
-}
 ```
-Kasus lain — Evaluation: fixture `kotoki_fake_example.json` memuat `"{{score}}"` → diganti `50 + fnv32(RequestID) % 41` (50–90, integer; sama untuk RequestID sama; hasil lolos `json.Valid`); `SchemaName` tanpa fixture → `*Error{Kind: INVALID_REQUEST}`; `Usage`/`FinishReason=STOP`; berlaku juga lewat `GenerateJSON` pada instance FALLBACK. Embedding: teks kosong → `e_0` (`v[0]==1`); entri 1..64 teks, 65 → `INVALID_REQUEST`; `Usage.InputTokens` = total rune, `OutputTokens=0`; fitur: trigram rune (dipad `^`/`$`) `v[fnv32(g)%1536] += sign(fnv32("s"+g))`. Pronunciation: accuracy = `60 + fnv32(ReferenceText + strconv.Itoa(len(audio))) % 36`; fluency/completeness/pron = accuracy ± 5 deterministik (offset −5, +5, 0 — nama dari plan: fluency −5, completeness +5, pron 0); `Words` per 2 rune referensi, `ErrorType=NONE`, kata ke-3 `MISPRONUNCIATION` bila accuracy < 75; WAV bukan PCM16 16 kHz → `INVALID_REQUEST`. Suite: `JSONValidAndUsagePositive`, `UnknownSchemaIsInvalidRequest`, `VectorsDims1536InOrder`, `DurationBoundsAreNotErrors`.
-- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/fake/ -race -run 'Embedding|Pronunciation|FakeEval'`. Expected: FAIL.
-- [ ] **Step 3: Implement** ketiganya; latency default 500/20/300 ms dengan fault `error|timeout|slow` didukung seperti T9 (helper `applyPlan(ctx, plan)` dibuat di T9/T10 — pakai ulang).
+Kasus lain — Evaluation: fixture `kotoki_fake_example.json` memuat `"{{score}}"` → diganti `50 + fnv32(RequestID) % 41` (50–90, integer; sama untuk RequestID sama; hasil lolos `json.Valid`); `SchemaName` tanpa fixture → `*Error{Kind: INVALID_REQUEST}`; `Usage`/`FinishReason=STOP`; instance `FAKE_FALLBACK` tidak ada untuk Evaluation (D-017). Embedding: teks kosong → `e_0` (`v[0]==1`); entri 1..64 teks, 65 → `INVALID_REQUEST`; `Usage.InputTokens` = total rune, `OutputTokens=0`; fitur: trigram rune (dipad `^`/`$`) `v[fnv32(g)%1536] += sign(fnv32("s"+g))`. Suite: `JSONValidAndUsagePositive`, `UnknownSchemaIsInvalidRequest`, `VectorsDims1536InOrder`.
+- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/fake/ -race -run 'Embedding|FakeEval'`. Expected: FAIL.
+- [ ] **Step 3: Implement** keduanya; latency default 500/20 ms dengan fault `error|timeout|slow` didukung seperti T8 (helper `applyPlan(ctx, plan)` dibuat di T8/T9 — pakai ulang).
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/fake/ ./internal/provider/providertest/ -race` → PASS.
-- [ ] **Step 5: Commit** — `git commit -am "feat(provider/fake): fake evaluation, embedding, pronunciation dan suite"`
+- [ ] **Step 5: Commit** — `git commit -am "feat(provider/fake): fake evaluation, embedding dan suite"`
 
 ---
 
-### Task 14: `redisstore.FakeFaults` (integration)
+### Task 13: `redisstore.FakeFaults` (integration)
 
 **Files:**
 - Create: `internal/redisstore/fakefaults.go`
@@ -464,94 +430,94 @@ func TestFakeFaultsPollsRedisKey(t *testing.T) {
 
 ---
 
-### Task 15: Router inti — `RouterDeps`, `NewRouter`, seleksi, health snapshot
+### Task 14: Router inti — `RouterDeps`, `NewRouter`, breaker/semaphore, health snapshot
 
 **Files:**
 - Create: `internal/provider/router.go`
 - Test: `internal/provider/router_test.go` (`package provider_test`), `internal/provider/router_helpers_test.go`
 
 **Interfaces:**
-- Consumes: T1–T8, `fake.*` (hanya di test).
-- Produces: interface `RealtimeRouter`, `AsyncRouter`, `EvaluationRoute`, `ResilientSTTSession`, `Generation`, `GenerationSummary`, `TextRequest/Result` persis §8.2.8; `type ProcessRole string` (`RoleRealtime`, `RoleWorker`; nama dari plan — dibutuhkan karena `RealtimeRouter.CompleteText` dan `AsyncRouter.CompleteText` bertanda tangan sama tetapi kebijakan retry/tunggu semaphore berbeda, §8.5.6/§8.6.2); `RouterDeps` §8.5.2 + `Role ProcessRole`, `Metrics *Metrics`, `Sleep func(ctx context.Context, d time.Duration) error` (default timer nyata), `Jitter func(d time.Duration) time.Duration` (default ±20 % acak; test: identitas) — ketiganya nama dari plan; `func NewRouter(cfg RouterConfig, d RouterDeps) (*Router, error)` (memanggil `cfg.Validate()`; membuat breaker & semaphore untuk setiap (vendor, kap) di `Deps`); `(*Router).candidates(c Capability) ([]candidate, error)` (§8.5.3; breaker OPEN dilewati; kosong → `*Error{UNAVAILABLE,"all_circuits_open"}`; lewati primary karena breaker → `reason=CIRCUIT_OPEN`); `(*Router).HealthSnapshot() []ProviderHealth`; `(*Router).llmModel/ttsModel`; `*Router` memenuhi `RealtimeRouter` & `AsyncRouter` (asersi `var _`).
-- Wiring: M4 TIDAK merakit router untuk binary. M5 T25 (`cmd/internal/providerwire/fake.go`, `BuildFake(cfg, caps, deps)`) WAJIB mengisi semua field `RouterDeps`: `STT`, `LLM`, `TTS`, `Evaluation`, `Embedding`, `Pron` (nil bila `PRONUNCIATION_PRIMARY=NONE`), `Prices` (`PriceTable`), `Expressions` (`ExpressionCatalog`), `Clock`, `Log`, `Role` (`RoleRealtime`/`RoleWorker`), `Metrics`; `Sleep`/`Jitter` dibiarkan nil (default nyata). Instance fake: `FAKE_PRIMARY` dan `FAKE_FALLBACK` per kapabilitas dengan `fake.Deps{Clock, Faults, Log, Seed}`.
-- Test helper (`router_helpers_test.go`): `newTestRouter(t, opts ...testOpt) (*provider.Router, *testEnv)` merakit `fake` PRIMARY/FALLBACK untuk semua kapabilitas, `clock.NewFake`, `Sleep` perekam, `Jitter` identitas, registry Prometheus privat, `slog` JSON ke buffer.
+- Consumes: T1–T7, `fake.*` (hanya di test).
+- Produces: interface `RealtimeRouter`, `AsyncRouter` (`Evaluation() EvaluationProvider`), `RoutedSTTSession`, `Generation`, `GenerationSummary`, `TextRequest/Result` persis §8.2.8; `type ProcessRole string` (`RoleRealtime`, `RoleWorker`; nama dari plan — `RealtimeRouter.CompleteText` dan `AsyncRouter.CompleteText` bertanda tangan sama tetapi kebijakan retry/tunggu semaphore berbeda, §8.5.6/§8.6.2); `RouterDeps` §8.5.2 (`STT`, `LLM`, `Evaluation` — tepat satu adapter masing-masing; `TTS map[Name]TTSProvider` 1–2 vendor; `Embedding`; `Prices`, `Clock`, `Log`) + `Role ProcessRole`, `Metrics *Metrics`, `Sleep func(ctx context.Context, d time.Duration) error` (default timer nyata), `Jitter func(d time.Duration) time.Duration` (default ±20 % acak; test: identitas) — tiga terakhir nama dari plan; `func NewRouter(cfg RouterConfig, d RouterDeps) (*Router, error)` (memanggil `cfg.Validate()`; validasi `d.STT/LLM/Evaluation/Embedding != nil`; tidak ada peta primary/fallback STT/LLM; membuat breaker & semaphore untuk setiap (vendor, kapabilitas) yang ada di `Deps`, key `{Name, Capability}`); `(*Router).ttsCandidates(v VoiceSelection) ([]ttsCandidate, error)` (= `[Primary.Provider]` + `[Fallback.Provider]` bila `Fallback != nil` dan `TTSFallbackEnabled`; breaker tetap per (vendor, kapabilitas), D-043; primary breaker OPEN dan ada fallback → fallback dengan `reason=CIRCUIT_OPEN`; tidak ada kandidat usable → `*Error{UNAVAILABLE,"circuit_open"}`); untuk STT/LLM/EVALUATION/EMBEDDING: `(*Router).admit(c Capability) (Ticket, release func(), *Error)` (breaker `Allow` → bila ditolak `*Error{UNAVAILABLE,"circuit_open",Retryable:true}` fail-fast, tanpa vendor lain); `(*Router).HealthSnapshot() []ProviderHealth`; `(*Router).llmModel() string` (model LLM vendor aktif), `(*Router).ttsVendors() []Name` (vendor TTS terdaftar di `RouterDeps.TTS`, untuk validator konten Bab 6 §6.9; tidak ada `ttsModel`, D-015); `*Router` memenuhi `RealtimeRouter` & `AsyncRouter` (asersi `var _`).
+- Wiring: M4 TIDAK merakit router untuk binary. M5 T25 (`cmd/internal/providerwire/fake.go`, `BuildFake(cfg, caps, deps)`) WAJIB mengisi semua field `RouterDeps`: `STT`, `LLM`, `Evaluation`, `TTS` (`FAKE_PRIMARY` + `FAKE_FALLBACK`), `Embedding`, `Prices`, `Clock`, `Log`, `Role`, `Metrics`; `Sleep`/`Jitter` nil (default nyata). Instance fake: `FAKE_PRIMARY` untuk semua kapabilitas, `FAKE_FALLBACK` hanya TTS, dengan `fake.Deps{Clock, Faults, Log, Seed}`. Adapter vendor nyata dipilih `cmd/*` dari flag `*_ENABLED` (M9).
+- Test helper (`router_helpers_test.go`): `newTestRouter(t, opts ...testOpt) (*provider.Router, *testEnv)` merakit `fake` `FAKE_PRIMARY` untuk semua kapabilitas + `FAKE_FALLBACK` untuk TTS, `clock.NewFake`, `Sleep` perekam, `Jitter` identitas, registry Prometheus privat, `slog` JSON ke buffer.
 
 - [ ] **Step 1: Write the failing test**
 ```go
-func TestCandidatesSkipsOpenBreakerAndMarksFallback(t *testing.T) {
+func TestSingleVendorOpenBreakerFailsFast(t *testing.T) {
 	r, env := newTestRouter(t, withMode("fake"))
 	env.openBreaker(provider.FakePrimary, provider.CapLLM)         // 5 kegagalan via fault error
-	c, err := r.CandidatesForTest(provider.CapLLM)                 // export_test.go
-	require.NoError(t, err); require.Equal(t, []provider.Name{provider.FakeFallback}, names(c)); require.True(t, c[0].ViaCircuitOpen)
+	_, err := r.AdmitForTest(provider.CapLLM)                      // export_test.go
+	var pe *provider.Error; require.ErrorAs(t, err, &pe)
+	require.Equal(t, provider.KindUnavailable, pe.Kind); require.Equal(t, "circuit_open", pe.VendorCode); require.True(t, pe.Retryable)
 }
-func TestAllCircuitsOpenIsUnavailable(t *testing.T) { /* kedua breaker open → Kind UNAVAILABLE, VendorCode "all_circuits_open" */ }
-func TestFallbackDisabledMeansPrimaryOnly(t *testing.T) { /* FallbackEnabled=false → 1 kandidat */ }
-func TestNewRouterRejectsInvalidConfig(t *testing.T) { /* primary==fallback → error menyebut env */ }
+func TestTTSCandidatesSkipOpenPrimaryToCharacterFallback(t *testing.T) { /* Primary breaker OPEN + Fallback ada → [Fallback], ViaCircuitOpen=true */ }
+func TestTTSAllCircuitsOpenIsCircuitOpen(t *testing.T) { /* kedua breaker TTS open → UNAVAILABLE "circuit_open" */ }
+func TestNewRouterRejectsMissingAdapter(t *testing.T) { /* RouterDeps.STT == nil → error; cfg invalid (dua STT true) → error menyebut env */ }
 ```
-`TestHealthSnapshotListsAllKeys` (setiap (vendor,kap) muncul dengan `concurrency_limit` dan `circuit`), `TestModelSelection` (PREMIUM LLM primary → `gpt-4.1`, fallback → `gemini-2.5-flash`; STANDARD TTS model `eleven_flash_v2_5`). `export_test.go` mengekspos `CandidatesForTest`.
-- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run 'Candidates|AllCircuits|FallbackDisabled|NewRouter|HealthSnapshot|ModelSelection'`. Expected: FAIL.
-- [ ] **Step 3: Implement** `router.go` sesuai §8.5.2–8.5.3 (struct `Router` dengan field §8.5.2). Transisi breaker memanggil `Metrics.SetCircuit`/`circuit_transitions` dan `slog.Warn("provider circuit state changed")`. Semaphore wait per kapabilitas: STT 0; LLM/TTS 100 ms (Role realtime) atau 30 s (Role worker); EVALUATION/EMBEDDING/PRONUNCIATION 30 s.
+`TestHealthSnapshotListsAllKeys` (setiap (vendor,kap) yang terdaftar muncul dengan `concurrency_limit` dan `circuit`), `TestModelSelection` (LLM aktif OPENAI → `llmModel()=="gpt-4.1"`; DEEPSEEK aktif → `deepseek-flash`; `TextRequest.Model` non-kosong menimpa), `TestTTSCandidatesFromVoiceSelection` (`Primary=CARTESIA`, `Fallback=&ELEVENLABS` → `[CARTESIA, ELEVENLABS]`; `Fallback=nil` → 1 kandidat; `TTSFallbackEnabled=false` → 1; breaker CARTESIA/TTS dibagi dua karakter berbeda dengan vendor sama), `TestTTSVendorsListsRegistered` (`ttsVendors()` = kunci `RouterDeps.TTS`). `export_test.go` mengekspos `AdmitForTest`/`TTSCandidatesForTest`.
+- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run 'SingleVendor|TTSCandidates|TTSAllCircuits|NewRouter|HealthSnapshot|ModelSelection'`. Expected: FAIL.
+- [ ] **Step 3: Implement** `router.go` sesuai §8.5.2–8.5.3 (struct `Router` dengan field §8.5.2). Transisi breaker memanggil `Metrics.SetCircuit`/`circuit_transitions` dan `slog.Warn("provider circuit state changed")`. Semaphore wait: STT 0; LLM/TTS 100 ms (Role realtime) atau 30 s (Role worker); EVALUATION/EMBEDDING 30 s.
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/... -race` → PASS.
-- [ ] **Step 5: Commit** — `git commit -am "feat(provider): router inti, seleksi kandidat, health snapshot"`
+- [ ] **Step 5: Commit** — `git commit -am "feat(provider): router inti satu vendor aktif, seleksi TTS, health snapshot"`
 
 ---
 
-### Task 16: `Generation` — LLM, fallback D-042, RESET, TRUNCATED, CONTENT_FILTERED
+### Task 15: `Generation` — LLM satu vendor (TRUNCATED, CONTENT_FILTERED, tanpa fallback)
 
 **Files:**
 - Create: `internal/provider/generation.go`
 - Test: `internal/provider/generation_llm_test.go` (`package provider_test`)
 
 **Interfaces:**
-- Consumes: `Router` (T15), fake LLM (T10).
-- Produces: `(*Router).NewGeneration(sessionID uuid.UUID, generation int64, profile ProfileName, voice VoiceSelection) Generation`; `Generation.StreamLLM`, `MarkAudioSent`, `Summary` (LLM bagian: `LLMProvider, LLMModel, UsedFallback, LLMUsage` (jumlah SEMUA attempt, estimasi `Estimated=true` bila attempt gagal tanpa usage — 1,0 token/rune §8.7.3), `LLMFirstTokenMs`).
+- Consumes: `Router` (T14), fake LLM (T9).
+- Produces: `(*Router).NewGeneration(sessionID uuid.UUID, generation int64, voice VoiceSelection) Generation` (model LLM dari vendor aktif, D-016/D-017; `voice` dari snapshot karakter, D-015); `Generation.StreamLLM`, `MarkAudioSent`, `Summary` (LLM bagian: `LLMProvider, LLMModel, LLMUsage` (estimasi `Estimated=true` bila gagal/dibatalkan tanpa usage — 1,0 token/rune §8.7.3), `LLMFirstTokenMs`; `UsedFallback` hanya untuk TTS). Tidak ada event `RESET` dan tidak ada fallback vendor LLM (D-017).
 
 - [ ] **Step 1: Write the failing test**
 ```go
-func TestGenerationFallsBackBeforeAudioWithReset(t *testing.T) {
+func TestGenerationLLMErrorIsFinalNoVendorSwitch(t *testing.T) {
 	r, env := newTestRouter(t); env.llmFault(provider.FakePrimary, fake.CapConfig{FailurePhase: "mid", FailAfter: 2, FailureRate: 1}) // 2 DELTA lalu ERROR
-	g := r.NewGeneration(sid, 1, provider.ProfilePremium, voice)
+	g := r.NewGeneration(sid, 1, voice)
 	s, err := g.StreamLLM(ctx, userReq("こんにちは")); require.NoError(t, err)
 	evs := drainLLM(t, s)
-	require.Contains(t, types(evs), provider.LLMReset)                     // RESET sebelum DELTA fallback
-	require.Equal(t, provider.LLMDone, evs[len(evs)-1].Type)
-	require.True(t, g.Summary().UsedFallback); require.Equal(t, provider.FakeFallback, g.Summary().LLMProvider)
-	require.Equal(t, "gemini-2.5-flash", g.Summary().LLMModel)             // model fallback PREMIUM
+	require.Equal(t, []provider.LLMEventType{provider.LLMDelta, provider.LLMDelta, provider.LLMError}, types(evs))
+	require.Equal(t, provider.FakePrimary, g.Summary().LLMProvider); require.False(t, g.Summary().UsedFallback)
 }
 ```
-(`env.fault` memakai `fake.CapConfig{FailurePhase:"mid", FailAfter:2, FailureRate:1}` pada instance primary.) Test lain (nama persis):
-- `TestGenerationNoFallbackAfterAudioSent` (review 2): `g.MarkAudioSent()` setelah DELTA pertama, lalu error primary → event terakhir `ERROR` (kind UNAVAILABLE), tidak ada `RESET`, `UsedFallback=false`, fallback tidak dipanggil (counter fake fallback = 0).
-- `TestGenerationTruncatedAfterAudioSent` (review 3): fake LLM `hang` setelah delta pertama (`mid` lalu `hang`), `MarkAudioSent()`, ctx induk ber-deadline → event terakhir `DONE{FinishTruncated}` dengan `Usage != nil`; `Metrics requests_total{outcome="truncated"}` naik; breaker primary TIDAK tercatat kegagalan bila penyebab deadline sesi, TERCATAT TIMEOUT bila penyebab `LLM_TOTAL` (set `TimeoutLLMTotal=40ms`).
-- `TestGenerationDeadlineBeforeAudioFallsBack`: deadline total sebelum `MarkAudioSent` → `TIMEOUT` → fallback (RESET bila sudah ada DELTA); bila ctx induk sudah lewat deadline → langsung `ERROR`, tanpa fallback.
-- `TestGenerationContentFilteredNoFallback` (review 1): primary mengembalikan `ERROR{CONTENT_FILTERED}` (fault `kind`) → satu `ERROR`, tanpa `RESET`, fallback tidak dipanggil, breaker tetap CLOSED setelah 10 kali; varian `DONE{CONTENT_FILTERED}` diteruskan apa adanya.
-- `TestGenerationFirstTokenTimeoutFallsBack` (`TimeoutLLMFirstToken=40ms`, primary `hang` → fallback sukses, `LLMFirstTokenMs` = latensi fallback).
-- `TestGenerationCancelYieldsCancelledDone` (cancel ctx pemanggil → `DONE{CANCELLED}`, `ticket.Done(Canceled)` tidak dihitung breaker, `MaxSentences`-style cancel tidak memicu fallback).
-- `TestGenerationSemaphoreFullFallsBack` (limit LLM primary 1 ditahan, request kedua → `local_concurrency` → fallback, breaker primary tidak terhitung).
-- `TestGenerationUsageSumsAllAttempts` (attempt gagal + attempt fallback → `InputTokens` dijumlahkan, `Estimated` true untuk yang gagal).
-- `TestGenerationAllFailYieldsSingleError` (kedua vendor gagal → satu `ERROR` kind terakhir, channel ditutup).
+Test lain (nama persis):
+- `TestGenerationNoResetEventExists` (tidak ada konstanta/tipe event `LLMReset` di paket: `go/parser`/reflect pada daftar `LLMEventType` hanya `DELTA, DONE, ERROR`).
+- `TestGenerationTruncatedAfterAudioSent` (review 3): fake LLM `mid` lalu `hang`, `g.MarkAudioSent()` setelah DELTA pertama, ctx induk ber-deadline → event terakhir `DONE{FinishTruncated}` dengan `Usage != nil`; `requests_total{outcome="truncated"}` naik; breaker TIDAK tercatat kegagalan bila penyebab deadline sesi, TERCATAT TIMEOUT bila penyebab `LLM_TOTAL` (set `TimeoutLLMTotal=40ms`).
+- `TestGenerationDeadlineBeforeAudioIsError`: deadline total sebelum `MarkAudioSent` → satu `ERROR{TIMEOUT}` (tanpa fallback); ctx induk sudah lewat deadline → langsung `ERROR`.
+- `TestGenerationContentFilteredFailsNoBreaker` (review 1): primary mengembalikan `ERROR{CONTENT_FILTERED}` → satu `ERROR`, breaker tetap CLOSED setelah 10 kali; varian `DONE{CONTENT_FILTERED}` diteruskan apa adanya.
+- `TestGenerationFirstTokenTimeout` (`TimeoutLLMFirstToken=40ms`, primary `hang` → `ERROR{TIMEOUT}`; breaker mencatat kegagalan).
+- `TestGenerationCircuitOpenFailsFast` (breaker LLM OPEN → `ERROR{UNAVAILABLE,"circuit_open"}` seketika, tanpa memanggil adapter).
+- `TestGenerationCancelYieldsCancelledDone` (cancel ctx pemanggil → `DONE{CANCELLED}`, `ticket.Done(Canceled)` tidak dihitung breaker).
+- `TestGenerationSemaphoreFullFailsLocalConcurrency` (limit LLM 1 ditahan, request kedua → `ERROR{RATE_LIMITED,"local_concurrency"}`, breaker tidak terhitung).
+- `TestGenerationUsageEstimatedOnError` (error mid-stream → `LLMUsage.Estimated=true`).
+- `TestGenerationDefaultsFromConfig` (`LLMRequest.MaxTokens`/`Temperature` kosong → `LLM_MAX_OUTPUT_TOKENS`/`LLM_TEMPERATURE`; `Model` = model LLM vendor aktif).
 - `TestRouterLogsNeverContainText`: teks sentinel `SENTINEL-秘密-123` di Messages dan di output tidak muncul di buffer log DEBUG maupun label metrik.
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run 'TestGeneration|TestRouterLogs'`. Expected: FAIL (`NewGeneration` belum ada).
-- [ ] **Step 3: Implement** `generation.go` mengikuti pseudocode §8.5.7 (satu goroutine per `StreamLLM`; `audioSent atomic.Bool` dibaca sebelum fallback; `RESET` hanya bila `emitted`; `LLMReq.MaxTokens`/`Temperature` kosong → default profile dari `RouterConfig`; `req.Model` diisi router; ctx per attempt `WithTimeout(LLM_TOTAL)`; deadline sesi dibedakan dari `LLM_TOTAL` dengan memeriksa `ctx` induk `Err()` vs `attemptCtx.Err()`). Setiap attempt memanggil `Metrics.ObserveCall/ObserveLatency/Usage/CostUSD` (harga lewat `PriceTable`; `ok=false` → biaya 0) dan health `Record`.
+- [ ] **Step 3: Implement** `generation.go` mengikuti pseudocode §8.5.7 (satu goroutine per `StreamLLM`; `audioSent atomic.Bool` dibaca saat deadline; deadline sesi dibedakan dari `LLM_TOTAL` dengan memeriksa `ctx` induk `Err()` vs `attemptCtx.Err()`; setiap jalur menyelesaikan `ticket.Done` tepat sekali dan melepas semaphore). Setiap panggilan memanggil `Metrics.ObserveCall/ObserveLatency/Usage/CostUSD` (harga lewat `PriceTable`; `ok=false` → biaya 0) dan health `Record`.
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/ -race -run 'TestGeneration|TestRouterLogs' -count=5` → PASS.
-- [ ] **Step 5: Commit** — `git commit -am "feat(provider): Generation LLM dengan fallback D-042, RESET, TRUNCATED"`
+- [ ] **Step 5: Commit** — `git commit -am "feat(provider): Generation LLM satu vendor dengan TRUNCATED, tanpa fallback"`
 
 ---
 
-### Task 17: `Generation` — TTS: epoch, vendor dipin, hookup `ResolveTTSParams`
+### Task 16: `Generation` — TTS: epoch (fallback per karakter), voice dipin, VoiceID/model dari `VoiceSelection` karakter
 
 **Files:**
 - Modify: `internal/provider/generation.go`
 - Test: `internal/provider/generation_tts_test.go` (`package provider_test`)
 
 **Interfaces:**
-- Consumes: T7 (`ResolveTTSParams`), T11 (fake TTS), T16.
-- Produces: `Generation.Synthesize`, `TTSEpochChanged() <-chan int`, `Summary()` bagian TTS (`TTSProvider, TTSModel, TTSVoiceID, TTSCharacters` (jumlah rune SEMUA request termasuk restart), `TTSFirstAudioMs`); chunk meneruskan `Epoch`; `*Error{INVALID_REQUEST,"voice_binding_missing"}` untuk vendor nyata tanpa binding; validasi `SpeakingRate` (0 → 1.0; di luar 0.80–1.05 → `INVALID_REQUEST`).
+- Consumes: T10 (fake TTS), T15.
+- Produces: `Generation.Synthesize`, `TTSEpochChanged() <-chan int`, `Summary()` bagian TTS (`TTSProvider, TTSModel, TTSVoiceID, TTSCharacters` (jumlah rune SEMUA request termasuk restart), `TTSFirstAudioMs`); chunk meneruskan `Epoch`; router mengisi `req.VoiceID = ref.VoiceID` dan `req.Model = ref.ModelName` (apa adanya dari karakter, tanpa model default global) dengan `ref` = `Voice.Primary`, atau `*Voice.Fallback` setelah switch (§8.4.12); mode TTS fake: `req.Model="fake-tts"`, `req.VoiceID="FAKE"` (voice karakter diabaikan); `*Error{INVALID_REQUEST,"voice_binding_missing"}` bila vendor `ref.Provider` tak terdaftar di `RouterDeps.TTS` atau `ref.VoiceID==""` (mode real); validasi `SpeakingRate` (0 → 1.0; di luar 0.80–1.05 → `INVALID_REQUEST`).
 
 - [ ] **Step 1: Write the failing test**
 ```go
 func TestTTSSwitchesToFallbackBeforeAudioAndBumpsEpoch(t *testing.T) {
 	r, env := newTestRouter(t); env.failTTS(provider.FakePrimary, "before_first")
-	g := r.NewGeneration(sid, 1, provider.ProfileStandard, provider.VoiceSelection{})
+	g := r.NewGeneration(sid, 1, provider.VoiceSelection{Primary: provider.VoiceRef{Provider: provider.FakePrimary}, Fallback: &provider.VoiceRef{Provider: provider.FakeFallback}})
 	s, err := g.Synthesize(ctx, ttsReq("こんにちは。")); require.NoError(t, err)
 	last := drainTTS(t, s)[len(drainTTS)-1]
 	require.Equal(t, "tts_provider_switched", last.Err.VendorCode)
@@ -561,74 +527,73 @@ func TestTTSSwitchesToFallbackBeforeAudioAndBumpsEpoch(t *testing.T) {
 	require.True(t, g.Summary().UsedFallback)
 }
 ```
-Test lain: `TestTTSNoEpochSwitchAfterAudioSent` (review 2: `MarkAudioSent()` lalu primary gagal → `TTSChunk{Err}` apa adanya, epoch tetap 0, `TTSEpochChanged` tidak mengirim); `TestTTSVendorPinnedPerGeneration` (setelah switch, kalimat berikutnya langsung ke fallback tanpa mencoba primary; dua kalimat paralel tidak mencampur vendor); `TestTTSSwitchOnlyOncePerGeneration` (fallback gagal → chunk `Err`, epoch tidak naik lagi); `TestTTSStartsOnFallbackWhenPrimaryBreakerOpen` (`ttsVendor` awal = fallback, `UsedFallback` true, epoch 0); `TestTTSFakeVendorSkipsBindings` (fake: `req.Model=="fake-tts"`, `Resolved.ProviderVoiceID=="FAKE"`, `Params["speed"]==SpeakingRate`); `TestTTSVoiceBindingMissingIsInvalidRequestNotBreaker` (stub vendor bernama `ELEVENLABS` tanpa `Bindings[ELEVENLABS]` → error `voice_binding_missing`, breaker tetap CLOSED, primary → pindah fallback); `TestTTSExpressionDegradedMetric` (`laugh` tanpa AUDIO_TAGS → `kotoki_tts_expression_degraded_total{from="laugh",to="amused"}` = 1); `TestTTSSpeakingRateValidation` (0.79 dan 1.06 → `INVALID_REQUEST`; 0 diterima sebagai 1.0); `TestTTSFirstAudioTimeoutSwitches` (`TimeoutTTSFirstAudio=40ms`, primary `hang` → switch); `TestTTSCharactersSummed` (restart epoch menambah rune); `TestTTSSemaphoreFullSwitches`.
+Test lain: `TestTTSNoEpochSwitchAfterAudioSent` (review 2: `MarkAudioSent()` lalu primary gagal → `TTSChunk{Err}` apa adanya, epoch tetap 0, `TTSEpochChanged` tidak mengirim); `TestTTSVendorPinnedPerGeneration` (setelah switch, kalimat berikutnya langsung ke fallback tanpa mencoba primary; dua kalimat paralel tidak mencampur vendor); `TestTTSSwitchOnlyOncePerGeneration` (fallback gagal → chunk `Err`, epoch tidak naik lagi); `TestTTSNoFallbackConfiguredFailsGeneration` (`Voice.Fallback==nil`, primary gagal sebelum audio → `TTSChunk{Err}` apa adanya, epoch tetap 0, `UsedFallback=false`, tidak ada `tts_provider_switched` — runtime → APOLOGY; D-042); `TestTTSStartsOnFallbackWhenPrimaryBreakerOpen` (`Voice.Fallback` ada: voice awal = fallback, `UsedFallback` true, epoch 0; tanpa `Voice.Fallback` → `ERROR` `circuit_open`); `TestTTSFakeVendorSkipsVoice` (fake: `req.Model=="fake-tts"`, `req.VoiceID=="FAKE"` walau `VoiceRef` berisi `PLACEHOLDER_*`; `SpeakingRate` diteruskan apa adanya); `TestTTSVoiceBindingMissingIsInvalidRequestNotBreaker` (mode real, `Voice.Primary={Provider:CARTESIA, VoiceID:""}` atau vendor tak terdaftar → `voice_binding_missing`, breaker tetap CLOSED, pindah ke `Voice.Fallback` bila ada, selain itu `TTSChunk{Err}`); `TestTTSRequestVoiceFromSnapshot` (`Voice.Primary={Provider:ELEVENLABS, ModelName:"Eleven v3 Conversational", VoiceID:"v1"}` → stub vendor menerima `VoiceID=="v1"`, `Model=="Eleven v3 Conversational"` persis (spasi dipertahankan, tanpa normalisasi); setelah switch stub fallback `CARTESIA` menerima `VoiceID`/`Model` dari `Voice.Fallback`; `TTSVoiceID`/`TTSModel` di Summary = ref aktif); `TestTTSTwoCharactersDifferentVendorsConcurrently` (dua generation dengan `Voice.Primary` ELEVENLABS vs CARTESIA berjalan paralel, masing-masing ke adapter benar; breaker per (vendor, TTS) dibagi antar karakter bervendor sama); `TestTTSSpeakingRateValidation` (0.79 dan 1.06 → `INVALID_REQUEST`; 0 diterima sebagai 1.0); `TestTTSFirstAudioTimeoutSwitches` (`TimeoutTTSFirstAudio=40ms`, primary `hang` → switch); `TestTTSCharactersSummed` (restart epoch menambah rune); `TestTTSSemaphoreFullSwitches`; `TestTTSVendorCartesiaRegistered` (`CARTESIA` valid di `ttsVendors()` bila adapter stub terdaftar; semaphore memakai `Concurrency.Limit(Cartesia,CapTTS)`).
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run TestTTS`. Expected: FAIL.
-- [ ] **Step 3: Implement** mengikuti §8.4.12 (alur per kalimat) dan §8.5.7 (TTS): `attempt(vendor)` mengisi `req.Model = b.ModelOverride ?? ttsModel(profile, vendor)` dan `req.Resolved`; `switchTTS` idempotent (`sync.Once`), `epochCh` buffered 1 (non-blocking send), batalkan stream epoch lama lewat ctx per-epoch; kegagalan setelah chunk pertama sebuah kalimat: bila `audioSent` → `TTSChunk{Err}`, jika belum → perlakukan seperti switch. `Metrics.TTSEpochRestart(from,to)` pada switch.
+- [ ] **Step 3: Implement** mengikuti §8.4.12 (alur per kalimat) dan §8.5.7 (TTS): `attempt(ref VoiceRef)` mengisi `req.VoiceID = ref.VoiceID` dan `req.Model = ref.ModelName` (fake: `"FAKE"`/`"fake-tts"`); state `g.ttsVoice` (awal `Voice.Primary`, atau `*Voice.Fallback` bila breaker primary OPEN dan fallback ada); `switchTTS` idempotent (`sync.Once`), hanya bila `Voice.Fallback != nil`, vendor/model/voice pindah ke `*Voice.Fallback`, `epochCh` buffered 1 (non-blocking send), batalkan stream epoch lama lewat ctx per-epoch; kegagalan setelah chunk pertama sebuah kalimat: bila `audioSent` → `TTSChunk{Err}`, jika belum → perlakukan seperti switch. `Metrics.TTSEpochRestart(from,to)` pada switch. Tanpa `Voice.Fallback`: kegagalan → `TTSChunk{Err}` (tidak ada switch/epoch; runtime → generation FAILED → APOLOGY).
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/ -race -run 'TestTTS|TestGeneration' -count=5` → PASS.
-- [ ] **Step 5: Commit** — `git commit -am "feat(provider): Generation TTS dengan epoch, vendor dipin, ResolveTTSParams"`
+- [ ] **Step 5: Commit** — `git commit -am "feat(provider): Generation TTS dengan epoch, vendor dipin, VoiceID/model per vendor"`
 
 ---
 
-### Task 18: `ResilientSTTSession` — switch, replay buffer, rotasi, sticky
+### Task 17: `rotatingSTT` — rotasi koneksi vendor sama, rotation buffer, final-timeout
 
 **Files:**
-- Create: `internal/provider/resilient_stt.go`
-- Test: `internal/provider/resilient_stt_test.go` (`package provider_test`)
+- Create: `internal/provider/stt_session.go`
+- Test: `internal/provider/stt_session_test.go` (`package provider_test`)
 
 **Interfaces:**
-- Consumes: `pcmRing` (T2), fake STT (T12) dengan `STTSession` pembungkus perekam audio (`env.recordingSTT`).
-- Produces: `(*Router).OpenSTT(ctx, cfg STTSessionConfig) (ResilientSTTSession, error)`; `ResilientSTTSession.Provider()`, `UsedFallback()`, `ReportFinalTimeout()`; event `STTProviderSwitched` dengan `SwitchedFrom`, `ReplayFromMs`, `ReplayTruncated`, `Provider`; `STTStats.Reconnects`.
+- Consumes: `pcmRing` (T2), fake STT (T11) dengan `STTSession` pembungkus perekam audio (`env.recordingSTT`).
+- Produces: `(*Router).OpenSTT(ctx, cfg STTSessionConfig) (RoutedSTTSession, error)`; `RoutedSTTSession.Provider()` (vendor aktif, tetap selama sesi) dan `ReportFinalTimeout()`; `STTStats.Reconnects`. Tidak ada pindah vendor, `StartWith`, `UsedFallback()`, event `STTProviderSwitched`, atau replay lintas vendor (D-017).
 
 - [ ] **Step 1: Write the failing test**
 ```go
-func TestResilientSTTSwitchReplayFromLastFinal(t *testing.T) {
+func TestRotationSameVendorReplaysFromLastFinal(t *testing.T) {
 	r, env := newTestRouter(t, withSTTRecorder())
 	s, _ := r.OpenSTT(ctx, provider.STTSessionConfig{SessionID: sid, Language: "ja", SampleRate: 16000})
-	sendMs(t, s, 4000); env.pushFinal(provider.FakePrimary, endMs=1500)    // FINAL berakhir di 1500 ms
-	env.killSTT(provider.FakePrimary)                                      // ERROR{UNAVAILABLE} dari vendor
-	sw := nextEventOfType(t, s, provider.STTProviderSwitched)
-	require.Equal(t, provider.FakePrimary, sw.SwitchedFrom); require.Equal(t, provider.FakeFallback, sw.Provider)
-	require.Equal(t, int64(1500), sw.ReplayFromMs); require.False(t, sw.ReplayTruncated)
-	require.Equal(t, 2500*32, env.audioReceived(provider.FakeFallback))    // 4000−1500 ms × 32 byte/ms
-	require.True(t, s.UsedFallback())
+	sendMs(t, s, 4000); env.pushFinal(provider.FakePrimary, endMs=1500)          // FINAL berakhir di 1500 ms
+	env.vendorError(provider.FakePrimary, "session_time_limit_exceeded")          // vendor menutup sesi karena batas durasi
+	require.Eventually(t, func() bool { return s.Stats().Reconnects == 1 }, time.Second, time.Millisecond)
+	require.Equal(t, provider.FakePrimary, s.Provider())
+	require.Equal(t, 2, env.opens(provider.FakePrimary))                          // koneksi baru ke vendor yang sama
+	require.Equal(t, 2500*32, env.audioReceivedOnConn(provider.FakePrimary, 2))   // 4000−1500 ms × 32 byte/ms
 }
 ```
-Test lain: `TestResilientSTTSwitchReplayTruncated` (audio 20 s tanpa FINAL → `ReplayFromMs=5000` (OldestMs), `ReplayTruncated=true`); `TestResilientSTTEventOffsets` (FINAL dari fallback `StartMs/EndMs += vendorOffsetMs`, `Provider=FAKE_FALLBACK`); `TestResilientSTTOldFinalFromFinalizeDroppedAfterSwitch` (FINAL FromFinalize vendor lama yang tiba setelah switch tidak diteruskan); `TestResilientSTTFinalizeDuringReplayDeferred` (Finalize saat replay → dikirim setelah backlog habis; audio live terjaga urutannya); `TestResilientSTTReplayChunks3200` (backlog dikirim potongan 3.200 byte); `TestResilientSTTSwitchOnlyOnce` (fallback gagal → event `ERROR` ke runtime, tidak kembali ke primary); `TestResilientSTTThreeFinalTimeoutsSwitch` (`ReportFinalTimeout()` 3× → switch; FINAL FromFinalize tepat waktu mereset hitungan); `TestResilientSTTRotationSameVendor` (table-driven, DUA kasus: vendor mengirim `ERROR{VendorCode:"session_time_limit_exceeded"}` dan `ERROR{VendorCode:"insufficient_audio_activity"}` (§8.5.8 aturan 5) → buka sesi baru vendor sama, `Reconnects==1`, `UsedFallback()==false`, breaker tidak terhitung, `kotoki_stt_rotations_total` +1); `TestOpenSTTPrimaryOpenFailsUsesFallback`; `TestOpenSTTBothFailReturnsError`; `TestOpenSTTStartWithFallback` (review 5: `StartWith=FALLBACK` → buka fallback lebih dulu, `UsedFallback()==true`, tidak ada `PROVIDER_SWITCHED`, primary tidak dibuka); `TestOpenSTTStartWithFallbackFailsTriesPrimaryOnce`; `TestResilientSTTRingMemory480000` (ring 15 s = 480.000 byte); `TestSTTAudioMsSentIncludesReplay` (`Stats().AudioMsSent` memuat replay); `TestSTTConnectTimeout3s` (`TimeoutSTTConnect=40ms`, `Open` hang → coba fallback); `TestSTTSemaphoreTryNoWait` (limit penuh → vendor berikutnya).
-- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run 'ResilientSTT|OpenSTT|STTAudio|STTConnect|STTSemaphore'`. Expected: FAIL.
-- [ ] **Step 3: Implement** `resilientSTT` dan algoritma `switchTo` persis §8.5.8 (state: `ring, active, activeVendor, vendorOffsetMs, lastFinalEndMs, switched, finalTimeouts, out`). `SendAudio` menulis ring lalu sesi aktif (saat switching hanya ring). `PROVIDER_STT_REPLAY_SPEED` > 0 → pacing `speed×` realtime. Metrik `kotoki_stt_replay_seconds`, `kotoki_provider_fallback_total{capability="STT"}`. Rotasi (vendor sama + replay, bukan switch) dipicu oleh KEDUA `VendorCode` `session_time_limit_exceeded` dan `insufficient_audio_activity`. Satu goroutine pump membaca `active.Events()`.
-- [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/ -race -run 'ResilientSTT|OpenSTT' -count=5` → PASS.
-- [ ] **Step 5: Commit** — `git commit -am "feat(provider): ResilientSTTSession dengan replay buffer 15 s dan fallback sticky"`
+Test lain: `TestRotationReplayTruncatedToRing` (audio 20 s tanpa FINAL → replay mulai `OldestMs=5000`, 480.000 byte); `TestRotationEventOffsets` (event koneksi baru `StartMs/EndMs += vendorOffsetMs`, `Provider` = vendor aktif); `TestRotationOldFinalFromFinalizeDropped` (FINAL FromFinalize koneksi lama yang tiba setelah rotasi tidak diteruskan); `TestRotationFinalizeDuringReplayDeferred` (Finalize saat replay → dikirim setelah backlog habis; urutan audio live terjaga); `TestRotationReplayChunks3200` (backlog dikirim potongan 3.200 byte); `TestRotationTriggers` (table-driven, DUA kasus: `ERROR{VendorCode:"session_time_limit_exceeded"}` dan `ERROR{VendorCode:"insufficient_audio_activity"}` (§8.5.8 butir 5) → sesi baru vendor sama, `Reconnects==1`, breaker tidak terhitung, `kotoki_stt_rotations_total` +1, `kotoki_stt_replay_seconds` terobservasi); `TestVendorErrorForwardedNoSwitch` (ERROR vendor lain / channel tertutup tak terduga → `STTError` diteruskan apa adanya, vendor lain TIDAK dibuka, breaker terhitung); `TestRotationOpenFailureForwardsError` (`Open` rotasi gagal → `STTError`, tidak ada percobaan lain); `TestOpenSTTFailureReturnsError` (`Open` gagal → error `*provider.Error`, tanpa vendor lain; breaker terhitung); `TestFinalTimeoutThreeConsecutive` (`ReportFinalTimeout()` ×3 → breaker mencatat kegagalan dan `STTError{TIMEOUT,"final_timeout"}`; FINAL FromFinalize tepat waktu mereset hitungan; ×2 tidak memicu); `TestRotationRingMemory480000` (ring 15 s = 480.000 byte); `TestSTTAudioMsSentIncludesReplay` (`Stats().AudioMsSent` memuat replay); `TestSTTConnectTimeout3s` (`TimeoutSTTConnect=40ms`, `Open` hang → error TIMEOUT); `TestSTTSemaphoreTryNoWait` (limit penuh → `RATE_LIMITED{local_concurrency}` seketika); `TestSTTCircuitOpenFailsFast` (`circuit_open`).
+- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run 'Rotation|VendorErrorForwarded|OpenSTT|FinalTimeout|STTAudio|STTConnect|STTSemaphore|STTCircuit'`. Expected: FAIL.
+- [ ] **Step 3: Implement** `rotatingSTT` dan algoritma `rotate()` persis §8.5.8 (state: `ring, active, vendor, vendorOffsetMs, lastFinalEndMs, finalTimeouts, out`). `SendAudio` menulis ring lalu sesi aktif (saat rotasi hanya ring). `PROVIDER_ROTATION_REPLAY_SPEED` > 0 → pacing `speed×` realtime. Metrik `kotoki_stt_replay_seconds`, `kotoki_stt_rotations_total`. Satu goroutine pump membaca `active.Events()`.
+- [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/ -race -run 'Rotation|OpenSTT|FinalTimeout' -count=5` → PASS.
+- [ ] **Step 5: Commit** — `git commit -am "feat(provider): rotatingSTT rotasi koneksi vendor sama dengan rotation buffer 15 s"`
 
 ---
 
-### Task 19: Router async — retry, `GenerateJSON`, `CompleteText`, `Embed`, pronunciation, `EvaluationRoute`
+### Task 18: Router async — retry, `GenerateJSON`, `CompleteText`, `Embed`, `Evaluation()`
 
 **Files:**
 - Create: `internal/provider/async.go`
 - Test: `internal/provider/async_test.go` (`package provider_test`)
 
 **Interfaces:**
-- Produces: `(*Router).GenerateJSON`, `CompleteText` (kedua interface), `Embed`, `AssessPronunciation`, `Evaluation() EvaluationRoute`; `(*Router).doAsync` tak-ekspor; `(*Router).RealtimeRouter` memakai `Role` untuk 1+1 vs 2+2.
+- Produces: `(*Router).GenerateJSON`, `CompleteText` (kedua interface), `Embed`, `Evaluation() EvaluationProvider` (provider EVALUATION aktif yang sudah dibungkus router; 1 attempt per panggilan); `(*Router).doAsync` tak-ekspor; `Role` menentukan 1 vs 3 attempt `CompleteText`. Tidak ada fallback vendor (D-017); maksimum panggilan LLM logis per delivery = 2 (utama + repair).
 
 - [ ] **Step 1: Write the failing test**
 ```go
-func TestGenerateJSONRetriesThenFallsBack(t *testing.T) {
+func TestGenerateJSONRetriesSameVendorThenFails(t *testing.T) {
 	r, env := newTestRouter(t, withRole(provider.RoleWorker)); env.failEval(provider.FakePrimary, provider.KindUnavailable) // selalu gagal
-	res, err := r.GenerateJSON(ctx, evalReq("kotoki_fake_example"))
-	require.NoError(t, err); require.Equal(t, provider.FakeFallback, res.Provider)
-	require.Equal(t, 2, env.calls(provider.FakePrimary, provider.CapEvaluation)); require.Equal(t, 1, env.calls(provider.FakeFallback, provider.CapEvaluation))
-	require.Equal(t, []time.Duration{time.Second}, env.sleeps())     // backoff 1 s sebelum attempt kedua primary
+	_, err := r.GenerateJSON(ctx, evalReq("kotoki_fake_example"))
+	var pe *provider.Error; require.ErrorAs(t, err, &pe); require.Equal(t, provider.KindUnavailable, pe.Kind)
+	require.Equal(t, 3, env.calls(provider.FakePrimary, provider.CapEvaluation))
+	require.Equal(t, []time.Duration{time.Second, 4 * time.Second}, env.sleeps())   // backoff 1 s, 4 s (jitter identitas)
 }
 ```
-Test lain: `TestBackoffSequenceForEvaluation` (primary gagal 2×, fallback gagal 2× → total 4 attempt, sleeps `[1s, 4s]` — backoff attempt ke-a = 1 s, 4 s; tanpa jitter; error akhir `*provider.Error` dengan `Retryable` apa adanya); `TestRetryAfterHonoredUpTo30s` (`RetryAfter:7s` → sleep 7 s; `RetryAfter:90s` → dipotong 30 s); `TestNonRetryableGoesStraightToFallback` (`AUTH` → tidak retry primary, fallback eligible); `TestContentFilteredFailsNonRetryableNoFallback`; `TestCancelledReturnsImmediately`; `TestEmbedThreeAttemptsBackoff500ms2s` (tanpa fallback; sleeps `[500ms, 2s]`); `TestAssessPronunciationTwoAttempts` (sleep `[2s]`) dan `TestAssessPronunciationDisabled` (`PronunciationPrimary=NONE` → `ErrPronunciationDisabled`); `TestCompleteTextWorkerTwoPlusTwo` dan `TestCompleteTextRealtimeOnePlusOne` (Role menentukan; teks `<e:...>` tidak dibuang; `UsedFallback`, `Latency` terisi; model STANDARD `gpt-4.1-mini`→fallback `gemini-2.5-flash-lite`); `TestEvaluationRouteSingleAttempt` (`Primary().GenerateJSON` gagal → tepat 1 panggilan, tidak ada sleep; model terisi `gpt-4.1`/`gemini-2.5-pro`; breaker primary OPEN → seketika `*Error{UNAVAILABLE,"circuit_open",Retryable:true}`; `Fallback()` nil bila `FallbackEnabled=false`; panggilan via `Fallback()` menaikkan `kotoki_provider_fallback_total{reason="CALLER_DIRECTED"}`); `TestAsyncSemaphoreWait30sThenRateLimited` (worker: limit 1 ditahan, `Sleep`/ctx timeout → `RATE_LIMITED` retryable); `TestAsyncMetricsAndCost` (`requests_total{task="EVALUATION"}`, `usage_total`, `cost_usd_total` memakai `PriceTable` stub berharga non-nol); `TestGenerateJSONInvalidResponseRetriedOnce` (`INVALID_RESPONSE` retry 1× sesuai tabel §8.3 lalu fallback).
-- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run 'GenerateJSON|Backoff|RetryAfter|Embed|AssessPronunciation|CompleteText|EvaluationRoute|NonRetryable|AsyncSemaphore|AsyncMetrics'`. Expected: FAIL.
-- [ ] **Step 3: Implement** pseudocode `doAsync` §8.6.2: `attempts` per vendor/kapabilitas dari tabel; `Retry-After` menggantikan backoff (maks 30 s); semua `sleep` lewat `RouterDeps.Sleep` + `Jitter`; `CompleteText` memanggil `LLMProvider.Stream` dan mengumpulkan DELTA (`ERROR` event → error; `DONE{CONTENT_FILTERED}` → `*Error{CONTENT_FILTERED}`); timeout per attempt `TimeoutLLMTotal`; `StructuredRequest.Temperature<0` → 0.2, `Evaluation` timeout `TimeoutEvaluation`. `EvaluationRoute` membungkus provider dengan breaker+semaphore+timeout+metrik tanpa retry.
+Test lain: `TestGenerateJSONSucceedsOnSecondAttempt` (gagal 1× lalu sukses → 2 panggilan, sleeps `[1s]`); `TestRetryAfterHonoredUpTo30s` (`RetryAfter:7s` → sleep 7 s; `RetryAfter:90s` → dipotong 30 s); `TestNonRetryableFailsImmediately` (`AUTH`/`INVALID_REQUEST` → 1 panggilan, tanpa sleep); `TestContentFilteredFailsNonRetryable`; `TestCancelledReturnsImmediately`; `TestEmbedThreeAttemptsBackoff500ms2s` (sleeps `[500ms, 2s]`); `TestCompleteTextWorkerThreeAttempts` dan `TestCompleteTextRealtimeSingleAttempt` (Role menentukan; `Latency` terisi; model = `llmModel()`; first-token timer tidak berlaku, timeout `TimeoutLLMTotal`); `TestEvaluationSingleAttempt` (`Evaluation().GenerateJSON` gagal → tepat 1 panggilan, tanpa sleep; `Model` terisi `<VENDOR>_EVALUATION_MODEL`; breaker OPEN → seketika `*Error{UNAVAILABLE,"circuit_open",Retryable:true}`; tidak ada metode `Primary()`/`Fallback()`: `var _ provider.EvaluationProvider = r.Evaluation()`); `TestAsyncSemaphoreWait30sThenRateLimited` (worker: limit 1 ditahan → `RATE_LIMITED` retryable); `TestAsyncMetricsAndCost` (`requests_total{task="EVALUATION"}`, `usage_total`, `cost_usd_total` memakai `PriceTable` stub berharga non-nol); `TestGenerateJSONInvalidResponseRetried` (`INVALID_RESPONSE` retryable sesuai tabel §8.3, vendor sama).
+- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/provider/ -race -run 'GenerateJSON|Backoff|RetryAfter|Embed|CompleteText|TestEvaluation|NonRetryable|AsyncSemaphore|AsyncMetrics'`. Expected: FAIL.
+- [ ] **Step 3: Implement** pseudocode `doAsync` §8.6.2: vendor aktif tunggal; `attempts` per kapabilitas dari tabel (GenerateJSON 3, CompleteText worker 3 / realtime 1, Embedding 3); `Retry-After` menggantikan backoff (maks 30 s); semua `sleep` lewat `RouterDeps.Sleep` + `Jitter`; `CompleteText` memanggil `LLMProvider.Stream` dan mengumpulkan DELTA (`ERROR` event → error; `DONE{CONTENT_FILTERED}` → `*Error{CONTENT_FILTERED}`); `StructuredRequest.Temperature<0` → 0.2, timeout `TimeoutEvaluation`. `Evaluation()` membungkus provider dengan breaker+semaphore+timeout+metrik tanpa retry.
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/provider/... -race -count=3` → PASS.
-- [ ] **Step 5: Commit** — `git commit -am "feat(provider): router async dengan retry, fallback, EvaluationRoute"`
+- [ ] **Step 5: Commit** — `git commit -am "feat(provider): router async dengan retry vendor sama dan Evaluation() satu attempt"`
 
 ---
 
-### Task 20: `provider/httpx`
+### Task 19: `provider/httpx`
 
 **Files:**
 - Create: `internal/provider/httpx/client.go`, `classify.go`, `sse.go`
@@ -659,14 +624,14 @@ Tambah: tabel seluruh baris pemetaan §8.3 (408/504 TIMEOUT retryable; 401/403 A
 
 ---
 
-### Task 21: `prompt` — estimator token, budget, `LearnerContext`, tipe data, `NormalizeSpeakable`
+### Task 20: `prompt` — estimator token, budget, `LearnerContext`, tipe data, `NormalizeSpeakable`
 
 **Files:**
 - Create: `internal/prompt/tokens.go`, `budget.go`, `learner_context.go`, `data.go`, `text.go`
 - Test: `internal/prompt/tokens_test.go`, `budget_test.go`, `data_test.go`
 
 **Interfaces:**
-- Produces: `EstimateTokens(s string) int`; `const ItemOverheadTokens = 4`; `type Budget struct{ System, Character, Scenario, Style, Expression, Learner, MemoryCore, MemoryEpisodic, Summary, SessionState, RecentTurns, CurrentInput int; MinRecentTurns int }`; `var DefaultBudget`; `func (b Budget) Total() int` (nama dari plan; jumlah 12 komponen, tanpa `MinRecentTurns`); `type LearnerContext struct{ DisplayName, Adaptation, GoalLine string; FocusSkills []string }`; `type VocabHint struct{ TermJA string \`json:"term_ja"\`; Reading string \`json:"reading"\`; Meaning string \`json:"meaning"\` }`; `type PromptData struct{...}` dan `type OpeningPromptData = PromptData` persis §6.8.2 (semua sub-struct anonim tersebut dinamai: `CharacterData, TopicData, ScenarioData, StyleData, ExpressionData, MemoryData, SessionData` — nama dari plan; field persis spec); `NormalizeSpeakable(s string) string` (hapus whitespace dan semua rune kategori P* dan S*; **diekspor di `prompt`** karena `SentenceParser` memerlukannya sedangkan spec menaruhnya di `conversation/japanese.go` — M5 memakai `prompt.NormalizeSpeakable`, tidak mendefinisikan ulang).
+- Produces: `EstimateTokens(s string) int`; `const ItemOverheadTokens = 4`; `type Budget struct{ System, Character, Scenario, Learner, MemoryCore, MemoryEpisodic, Summary, SessionState, RecentTurns, CurrentInput int; MinRecentTurns int }`; `var DefaultBudget`; `func (b Budget) Total() int` (nama dari plan; jumlah 10 komponen, tanpa `MinRecentTurns`); `type LearnerContext struct{ DisplayName, Adaptation, GoalLine string; FocusSkills []string }`; `type VocabHint struct{ TermJA string \`json:"term_ja"\`; Reading string \`json:"reading"\`; Meaning string \`json:"meaning"\` }`; `type PromptData struct{...}` dan `type OpeningPromptData = PromptData` persis §6.8.2 (D-014: tanpa `Style`/`Expression*`/`AllowedExpressions`; sub-struct anonim dinamai `CharacterData{Name, Persona, GreetingHint}`, `TopicData`, `ScenarioData`, `SpeechData{Formality, FormalityInstruction, MaxSentencesPerTurn, MaxConsecutiveQuestions}`, `MemoryData`, `SessionData` — nama dari plan; field persis spec; `Character` diisi dari `content.CharacterSnapshot`, M5); `NormalizeSpeakable(s string) string` (hapus whitespace dan semua rune kategori P* dan S*; **diekspor di `prompt`** karena `SentenceParser` memerlukannya sedangkan spec menaruhnya di `conversation/japanese.go` — M5 memakai `prompt.NormalizeSpeakable`, tidak mendefinisikan ulang).
 
 - [ ] **Step 1: Write the failing test**
 ```go
@@ -676,8 +641,8 @@ func TestEstimateTokens(t *testing.T) {
 	require.Equal(t, 3, prompt.EstimateTokens("hello wor"))                      // ceil(9/3.5)=3
 	require.Equal(t, 9, prompt.EstimateTokens("あいうえお"+"あ"+"abcdefg"))      // ceil(1.1×6 + 7/3.5) = ceil(8.6)
 }
-func TestDefaultBudgetTotal(t *testing.T) { require.Equal(t, 6950, prompt.DefaultBudget.Total()); require.Equal(t, 4, prompt.DefaultBudget.MinRecentTurns)
-	require.Equal(t, 700, prompt.DefaultBudget.Learner); require.Equal(t, 600, prompt.DefaultBudget.MemoryCore); require.Equal(t, 500, prompt.DefaultBudget.MemoryEpisodic) }
+func TestDefaultBudgetTotal(t *testing.T) { require.Equal(t, 6450, prompt.DefaultBudget.Total()); require.Equal(t, 4, prompt.DefaultBudget.MinRecentTurns)
+	require.Equal(t, 600, prompt.DefaultBudget.System); require.Equal(t, 500, prompt.DefaultBudget.Character); require.Equal(t, 400, prompt.DefaultBudget.Scenario); require.Equal(t, 700, prompt.DefaultBudget.Learner); require.Equal(t, 600, prompt.DefaultBudget.MemoryCore); require.Equal(t, 500, prompt.DefaultBudget.MemoryEpisodic) }
 ```
 - [ ] **Step 2: Run it to verify it fails** — `go test ./internal/prompt/ -race`. Expected: FAIL (build error).
 - [ ] **Step 3: Implement.** Nilai `DefaultBudget` persis §7.8.3; `EstimateTokens` memakai `math.Ceil(1.1*cjk + other/3.5)` dengan cjk = rune ≥ U+3000.
@@ -686,7 +651,7 @@ func TestDefaultBudgetTotal(t *testing.T) { require.Equal(t, 6950, prompt.Defaul
 
 ---
 
-### Task 22: `prompt.Render`, `Template`, `Params`, FuncMap, registry fixture
+### Task 21: `prompt.Render`, `Template`, `Params`, FuncMap, registry fixture
 
 **Files:**
 - Create: `internal/prompt/render.go`, `funcs.go`, `fixtures.go`
@@ -715,14 +680,14 @@ Tambah: `TestRenderUserTemplateOptional` (`User:""` → `Rendered.User==""`; ter
 
 ---
 
-### Task 23: `CoreRules`, `OutputContract`, tabel frasa, template v1, fixture min/maks
+### Task 22: `CoreRules`, `OutputContract`, `FormalityInstruction`, template v1, fixture min/maks
 
 **Files:**
 - Create: `internal/prompt/core.go`, `phrases.go`, `templates_v1.go`, `fixtures_conversation.go`
 - Test: `internal/prompt/templates_test.go`, `core_test.go`, `phrases_test.go`
 
 **Interfaces:**
-- Produces: `const CoreRules string`; `func OutputContract(allowed []string, closing bool) string` (nama dari plan; `closing=true` menambah arahan menutup percakapan ≤ 60 s, §7.11.1); `phrases.go`: `DialectInstruction(d string) string`, `FormalityInstruction`, `VerbosityInstruction`, `EnergyInstruction`, `QuestionInstruction`, `BehaviorInstructions(flags map[string]bool) []string` (urutan tetap 6 key §6.8.4), `ExpressionGuidance(level string, allowed []string, maxTagged int) string` (nama dari plan; teks persis tabel §6.8.4); `var ConversationV1, OpeningV1 prompt.Template` (`Key`, `Version:1`, `System` = teks persis §6.8.3 disalin ke raw string Go, `Params` `{temperature 0.8, max_output_tokens 320}` / `{0.7, 120}`); `func FixtureMinimal() PromptData`, `FixtureMaximal() PromptData` (maksimum = batas §6.3.2/6.3.3/6.3.6: persona 3000 rune, situation 2000, tasks 6×200, constraints 8×200, grammar_targets 8×100, vocab_hints 20, traits 8×40, quirks 6×150, memory items 20, `Learner.Adaptation` blok lengkap); `init()` memanggil `RegisterFixtures("CONVERSATION", …)` dan `("OPENING", …)` masing-masing mengembalikan `[]any{FixtureMinimal(), FixtureMaximal()}`. Frasa "(Bab 11 §11.7)" di baris Memory rules pada spec adalah rujukan silang dokumen, BUKAN teks prompt → dibuang dari konstanta (catat di `docs/implementation-deviations.md`; M3 seed MUST memakai teks yang sama dengan konstanta ini).
+- Produces: `const CoreRules string`; `func OutputContract(closing bool) string` (D-014: menyatakan output = teks Jepang polos untuk diucapkan, tanpa tag/markup; `closing=true` menambah arahan menutup percakapan ≤ 60 s, §7.11.1); `phrases.go`: `FormalityInstruction(f string) string` (`CASUAL|POLITE|KEIGO_LIGHT|KEIGO`, teks persis tabel §6.8.4; nilai tak dikenal → teks `POLITE`); `var ConversationV1, OpeningV1 prompt.Template` (`Key`, `Version:1`, `System` = teks persis §6.8.3 disalin ke raw string Go, `Params` `{temperature 0.8, max_output_tokens 320}` / `{0.7, 120}`); `func FixtureMinimal() PromptData`, `FixtureMaximal() PromptData` (maksimum = batas §6.3.2/6.3.3/6.3.5: persona 3000 rune, greeting_hint 200, situation 2000, tasks 6×200, constraints 8×200, grammar_targets 8×100, vocab_hints 20, memory items 20, episodes 3, `Learner.Adaptation` blok lengkap); `init()` memanggil `RegisterFixtures("CONVERSATION", …)` dan `("OPENING", …)` masing-masing mengembalikan `[]any{FixtureMinimal(), FixtureMaximal()}`. Frasa "(Bab 11 §11.7)" di baris Memory rules pada spec adalah rujukan silang dokumen, BUKAN teks prompt → dibuang dari konstanta (catat di `docs/implementation-deviations.md`; M3 seed MUST memakai teks yang sama dengan konstanta ini).
 
 - [ ] **Step 1: Write the failing test**
 ```go
@@ -741,79 +706,45 @@ func TestNicknameNullHasNoNameSentence(t *testing.T) {
 	o, _ := prompt.Render(prompt.OpeningV1, d); require.NotContains(t, o.System, "greet")
 }
 ```
-Tambah: `TestCoreRulesAndOutputContractPlaceholdersExactlyOnce` (`strings.Count(tpl.System,"{{.CoreRules}}")==1` dan `{{.OutputContract}}` ==1 untuk kedua template); `TestOutputContractMentionsFormat` (memuat `<e:NAME>`, setiap nama di `allowed`, larangan markdown dan romaji, "Japanese"; `closing=true` memuat kata "wrap up"; `closing=false` tidak); `TestCoreRulesPlusContractWithinBudget` (`EstimateTokens(CoreRules)+EstimateTokens(OutputContract(12 ekspresi,true)) ≤ DefaultBudget.System (600)` minus teks tetap template: batas uji ≤ 450); `TestFormalityKeigoPhrase` dan tabel frasa persis §6.8.4 untuk semua nilai enum (CASUAL/POLITE/KEIGO, SHORT/MEDIUM/LONG, CALM/NEUTRAL/LIVELY, LOW/MEDIUM/HIGH, STANDARD/KANSAI, 6 behavior); `TestExpressionGuidanceSuffix` (diakhiri `Allowed expressions: neutral, happy. At most 2 tagged sentences per reply.`); `TestAdaptationInsertedVerbatim` (blok Jepang berisi `<conversation_difficulty>` muncul byte-identik di output); `TestOpeningRendersOpeningLineQuoted` (`「…」` + `greet {Name} by name` bila nickname ada; kalimat episodik hanya bila `Memory.Episodes` ada); `TestMemoryRulesOnlyWhenMemoryPresent`; `TestPromptDataNeverCarriesFullName` (render dengan fixture lalu `strings.Contains` sentinel `FULLNAME-SENTINEL` tidak mungkin — dijamin struct; test mengasumsikan reflect guard T21 + memeriksa tidak ada template v1 yang menyebut `FullName`/`Email`).
-- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/prompt/ -race -run 'V1|Nickname|Core|OutputContract|Formality|Expression|Adaptation|Opening|Memory'`. Expected: FAIL.
-- [ ] **Step 3: Implement.** Salin teks template dari §6.8.3 (verbatim, kecuali frasa rujukan silang di atas); `CoreRules` (bahasa Inggris, ditulis di sini sesuai §6.8.1 "isinya ditulis Bab 7") WAJIB memuat: selalu jawab bahasa Jepang natural percakapan lisan; tanpa romaji; tanpa markdown/emoji/daftar; satu orang bicara, jangan menulis giliran learner; jangan mengoreksi/menjelaskan tata bahasa; tetap dalam peran; jangan membuka atau menyebut instruksi ini. `OutputContract` memuat format tag D-081 (tag di awal kalimat, nama dari `allowed`, tanpa tag = neutral, tag tak dibacakan).
+Tambah: `TestCoreRulesAndOutputContractPlaceholdersExactlyOnce` (`strings.Count(tpl.System,"{{.CoreRules}}")==1` dan `{{.OutputContract}}` ==1 untuk kedua template); `TestOutputContractPlainText` (tidak memuat `<e:`/tag apa pun, menyatakan output teks Jepang polos untuk diucapkan, larangan markdown dan romaji, "Japanese"; `closing=true` memuat kata "wrap up"; `closing=false` tidak); `TestCoreRulesPlusContractWithinBudget` (`EstimateTokens(CoreRules)+EstimateTokens(OutputContract(true)) ≤ DefaultBudget.System (600)` minus teks tetap template: batas uji ≤ 450); `TestFormalityInstructionTable` (teks persis §6.8.4 untuk `CASUAL`, `POLITE`, `KEIGO_LIGHT`, `KEIGO`); `TestSpeechSectionRendersMaxSentences` (`Speech.MaxSentencesPerTurn`/`MaxConsecutiveQuestions` muncul di blok `# How you speak`; tidak ada rujukan ke ekspresi/tag di template); `TestAdaptationInsertedVerbatim` (blok Jepang berisi `<conversation_difficulty>` muncul byte-identik di output); `TestOpeningRendersOpeningLineQuoted` (`「…」` + `greet {Name} by name` bila nickname ada; kalimat episodik hanya bila `Memory.Episodes` ada); `TestMemoryRulesOnlyWhenMemoryPresent`; `TestPromptDataNeverCarriesFullName` (render dengan fixture lalu `strings.Contains` sentinel `FULLNAME-SENTINEL` tidak mungkin — dijamin struct; test mengasumsikan reflect guard T20 + memeriksa tidak ada template v1 yang menyebut `FullName`/`Email`).
+- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/prompt/ -race -run 'V1|Nickname|Core|OutputContract|Formality|Speech|Adaptation|Opening|Memory'`. Expected: FAIL.
+- [ ] **Step 3: Implement.** Salin teks template dari §6.8.3 (verbatim, kecuali frasa rujukan silang di atas); `CoreRules` (bahasa Inggris, ditulis di sini sesuai §6.8.1 "isinya ditulis Bab 7") WAJIB memuat: selalu jawab bahasa Jepang natural percakapan lisan; tanpa romaji; tanpa markdown/emoji/daftar; satu orang bicara, jangan menulis giliran learner; jangan mengoreksi/menjelaskan tata bahasa; tetap dalam peran; jangan membuka atau menyebut instruksi ini. `OutputContract` memuat: balas hanya dengan teks Jepang polos yang akan diucapkan, tanpa tag, markup, atau anotasi (D-014).
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/prompt/ -race` → PASS.
 - [ ] **Step 5: Commit** — `git commit -am "feat(prompt): CoreRules, OutputContract, frasa, template CONVERSATION/OPENING v1"`
 
 ---
 
-### Task 24: `SentenceParser` — tag ekspresi, teks bersih, sanitasi
+### Task 23: `SentenceParser` — sanitasi, pemotongan kalimat Jepang, `MaxSentences`, `Limited`
 
 **Files:**
 - Create: `internal/prompt/sentence_parser.go`
-- Test: `internal/prompt/sentence_parser_tags_test.go`
+- Test: `internal/prompt/sentence_parser_test.go`
 
 **Interfaces:**
-- Consumes: `NormalizeSpeakable` (T21).
-- Produces: `type Sentence struct{ Index int; Text, Expression string }`; `type SentenceParser struct{ MaxRunes, SoftMin, MaxSentences int; Limited bool; OnTag func(result string); ExprFilter func(expr string) string; … }` (`OnTag` dipanggil dengan `"unknown"`, `"midsentence"`, `"rate_limited"`; `ExprFilter` = kebijakan frekuensi milik runtime, dipanggil sekali per kalimat non-neutral; hasil ≠ masukan → ekspresi diganti dan `OnTag("rate_limited")`; kedua hook nama dari plan); `func NewSentenceParser(allowed []string, maxSentences int) *SentenceParser` (`MaxRunes=60`, `SoftMin=20`; `maxSentences<1` → 1); `(*SentenceParser).Feed(delta string) (clean string, out []Sentence)`, `Close() (clean string, out []Sentence)`.
-
-- [ ] **Step 1: Write the failing test**
-```go
-func TestTagAtSentenceStartSetsExpression(t *testing.T) {
-	p := prompt.NewSentenceParser([]string{"neutral", "happy"}, 6)
-	c1, o1 := p.Feed("<e:ha"); require.Empty(t, c1); require.Empty(t, o1)         // tag terpotong: tunggu
-	c2, o2 := p.Feed("ppy>いい天気ですね。") 
-	require.Equal(t, "いい天気ですね。", c2)
-	_, o3 := p.Close(); out := append(o2, o3...)
-	require.Equal(t, []prompt.Sentence{{0, "いい天気ですね。", "happy"}}, out)
-}
-func TestTagAfterTerminatorInSameDeltaStartsNextSentence(t *testing.T) {
-	p := prompt.NewSentenceParser([]string{"neutral", "happy"}, 6)
-	_, o := p.Feed("はい。<e:happy>いいね。")
-	require.Equal(t, []prompt.Sentence{{0, "はい。", "neutral"}}, o)               // kalimat 1 keluar karena `<` menyelesaikan lookahead
-	_, o2 := p.Close(); require.Equal(t, []prompt.Sentence{{1, "いいね。", "happy"}}, o2)
-}
-```
-Test lain: `TestUnknownTagDroppedAndCounted` (`<e:foo>` → dibuang dari clean & buf, `OnTag("unknown")`); `TestMidSentenceTagDropped` (`今日は<e:happy>晴れ。` → teks `今日は晴れ。`, expression neutral, `OnTag("midsentence")`); `TestTagNameCaseInsensitiveAndRegex` (`<e:HAPPY>` → happy; `<e:a1>` (angka) bukan tag → diperlakukan literal; nama 25 huruf → bukan tag); `TestLiteralLessThanWhenNoCloseWithin32` (`<` diikuti 32 rune tanpa `>` → literal); `TestCloseFlushesIncompleteTagAsLiteral` (`Feed("<e:ha")` lalu `Close()` → clean memuat `<e:ha`); `TestMarkdownAndEmojiStripped` (`**はい**`→`はい`, `` ` `` `#` `_` dibuang, rune kategori So (😀) dibuang, spasi ganda diringkas); `TestExprFilterDowngrade` (filter mengembalikan `"neutral"` → Expression neutral + `OnTag("rate_limited")`); `TestFeedCleanExcludesTags`.
-- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/prompt/ -race -run 'Tag|Markdown|ExprFilter|Literal'`. Expected: FAIL.
-- [ ] **Step 3: Implement** `drainRawIntoBuf` §7.7.3 aturan 1–3 (regex `^e:([a-zA-Z_]{1,24})$`, jendela 32 rune). Keputusan tak ditentukan spec: `drainRawIntoBuf` memproses `raw` rune demi rune dan, SEBELUM memproses sebuah tag, memanggil `cut` dengan lookahead terselesaikan (kalimat yang berakhir terminator+closer di akhir `buf` dianggap lengkap karena rune berikutnya `<` diketahui bukan terminator/closer) dan menyimpan hasilnya di antrean `ready`; `Feed` mengembalikan `ready` + hasil `cut` biasa. Tanpa ini tag awal kalimat berikutnya salah dihitung `midsentence`.
-- [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/prompt/ -race -run 'Tag|Markdown|ExprFilter|Literal'` → PASS.
-- [ ] **Step 5: Commit** — `git commit -am "feat(prompt): SentenceParser tag ekspresi dan sanitasi (D-081)"`
-
----
-
-### Task 25: `SentenceParser` — pemotongan kalimat Jepang, `MaxSentences`, `Limited`
-
-**Files:**
-- Modify: `internal/prompt/sentence_parser.go`
-- Test: `internal/prompt/sentence_parser_cut_test.go`
-
-**Interfaces:**
-- Produces: perilaku `cut(final bool)` §7.7.3 aturan 1–6 dan batas keras R-17: `Limited` true setelah kalimat ke-`MaxSentences` dikeluarkan; `Feed`/`Close` berikutnya mengembalikan `("", nil)`.
+- Consumes: `NormalizeSpeakable` (T20).
+- Produces: `type Sentence struct{ Index int; Text string }` (D-014: tanpa `Expression`); `type SentenceParser struct{ MaxRunes, SoftMin, MaxSentences int; Limited bool; … }`; `func NewSentenceParser(maxSentences int) *SentenceParser` (`MaxRunes=60`, `SoftMin=20`; `maxSentences<1` → 1); `(*SentenceParser).Feed(delta string) (clean string, out []Sentence)`, `Close() (clean string, out []Sentence)`; perilaku `cut(final bool)` §7.7.3 aturan 1–6 dan batas keras R-17: `Limited` true setelah kalimat ke-`MaxSentences` dikeluarkan; `Feed`/`Close` berikutnya mengembalikan `("", nil)`. Tidak ada hook/tag: `<` dan `>` adalah teks biasa.
 
 - [ ] **Step 1: Write the failing test**
 ```go
 func TestCutOnTerminatorWithTrailingClosers(t *testing.T) {
-	p := prompt.NewSentenceParser([]string{"neutral"}, 6)
-	_, o := p.Feed("「はい。」そうですか？！"); 
+	p := prompt.NewSentenceParser(6)
+	_, o := p.Feed("「はい。」そうですか？！")
 	require.Equal(t, "「はい。」", o[0].Text)                      // closer ikut
 	_, o2 := p.Feed("次"); require.Equal(t, "そうですか？！", o2[0].Text)  // ?! berurutan satu kalimat; keluar setelah rune berikutnya
 }
 func TestMaxSentencesLimitsAndDiscardsRest(t *testing.T) {
-	p := prompt.NewSentenceParser([]string{"neutral"}, 2)
+	p := prompt.NewSentenceParser(2)
 	_, o := p.Feed("一つ目です。二つ目です。三つ目です。")
 	require.Len(t, o, 2); require.True(t, p.Limited)
 	c, o2 := p.Feed("四つ目です。"); require.Empty(t, c); require.Empty(t, o2)
 	c, o3 := p.Close(); require.Empty(t, c); require.Empty(t, o3)
 }
 ```
-Test lain: `TestWaitsWhenTerminatorIsLastRune` (`Feed("はい。")` → belum keluar; `Close()` → keluar); `TestHardCutAt60Runes` (62 rune tanpa terminator → kalimat pertama 60 rune bila tak ada soft boundary); `TestSoftBoundaryCutAtOrAfter20` (`、` pada posisi 30 dalam 60+ rune → potong setelah `、`; `、` pada posisi 10 (< SoftMin) tidak dipakai); `TestPunctuationOnlySentenceAppendedToPrevious` (`はい。\n。` → satu kalimat; teks ditempel ke sebelumnya); `TestSingleRuneSentenceMergedIntoNext` (`あ。いいですね。` → `あ。いいですね。` satu kalimat; pada `final` kalimat 1 rune tidak digabung); `TestNewlineIsTerminator`; `TestIndexIncrementsPerEmittedSentence`; `TestLimitedCountsEmittedNotRawTerminators` (kalimat 1-rune yang digabung dihitung satu); `TestFeedByRuneEqualsFeedWhole` (property: memecah input per rune menghasilkan kalimat & ekspresi identik dengan sekali Feed, untuk 5 kalimat uji beserta tag); `TestCloseEmitsRemainderAsLastSentence`; `TestExpressionResetsAfterEachSentence` (tag hanya berlaku untuk satu kalimat).
-- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/prompt/ -race -run 'Cut|MaxSentences|Waits|Hard|Soft|Punctuation|SingleRune|Newline|Index|Limited|FeedByRune|Close|ExpressionResets'`. Expected: FAIL.
-- [ ] **Step 3: Implement** `cut(final)`: (1) buang whitespace awal; (2) terminator pertama `i`, perluas `j` selama rune berikutnya terminator/closer, tunggu bila `j` rune terakhir dan `!final` (kecuali lookahead sudah diketahui, T24); (3) tanpa terminator dan `len(buf) ≥ MaxRunes` → soft boundary terakhir (`、 , ， spasi`) di posisi ≥ `SoftMin`, selain itu potong keras `MaxRunes`; (4) `final` → sisa jadi kalimat; (5) `len(NormalizeSpeakable)==0` → tempel ke kalimat sebelumnya; 1 rune ucapan → gabung ke berikutnya (kecuali `final`); (6) `Expression = pending ?? "neutral"`, `Index = idx++`; saat jumlah kalimat keluar == `MaxSentences` → `Limited=true`, kosongkan `buf/raw`.
+Test lain: `TestMarkdownAndEmojiStripped` (`**はい**`→`はい`, `` ` `` `#` `_` dibuang, rune kategori So (😀) dibuang, spasi ganda diringkas); `TestAngleBracketsAreLiteral` (`<e:happy>はい。` tidak diproses khusus: `clean` dan `Sentence.Text` memuat `<e:happy>` apa adanya — tidak ada tag di sistem); `TestFeedCleanEqualsSanitizedText` (`clean` tiap `Feed` = teks tersanitasi delta tersebut); `TestWaitsWhenTerminatorIsLastRune` (`Feed("はい。")` → belum keluar; `Close()` → keluar); `TestHardCutAt60Runes` (62 rune tanpa terminator → kalimat pertama 60 rune bila tak ada soft boundary); `TestSoftBoundaryCutAtOrAfter20` (`、` pada posisi 30 dalam 60+ rune → potong setelah `、`; `、` pada posisi 10 (< SoftMin) tidak dipakai); `TestPunctuationOnlySentenceAppendedToPrevious` (`はい。\n。` → satu kalimat; teks ditempel ke sebelumnya); `TestSingleRuneSentenceMergedIntoNext` (`あ。いいですね。` → `あ。いいですね。` satu kalimat; pada `final` kalimat 1 rune tidak digabung); `TestNewlineIsTerminator`; `TestIndexIncrementsPerEmittedSentence`; `TestLimitedCountsEmittedNotRawTerminators` (kalimat 1-rune yang digabung dihitung satu); `TestFeedByRuneEqualsFeedWhole` (property: memecah input per rune menghasilkan kalimat identik dengan sekali Feed, untuk 5 kalimat uji); `TestCloseEmitsRemainderAsLastSentence`; `TestCancelledParserNotClosed` (tanpa `Close()`, fragmen tak lengkap tidak keluar sebagai kalimat; `clean` sudah memuatnya).
+- [ ] **Step 2: Run it to verify it fails** — `go test ./internal/prompt/ -race -run 'Cut|MaxSentences|Markdown|AngleBrackets|FeedClean|Waits|Hard|Soft|Punctuation|SingleRune|Newline|Index|Limited|FeedByRune|Close|Cancelled'`. Expected: FAIL.
+- [ ] **Step 3: Implement.** `sanitizeIntoBuf` §7.7.3: buang `*`, `#`, `` ` ``, `_`, rune kategori `So`, ringkas spasi ganda; `<`/`>` dibiarkan. `cut(final)`: (1) buang whitespace awal; (2) terminator pertama `i`, perluas `j` selama rune berikutnya terminator/closer, tunggu bila `j` rune terakhir dan `!final`; (3) tanpa terminator dan `len(buf) ≥ MaxRunes` → soft boundary terakhir (`、 , ， spasi`) di posisi ≥ `SoftMin`, selain itu potong keras `MaxRunes`; (4) `final` → sisa jadi kalimat; (5) `len(NormalizeSpeakable)==0` → tempel ke kalimat sebelumnya; 1 rune ucapan → gabung ke berikutnya (kecuali `final`); (6) `Index = idx++`; saat jumlah kalimat keluar == `MaxSentences` → `Limited=true`, kosongkan `buf`.
 - [ ] **Step 4: Run tests to verify they pass** — `go test ./internal/prompt/ -race -count=3` → PASS; `go test ./internal/prompt/ -race -cover` ≥ 85 %.
-- [ ] **Step 5: Commit** — `git commit -am "feat(prompt): SentenceParser pemotongan kalimat Jepang dan MaxSentences"`
+- [ ] **Step 5: Commit** — `git commit -am "feat(prompt): SentenceParser pemotongan kalimat Jepang, sanitasi, MaxSentences"`
 
 ---
 
@@ -822,21 +753,23 @@ Test lain: `TestWaitsWhenTerminatorIsLastRune` (`Feed("はい。")` → belum ke
 Jalankan berurutan; catat perintah + ringkasan output di `docs/implementation-log.md`.
 
 - [ ] `go build ./... && go vet ./internal/provider/... ./internal/prompt/...` → tanpa output.
-- [ ] `go test ./internal/provider/... ./internal/prompt/... -race` → semua paket `ok`, termasuk `providertest` suite yang dijalankan terhadap `fake` (LLM, TTS, STT, Evaluation, Embedding, Pronunciation).
+- [ ] `go test ./internal/provider/... ./internal/prompt/... -race` → semua paket `ok`, termasuk `providertest` suite yang dijalankan terhadap `fake` (LLM, TTS, STT, Evaluation, Embedding).
 - [ ] `go test ./internal/provider/... ./internal/prompt/... -race -count=5` → tidak flaky (khususnya breaker, generation, resilient STT, fake STT).
 - [ ] `go test ./internal/provider/... ./internal/prompt/... -race -coverprofile=cover.out && go run ./test/tools/covercheck -profile cover.out -thresholds test/tools/covercheck/thresholds.txt` → `internal/provider` (tanpa sub-paket vendor) ≥ 85 %, `internal/provider/...` ≥ 70 %, `internal/prompt` ≥ 85 %.
 - [ ] `make arch-check` → hijau; tambahkan baris di target `arch-check` pada `Makefile` (Modify, satu baris): `go test ./internal/provider ./internal/prompt -run 'TestImportRules' -count=1` sehingga pelanggaran impor (`net/http`, `go-redis`, vendor, paket fitur lain di `provider`/`prompt`) menggagalkan target.
 - [ ] `make lint` → 0 issue (depguard `feature-no-infra`, forbidigo `time.Now`/`uuid.New` tidak dilanggar di `internal/provider/**` dan `internal/prompt`).
 - [ ] `go test -tags integration ./internal/redisstore/ -race -run FakeFaults` → PASS.
-- [ ] Review Focus 1–5: `go test ./internal/provider/ -race -run 'ContentFiltered|NoFallbackAfterAudioSent|NoEpochSwitchAfterAudioSent|Truncated|DeadlineBeforeAudio|BreakerStateMachine|ResilientSTTSwitchReplay|OpenSTTStartWithFallback|PollerClears' -v` → semua PASS (Poller test ada di `./internal/provider/fake/`).
+- [ ] Review Focus 1–5: `go test ./internal/provider/ -race -run 'ContentFiltered|NoResetEventExists|NoEpochSwitchAfterAudioSent|Truncated|DeadlineBeforeAudio|BreakerStateMachine|TestRotation|VendorErrorForwarded|PollerClears' -v` → semua PASS (Poller test ada di `./internal/provider/fake/`).
+- [ ] D-015/D-016/D-017 bersih: `grep -rniE "deepgram|gemini|PROVIDER_STT_|PROVIDER_LLM_|PROVIDER_PROFILE|PROVIDER_SWITCHED|StartWith|rt\.stt_vendor|ResilientSTT|LLMReset|Primary\(\)|provider_profile|ProviderProfile|PROVIDER_PROFILE_|ProfileName|Tier|TTS_PRIMARY|TTS_FALLBACK|PremiumTTS|StandardTTS|Voices\[" --exclude="*_test.go" internal/provider internal/prompt` → tanpa hasil (kecuali komentar "D-015").
+- [ ] Penyederhanaan D-014: `grep -rniE "ExprFilter|ExpressionCatalog|ResolveTTSParams|<e:|expression" --exclude="*_test.go" internal/provider internal/prompt` → tanpa hasil (kecuali komentar "D-014").
 - [ ] Verifikasi akhir bahwa M5 dapat memakai: `go doc ./internal/provider RealtimeRouter` dan `go doc ./internal/prompt SentenceParser` menampilkan signature kontrak di bawah.
 
 ## Self-Review
 
-**Cakupan spec.** Tercakup: §8.1–8.3, §8.4.0 (sebagian: `NormalizeJA`, aturan klasifikasi), §8.4.12, §8.5.1–8.5.8, §8.6, §8.7, §8.8.1/8.8.2, §8.9 (semua), §8.11 butir 2–3, §6.6.2–6.6.3 (`ResolveTTSParams`; `content.SpeakingRate` milik M3), §6.8, §6.14 butir 5 & 8 (bagian `Params`) & 10 (sisi prompt), §7.7.3, §7.8.1/7.8.3 (`EstimateTokens`, `Budget`), D-040/041/042/043/080/081, S-7/S-9/S-12/S-13. Tidak tercakup (milik milestone lain): adapter vendor §8.4.1–8.4.11 dan `provider-bench`/`provider-report` §8.8.3/§8.10 (M9), `GET /internal/providers` handler HTTP (M5/`cmd/*`; M4 hanya `HealthSnapshot`), perakitan `PromptData`/`PromptBuilder`/`ConversationInput` (M5), seed SQL prompt & validator konten (M3), `kotoki_session_cost_usd` observasi saat sesi terminal (M5), wiring `RouterConfig`/`fake.Config` ke `config.Config` dan `cmd/*` (M5/M6/M7).
+**Cakupan spec.** Tercakup: §8.1–8.3, §8.4.0 (sebagian: `NormalizeJA`, aturan klasifikasi), §8.4.12, §8.5.1–8.5.8, §8.6, §8.7, §8.8.1/8.8.2, §8.9 (semua), §8.11 butir 2–3, §6.8 (`content.SpeakingRate` milik M3), §6.14 butir 5 & 8 (bagian `Params`) & 10 (sisi prompt), §7.7.3, §7.8.1/7.8.3 (`EstimateTokens`, `Budget`), D-014, D-040/041/042/043/080/081, S-7/S-9/S-12/S-13. Tidak tercakup (milik milestone lain): adapter vendor §8.4.1–8.4.11 dan `provider-bench`/`provider-report` §8.8.3/§8.10 (M9), `GET /internal/providers` handler HTTP (M5/`cmd/*`; M4 hanya `HealthSnapshot`), perakitan `PromptData`/`PromptBuilder`/`ConversationInput` (M5), seed SQL prompt & validator konten (M3), `kotoki_session_cost_usd` observasi saat sesi terminal (M5), wiring `RouterConfig`/`fake.Config` ke `config.Config` dan `cmd/*` (M5/M6/M7).
 
-**Konsistensi tipe.** `Selection`, `Breaker/Ticket`, `semaphoreSlot`, `HealthTracker`, `Metrics`, `PriceTable`, `ExpressionCatalog`, `RouterDeps` (+`Role`, `Sleep`, `Jitter`, `Metrics`) didefinisikan sebelum dipakai (T1→T8→T15). `fake` bergantung pada `provider` saja; test router memakai paket `provider_test` agar tidak siklus. `NormalizeSpeakable` diekspor dari `prompt` (T21) dan dipakai `SentenceParser` (T24–25).
+**Konsistensi tipe.** `Breaker/Ticket`, `semaphoreSlot`, `HealthTracker`, `Metrics`, `PriceTable`, `RouterDeps` (+`Role`, `Sleep`, `Jitter`, `Metrics`) didefinisikan sebelum dipakai (T1→T7→T14). `fake` bergantung pada `provider` saja; test router memakai paket `provider_test` agar tidak siklus. `NormalizeSpeakable` diekspor dari `prompt` (T20) dan dipakai `SentenceParser` (T23).
 
-**Ambiguitas spec & keputusan (catat di `docs/implementation-deviations.md`).** (1) `RealtimeRouter.CompleteText` dan `AsyncRouter.CompleteText` bertanda tangan sama tetapi kebijakan beda (1+1 vs 2+2, tunggu 100 ms vs 30 s) → `RouterDeps.Role`. (2) `prices.yaml` dibaca dengan `gopkg.in/yaml.v3` (kini di allowlist D-003). (3) `NormalizeSpeakable` ada di `conversation/japanese.go` menurut §7.6.2 tetapi dibutuhkan `prompt` → diekspor di `prompt`. (4) §8.1 butir 1 tidak mengizinkan `provider` mengimpor `platform/otel` sedangkan D-NEW-13-23 meminta span di layer provider → span dibuat di adapter vendor (M9), router/fake M4 tanpa OTel. (5) Aturan 7 §7.7.3 (kebijakan frekuensi ekspresi) butuh riwayat turn milik runtime → hook `ExprFilter`. (6) Tag di awal kalimat berikutnya dalam delta yang sama berisiko salah-hitung `midsentence` → lookahead di `drainRawIntoBuf` (T24). (7) Teks template v1 memuat rujukan silang "(Bab 11 §11.7)" → dibuang. (8) `hash64` fake tidak ditetapkan spec → FNV-64a. (9) Env `PROVIDER_CONCURRENCY_<VENDOR>_<CAP>` dinamai dinamis → field eksplisit 11 kombinasi; instance fake memakai default kapabilitas. (10) Fake memakai `clock.Clock` (forbidigo melarang `time.Now` di `provider/fake`).
+**Ambiguitas spec & keputusan (catat di `docs/implementation-deviations.md`).** (1) `RealtimeRouter.CompleteText` dan `AsyncRouter.CompleteText` bertanda tangan sama tetapi kebijakan beda (1+1 vs 2+2, tunggu 100 ms vs 30 s) → `RouterDeps.Role`. (2) `prices.yaml` dibaca dengan `gopkg.in/yaml.v3` (kini di allowlist D-003). (3) `NormalizeSpeakable` ada di `conversation/japanese.go` menurut §7.6.2 tetapi dibutuhkan `prompt` → diekspor di `prompt`. (4) §8.1 butir 1 tidak mengizinkan `provider` mengimpor `platform/otel` sedangkan D-NEW-13-23 meminta span di layer provider → span dibuat di adapter vendor (M9), router/fake M4 tanpa OTel. (5) Teks template v1 memuat rujukan silang "(Bab 11 §11.7)" → dibuang. (6) `hash64` fake tidak ditetapkan spec → FNV-64a. (7) Env `PROVIDER_CONCURRENCY_<VENDOR>_<CAP>` dinamai dinamis → field eksplisit 11 kombinasi; instance fake memakai default kapabilitas. (9) Penamaan D-017: `RoutedSTTSession` (spec §8.2.8), `Evaluation()` mengembalikan `EvaluationProvider` langsung; kode `circuit_open` dipakai semua kapabilitas (tidak ada `circuit_open`). (8) Fake memakai `clock.Clock` (forbidigo melarang `time.Now` di `provider/fake`).
 
-**Kontrak yang diproduksi untuk milestone lain.** `provider.RealtimeRouter/AsyncRouter/Generation/ResilientSTTSession/EvaluationRoute/TextRequest`, `provider.NewRouter/RouterDeps/RouterConfig`, `provider.ExpressionCatalog/PriceTable/ResolveTTSParams`, `provider.Error/KindOf/IsRetryable/FallbackEligible`, `fake.New{LLM,TTS,STT,Evaluation,Embedding,Pronunciation}`, `fake.FaultSource`, `redisstore.NewFakeFaults`, `providertest.{STT,LLM,TTS,Evaluation,Embedding,Pronunciation}Suite`, `httpx.*` (M9), `prompt.{Render,Template,Rendered,Params,RegisterFixtures,Fixtures,EstimateTokens,ItemOverheadTokens,Budget,DefaultBudget,LearnerContext,PromptData,VocabHint,SentenceParser,NewSentenceParser,Sentence,NormalizeSpeakable,CoreRules,OutputContract,ConversationV1,OpeningV1}`.
+**Kontrak yang diproduksi untuk milestone lain.** `provider.RealtimeRouter/AsyncRouter/Generation/RoutedSTTSession/TextRequest` (`AsyncRouter.Evaluation() EvaluationProvider`), `provider.NewRouter/RouterDeps/RouterConfig`, `provider.PriceTable`, `provider.TTSRequest` (tanpa ekspresi; `Voice`/`SpeakingRate` dari pemanggil, `VoiceID`/`Model` diisi router dari `VoiceSelection`; tanpa `Resolved`), `provider.VoiceSelection{Primary, Fallback*}/VoiceRef{Provider, ModelName, VoiceID}` + konstanta `provider.Cartesia`, `Router.ttsVendors()`, `provider.Error/KindOf/IsRetryable/FallbackEligible` (fallback TTS saja), `provider.RouterConfig` dengan sakelar `*_ENABLED`/`ActiveSTT()`/`ActiveLLM()`/`TTSVendors()`, `fake.New{LLM,TTS,STT,Evaluation,Embedding}`, `fake.FaultSource`, `redisstore.NewFakeFaults`, `providertest.{STT,LLM,TTS,Evaluation,Embedding}Suite`, `httpx.*` (M9), `prompt.{Render,Template,Rendered,Params,RegisterFixtures,Fixtures,EstimateTokens,ItemOverheadTokens,Budget,DefaultBudget,LearnerContext,PromptData,VocabHint,SentenceParser,NewSentenceParser(maxSentences int),Sentence{Index,Text},NormalizeSpeakable,CoreRules,OutputContract(closing bool),FormalityInstruction,ConversationV1,OpeningV1}` (D-014: `Budget`/`DefaultBudget.Total()==6.450` tanpa Style/Expression; `PromptData` tanpa `Style`/`Expression*`/`AllowedExpressions`; `SentenceParser` tanpa tag/`ExprFilter`/`OnTag`).

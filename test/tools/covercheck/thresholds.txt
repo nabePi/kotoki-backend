@@ -1,0 +1,18 @@
+# <prefix paket> <minimum %>  — spec §14.8, run unit (make test-cover). Paket tanpa data di profil diabaikan.
+# Adapter postgres/redisstore/amqp diukur dari run integration: thresholds.integration.txt.
+internal/auth 85
+internal/balance 90
+internal/session 90
+internal/content 85
+internal/prompt 85
+internal/evaluation 85
+internal/memory 85
+internal/learner 85
+internal/summary 85
+internal/admin 85
+internal/events 85
+internal/conversation 80
+internal/provider 85 except=internal/provider/providertest
+internal/httpapi 70
+internal/wsgateway 70
+TOTAL internal 75 except=internal/postgres,internal/redisstore,internal/amqp

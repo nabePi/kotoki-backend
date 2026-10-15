@@ -1,0 +1,29 @@
+receivers:
+  otlp:
+    protocols:
+      grpc: {endpoint: 0.0.0.0:4317}
+      http: {endpoint: 0.0.0.0:4318}
+  prometheus:                      # metrik aplikasi tetap Prometheus client (D-NEW-13-9); di-scrape dari host
+    config:
+      scrape_configs:
+        - job_name: kotoki-local
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["host.docker.internal:9090", "host.docker.internal:9091", "host.docker.internal:9092"]
+              # api OPS_ADDR :9090, realtime OPS_ADDR :9091, worker WORKER_HTTP_ADDR :9092
+processors:
+  batch: {}
+exporters:
+  otlp/lgtm:
+    endpoint: lgtm:4317
+    tls: {insecure: true}
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/lgtm]       # → Tempo
+    metrics:
+      receivers: [prometheus]
+      processors: [batch]
+      exporters: [otlp/lgtm]       # → Prometheus di dalam lgtm

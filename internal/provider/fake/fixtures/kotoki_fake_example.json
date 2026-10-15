@@ -1,0 +1,8 @@
+{
+  "overall_score": "{{score}}",
+  "dimensions": {
+    "fluency": "{{score}}",
+    "accuracy": "{{score}}"
+  },
+  "summary": "fake evaluation fixture"
+}

@@ -1,0 +1,74 @@
+name: kotoki
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: kotoki
+      POSTGRES_PASSWORD: kotoki
+      POSTGRES_DB: kotoki
+    command: ["postgres",
+              "-c", "max_connections=200",
+              "-c", "shared_preload_libraries=pg_stat_statements",
+              "-c", "log_min_duration_statement=200",
+              "-c", "timezone=UTC"]
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kotoki -d kotoki"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4
+    command: ["redis-server", "--save", "", "--appendonly", "no",
+              "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    hostname: kotoki-rabbitmq            # nama node stabil agar volume tetap valid
+    user: "999:999"                      # uid rabbitmq: wajib di podman rootless (entrypoint root meninggalkan .erlang.cookie milik root → eacces); aman di docker
+    environment:
+      RABBITMQ_DEFAULT_USER: kotoki
+      RABBITMQ_DEFAULT_PASS: kotoki
+      RABBITMQ_DEFAULT_VHOST: /         # lokal = vhost default (Bab 9 §9.6; prod `/kotoki`)
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # management UI (http://localhost:15672, kotoki/kotoki)
+      - "15692:15692"   # Prometheus metrics
+    volumes: ["rabbitmqdata:/var/lib/rabbitmq"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    profiles: ["observability"]
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes: ["./deploy/docker/otel-collector.yaml:/etc/otelcol/config.yaml:ro"]
+    extra_hosts: ["host.docker.internal:host-gateway"]   # scrape /metrics binary yang jalan di host
+    ports:
+      - "4317:4317"     # OTLP gRPC (OTEL_EXPORTER_OTLP_ENDPOINT aplikasi)
+      - "4318:4318"     # OTLP HTTP
+    depends_on: [lgtm]
+
+  lgtm:
+    # Grafana + Tempo + Loki + Prometheus (+ collector internal) dalam satu image — stack yang sama dengan produksi (§13.7).
+    image: grafana/otel-lgtm:0.36.0   # pin rilis terbaru saat bootstrap (2026-10-14), lihat docs/implementation-log.md
+    profiles: ["observability"]
+    ports: ["3000:3000"]   # Grafana http://localhost:3000 (admin/admin); OTLP lgtm hanya di jaringan compose
+    volumes: ["lgtmdata:/data"]
+
+volumes:
+  pgdata:
+  rabbitmqdata:
+  lgtmdata:
