@@ -57,6 +57,9 @@ type Client struct {
 	ids   idgen.Generator
 	mu    sync.RWMutex
 	token string
+	// refresh mirrors the refresh cookie the server last set, so a caller can persist it (the
+	// jar alone is not exportable).
+	refresh string
 }
 
 // Option configures a Client.
@@ -100,6 +103,54 @@ func (c *Client) SetAccessToken(t string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.token = t
+}
+
+// refreshCookieName and refreshCookiePath are those of the server's refresh cookie (spec 3.8.5).
+const (
+	refreshCookieName = "kotoki_refresh"
+	refreshCookiePath = apiPrefix + "/auth"
+)
+
+// RefreshToken returns the refresh token the server last handed out ("" before Register/Login or
+// after the server cleared it). It rotates on every Refresh, so persist it after each call.
+func (c *Client) RefreshToken() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.refresh
+}
+
+// SetRefreshToken installs a refresh token obtained elsewhere (e.g. stored credentials) so that
+// Refresh can use it. An empty token forgets it.
+func (c *Client) SetRefreshToken(t string) {
+	c.mu.Lock()
+	c.refresh = t
+	c.mu.Unlock()
+	if c.hc.Jar == nil || c.base.Host == "" {
+		return
+	}
+	u := *c.base
+	u.Path = strings.TrimRight(c.base.Path, "/") + refreshCookiePath
+	ck := &http.Cookie{Name: refreshCookieName, Value: t, Path: u.Path} //nolint:gosec // G124: only seeds the client-side jar; Secure/HttpOnly are the server's attributes
+	if t == "" {
+		ck.MaxAge = -1
+	}
+	c.hc.Jar.SetCookies(&u, []*http.Cookie{ck})
+}
+
+// noteRefreshCookie records a refresh cookie the server set on resp.
+func (c *Client) noteRefreshCookie(resp *http.Response) {
+	for _, ck := range resp.Cookies() {
+		if ck.Name != refreshCookieName {
+			continue
+		}
+		c.mu.Lock()
+		if ck.Value == "" || ck.MaxAge < 0 {
+			c.refresh = ""
+		} else {
+			c.refresh = ck.Value
+		}
+		c.mu.Unlock()
+	}
 }
 
 type authResult struct {
@@ -153,6 +204,7 @@ func (c *Client) do(ctx context.Context, method, path string, o callOpts, out an
 		return fmt.Errorf("kotokiclient: %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	c.noteRefreshCookie(resp)
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		return fmt.Errorf("kotokiclient: read response: %w", err)
@@ -222,6 +274,17 @@ func (c *Client) Refresh(ctx context.Context) error {
 	}
 	c.SetAccessToken(res.AccessToken)
 	return nil
+}
+
+// Terms returns the current terms version (GET /auth/terms, public) that Register must accept.
+func (c *Client) Terms(ctx context.Context) (string, error) {
+	var res struct {
+		TermsVersion string `json:"terms_version"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/auth/terms", callOpts{noAuth: true}, &res); err != nil {
+		return "", err
+	}
+	return res.TermsVersion, nil
 }
 
 type items[T any] struct {

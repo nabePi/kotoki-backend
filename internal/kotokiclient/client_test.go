@@ -263,3 +263,51 @@ func TestTurnsPagination(t *testing.T) {
 	require.JSONEq(t, `{"v":1,"k":7}`, string(raw))
 	require.False(t, strings.ContainsAny(gotQuery["cursor"], "=+/"))
 }
+
+func TestRefreshTokenExportAndImport(t *testing.T) {
+	var got string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/auth/login", func(w http.ResponseWriter, _ *http.Request) {
+		setRefresh(w, "r-login")
+		writeJSON(w, 200, authBody("tok-login"))
+	})
+	mux.HandleFunc("POST /api/v1/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie("kotoki_refresh")
+		if err != nil {
+			writeJSON(w, 401, map[string]any{"error": map[string]any{"code": "REFRESH_TOKEN_INVALID", "message": "no"}})
+			return
+		}
+		got = c.Value
+		setRefresh(w, "r-rotated")
+		writeJSON(w, 200, map[string]any{"access_token": "tok-new"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	ctx := context.Background()
+
+	a := New(srv.URL)
+	require.Empty(t, a.RefreshToken())
+	require.NoError(t, a.Login(ctx, "a@example.com", "pw"))
+	require.Equal(t, "r-login", a.RefreshToken(), "the cookie the server set is exportable")
+
+	// A fresh client (another process) continues from the stored token.
+	b := New(srv.URL)
+	b.SetRefreshToken("r-stored")
+	require.NoError(t, b.Refresh(ctx))
+	require.Equal(t, "r-stored", got)
+	require.Equal(t, "tok-new", b.AccessToken())
+	require.Equal(t, "r-rotated", b.RefreshToken(), "rotation is visible to the caller")
+}
+
+func TestTerms(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/auth/terms", func(w http.ResponseWriter, r *http.Request) {
+		require.Empty(t, r.Header.Get("Authorization"))
+		writeJSON(w, 200, map[string]any{"terms_version": "2026-10"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	v, err := New(srv.URL).Terms(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "2026-10", v)
+}
