@@ -188,6 +188,10 @@ type sessFake struct {
 	disc   int
 	reads  int
 	writes int
+	// clamped models AddSessionDisconnected (db/queries/sessions.sql): each committed call adds
+	// the next value instead of the full seconds (the part after expires_at is dropped, the total
+	// is clamped at duration_seconds).
+	clamped []int
 }
 
 func (s *sessFake) AddDisconnected(_ context.Context, sid uuid.UUID, fence int64, seconds int) error {
@@ -199,6 +203,9 @@ func (s *sessFake) AddDisconnected(_ context.Context, sid uuid.UUID, fence int64
 		defer s.mu.Unlock()
 		if sid != pSession || fence != s.fence {
 			return session.ErrFenceLost
+		}
+		if len(s.clamped) > 0 {
+			seconds, s.clamped = s.clamped[0], s.clamped[1:]
 		}
 		s.disc += seconds
 		return nil
@@ -575,6 +582,8 @@ func TestPersisterPermanentErrorsFailFast(t *testing.T) {
 		"validation": {func(r *persistRig) { r.sess.add("AddDisconnected", step{err: errValidation}) }, conversation.AddDisconnected{Seconds: -1}},
 		"check violation": {func(r *persistRig) { r.events.add("Append", step{err: pgErr("23514")}) },
 			conversation.SessionEvent{Type: "BARGE_IN"}},
+		"data exception": {func(r *persistRig) { r.events.add("Append", step{err: pgErr("22003")}) },
+			conversation.SessionEvent{Type: "BARGE_IN"}},
 		"turn not found": {func(*persistRig) {}, userJob("no such turn")},
 		"invalid transition": {func(r *persistRig) {
 			r.sess.add("AddDisconnected", step{err: &session.TransitionError{From: session.StatusCompleted, To: session.StatusActive}})
@@ -652,6 +661,34 @@ func TestPersisterAddDisconnectedAmbiguousNotCommittedRetried(t *testing.T) {
 	require.NoError(t, flush(t, r.p))
 	disc, _, writes := r.sess.state()
 	require.Equal(t, 14, disc)
+	require.Equal(t, 2, writes)
+}
+
+func TestPersisterAddDisconnectedClampedCommitNotResent(t *testing.T) {
+	r := startPersister(t)
+	r.sess.mu.Lock()
+	r.sess.clamped = []int{49, 48} // the SQL keeps 49 of 60 s; a later re-send would keep 48
+	r.sess.mu.Unlock()
+	r.sess.add("AddDisconnected", step{err: errAmbiguous, commit: true})
+	require.NoError(t, r.p.Submit(conversation.AddDisconnected{Seconds: 60}))
+	require.NoError(t, flush(t, r.p))
+	disc, _, writes := r.sess.state()
+	require.Equal(t, 49, disc, "a committed, clamped episode is not added again")
+	require.Equal(t, 1, writes)
+	require.Empty(t, r.fatal)
+}
+
+func TestPersisterAddDisconnectedClampedNotCommittedRetried(t *testing.T) {
+	r := startPersister(t)
+	r.sess.mu.Lock()
+	r.sess.disc = 10
+	r.sess.clamped = []int{49}
+	r.sess.mu.Unlock()
+	r.sess.add("AddDisconnected", step{err: errAmbiguous}) // timed out before committing
+	require.NoError(t, r.p.Submit(conversation.AddDisconnected{Seconds: 60}))
+	require.NoError(t, flush(t, r.p))
+	disc, _, writes := r.sess.state()
+	require.Equal(t, 59, disc, "sent again and added once")
 	require.Equal(t, 2, writes)
 }
 

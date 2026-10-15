@@ -42,7 +42,7 @@ func NewSessionRuntime(clk clock.Clock) *SessionRuntime {
 func (r *SessionRuntime) Seed(rec session.RuntimeRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sessions[rec.ID] = &rtSession{rec: rec}
+	r.sessions[rec.ID] = &rtSession{rec: rec, disc: rec.DisconnectedSeconds}
 }
 
 // Disconnected returns disconnected_seconds of a session, for assertions.

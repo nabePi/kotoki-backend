@@ -126,3 +126,16 @@ func TestFakeSessionRuntime(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+func TestFakeSessionRuntimeSeedKeepsDisconnected(t *testing.T) {
+	ctx := t.Context()
+	rt := fakes.NewSessionRuntime(clock.NewFake(time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)))
+	id := uuid.Must(uuid.NewV7())
+	rt.Seed(session.RuntimeRecord{ID: id, UserID: uuid.New(), Status: session.StatusActive, RuntimeFence: 3, DisconnectedSeconds: 5})
+	require.Equal(t, 5, rt.Disconnected(id), "the seeded value is the starting point")
+	require.NoError(t, rt.AddDisconnected(ctx, id, 3, 4))
+	require.Equal(t, 9, rt.Disconnected(id))
+	rec, err := rt.GetForAttach(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, 9, rec.DisconnectedSeconds, "the record and the counter agree")
+}

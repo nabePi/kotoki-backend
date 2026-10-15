@@ -134,8 +134,8 @@ func PersisterFenceLatch(l *FenceLatch) PersisterOption { return func(p *Persist
 //     InsertTurn that hits the primary key (23505) is the earlier commit; a retried FinalizeTurn
 //     that matches no row is the earlier commit when GetForAttach shows the fence still ours and
 //     the session open, a fence loss otherwise; AddDisconnected reads disconnected_seconds before
-//     the first attempt and, after an ambiguous one, sends again only when the read-back shows it
-//     did not commit. UpdateUser is naturally idempotent. A SessionEvent may be written twice
+//     the first attempt and, after an ambiguous one, sends again only when the value has not
+//     grown (the SQL may add less than n, so growth of any size is the earlier commit). UpdateUser is naturally idempotent. A SessionEvent may be written twice
 //     (an audit duplicate; the port carries no event id).
 //
 // Retries back off 100 ms doubling to 2 s, 5 s per attempt. When the head job has been failing,
@@ -541,8 +541,13 @@ func (p *Persister) ownedBy(rec session.RuntimeRecord) error {
 	return session.ErrFenceLost
 }
 
-// addDisconnected sends the episode at most once as far as the read-back can tell: only this
-// runtime writes disconnected_seconds while it holds the fence.
+// addDisconnected adds the episode at most once under the single-writer assumption: while this
+// runtime holds the fence it is the only writer of disconnected_seconds (AddSessionDisconnected
+// via RuntimeService.AddDisconnected, called only from here). The SQL may add fewer than n
+// seconds (the part of the episode after expires_at is dropped on purpose, the total is clamped
+// at duration_seconds), so after an ambiguous attempt any growth over the baseline means it
+// committed; no growth means it did not, or that it committed adding 0, in which case sending
+// again adds 0 too.
 func (p *Persister) addDisconnected(ctx context.Context, n int, st *attemptState) error {
 	if n == 0 {
 		return nil
@@ -562,8 +567,8 @@ func (p *Persister) addDisconnected(ctx context.Context, n int, st *attemptState
 		if err := p.ownedBy(rec); err != nil {
 			return err
 		}
-		if rec.DisconnectedSeconds >= st.base+n {
-			return nil // the earlier attempt committed
+		if rec.DisconnectedSeconds > st.base {
+			return nil // the earlier attempt committed (possibly clamped: see above)
 		}
 	}
 	return p.sess.AddDisconnected(ctx, p.sid, p.fence, n)
