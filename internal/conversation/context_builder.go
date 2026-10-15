@@ -160,6 +160,9 @@ func (promptBuilder) BuildConversation(in ConversationInput) (BuiltPrompt, error
 	if in.SessionMode != sessionUserFirst && in.SessionMode != sessionAIFirst {
 		return BuiltPrompt{}, fmt.Errorf("conversation: SessionMode must be %s or %s, got %q", sessionUserFirst, sessionAIFirst, in.SessionMode)
 	}
+	if (max(in.RemainingSeconds, 0)+59)/60 > in.DurationMinutes {
+		return BuiltPrompt{}, fmt.Errorf("conversation: %d s remaining exceed DurationMinutes %d", in.RemainingSeconds, in.DurationMinutes)
+	}
 	band, _ := content.DifficultyBand(in.Config.ScenarioVersion.DifficultyLevel)
 	if band == "" {
 		return BuiltPrompt{}, fmt.Errorf("conversation: scenario difficulty level %d is out of range 1-5", in.Config.ScenarioVersion.DifficultyLevel)

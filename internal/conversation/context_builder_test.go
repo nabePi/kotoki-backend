@@ -421,11 +421,12 @@ func TestScenarioOverflowCutsGoalAndRoles(t *testing.T) {
 
 func TestHandoffFieldsRequired(t *testing.T) {
 	for name, mut := range map[string]func(*ConversationInput){
-		"duration zero":    func(in *ConversationInput) { in.DurationMinutes = 0 },
-		"duration < 0":     func(in *ConversationInput) { in.DurationMinutes = -1 },
-		"mode empty":       func(in *ConversationInput) { in.SessionMode = "" },
-		"mode unknown":     func(in *ConversationInput) { in.SessionMode = "OTHER" },
-		"difficulty range": func(in *ConversationInput) { in.Config.ScenarioVersion.DifficultyLevel = 9 },
+		"duration zero":        func(in *ConversationInput) { in.DurationMinutes = 0 },
+		"duration < 0":         func(in *ConversationInput) { in.DurationMinutes = -1 },
+		"remaining > duration": func(in *ConversationInput) { in.RemainingSeconds = in.DurationMinutes*60 + 1 },
+		"mode empty":           func(in *ConversationInput) { in.SessionMode = "" },
+		"mode unknown":         func(in *ConversationInput) { in.SessionMode = "OTHER" },
+		"difficulty range":     func(in *ConversationInput) { in.Config.ScenarioVersion.DifficultyLevel = 9 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := baseInput()
@@ -546,20 +547,72 @@ func scenarioWith(n int) scenarioProbe {
 	}
 }
 
-// TestTotalTrimOrder makes the total unreachable (negative System share) with every component
-// filled: trimming runs 8 → 7 → 10 → 6 (focus line only) → 11 (stops at the 4-turn floor).
-func TestTotalTrimOrder(t *testing.T) {
-	in := allCapsInput()
-	in.Budget.System = -2500
-	bp := build(t, in)
-	for _, name := range []string{"memory_episodic", "memory_core", "summary", "learner", "recent_turns"} {
-		require.Contains(t, bp.Truncations, name)
+// trimFixture keeps every component well under its own cap (so no per-component trim runs) and
+// lets the tests aim the TOTAL budget: Budget.Total() == target after withTotal.
+func trimFixture() ConversationInput {
+	in := baseInput()
+	in.Learner.Adaptation = "<conversation_difficulty>\n語彙: やさしい言葉を使う\n学習のねらい: 聞き取り、丁寧語\n</conversation_difficulty>"
+	in.RollingSummary = rep("旅の話をした。", 150)
+	for i := range 3 {
+		in.Memory.Core = append(in.Memory.Core, memory.ContextItem{Content: rep("あいうえお", 20), Score: float64(10 - i)})
 	}
-	require.Zero(t, bp.ComponentTokens["memory_episodic"])
-	require.Zero(t, bp.ComponentTokens["memory_core"])
-	require.Zero(t, bp.ComponentTokens["summary"])
-	sys := bp.Messages[0].Content
-	require.NotContains(t, sys, "学習のねらい")
-	require.Contains(t, sys, "語彙: ")
-	require.Equal(t, 1+4*2+1, len(bp.Messages))
+	for i := range 2 {
+		in.Memory.Episodic = append(in.Memory.Episodic, memory.ContextItem{Content: rep("かきくけこ", 30), Score: 0.9 - float64(i)/10})
+	}
+	for i := range 8 {
+		in.RecentTurns = append(in.RecentTurns, TurnContext{Seq: i + 1, Status: "COMPLETED", UserText: sp(rep("こんにちは", 30)), AssistantText: rep("どうも", 30)})
+	}
+	return in
+}
+
+func withTotal(in ConversationInput, total int) ConversationInput {
+	in.Budget.System = total - (in.Budget.Total() - in.Budget.System)
+	return in
+}
+
+// TestTotalTrimOrderPinned pins the §7.8.1 order 8 → 7 → 10 → 6 → 11 and that trimming stops as
+// soon as the total fits: every row is the exact outcome for one target total (numbers measured
+// from trimFixture; E = 1568 untrimmed).
+func TestTotalTrimOrderPinned(t *testing.T) {
+	base := build(t, trimFixture())
+	require.Equal(t, 1568, base.EstimatedInputTokens)
+	require.Empty(t, base.Truncations)
+
+	const (
+		epi, core, summ, learn, turns = "memory_episodic", "memory_core", "summary", "learner", "recent_turns"
+	)
+	rows := []struct {
+		total                           int
+		truncations                     []string
+		est, epiTok, coreTok, summTok   int
+		learnTok, turnTok, messageCount int
+	}{
+		{1560, []string{epi}, 1531, 41, 78, 165, 49, 592, 1 + 8*2 + 1},
+		{1450, []string{epi, core}, 1439, 0, 26, 165, 49, 592, 1 + 8*2 + 1},
+		{1300, []string{epi, core, summ}, 1299, 0, 0, 135, 49, 592, 1 + 8*2 + 1},
+		{1150, []string{epi, core, summ, learn}, 1138, 0, 0, 0, 32, 592, 1 + 8*2 + 1},
+		{1100, []string{epi, core, summ, learn, turns}, 1064, 0, 0, 0, 32, 518, 1 + 7*2 + 1},
+		{300, []string{epi, core, summ, learn, turns}, 842, 0, 0, 0, 32, 296, 1 + 4*2 + 1},
+	}
+	for _, r := range rows {
+		bp := build(t, withTotal(trimFixture(), r.total))
+		require.Equal(t, r.truncations, bp.Truncations, "total %d", r.total)
+		require.Equal(t, r.est, bp.EstimatedInputTokens, "total %d", r.total)
+		ct := bp.ComponentTokens
+		require.Equal(t, []int{r.epiTok, r.coreTok, r.summTok, r.learnTok, r.turnTok},
+			[]int{ct[epi], ct[core], ct[summ], ct[learn], ct[turns]}, "total %d", r.total)
+		require.Len(t, bp.Messages, r.messageCount, "total %d", r.total)
+		if r.learnTok == 32 {
+			require.NotContains(t, bp.Messages[0].Content, "学習のねらい")
+			require.Contains(t, bp.Messages[0].Content, "語彙: やさしい言葉を使う")
+		} else {
+			require.Contains(t, bp.Messages[0].Content, "学習のねらい")
+		}
+	}
+}
+
+// TestAllCapsTruncationOrder pins the whole Truncations slice when caps and total both trim.
+func TestAllCapsTruncationOrder(t *testing.T) {
+	bp := build(t, allCapsInput())
+	require.Equal(t, []string{"character", "scenario", "current_input", "recent_turns", "memory_episodic"}, bp.Truncations)
 }
