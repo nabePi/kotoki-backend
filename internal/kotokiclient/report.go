@@ -19,6 +19,13 @@ type Report struct {
 	BargeInStopMS   []int64         `json:"barge_in_stop_ms"`
 	ResumeMS        []int64         `json:"resume_ms"`
 	ServerLatencies []ServerLatency `json:"server_latencies"`
-	ChargedSeconds  int             `json:"charged_seconds"`
-	Status          string          `json:"status"`
+	// StaleFramesDropped counts downstream frames of an old generation that reached the client
+	// after the event that replaced it and were discarded (Review Focus 2): zero is the
+	// server's guarantee that nothing of an interrupted answer is written after ai.interrupted.
+	StaleFramesDropped int `json:"stale_frames_dropped"`
+	// CloseCode is the WebSocket close code (§7.4.8) the last connection ended with, 0 when it
+	// ended without a close frame (a Drop, a lost transport).
+	CloseCode      int    `json:"close_code"`
+	ChargedSeconds int    `json:"charged_seconds"`
+	Status         string `json:"status"`
 }

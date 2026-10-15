@@ -440,6 +440,9 @@ func TestBargeInStepMeasured(t *testing.T) {
 					interrupted, streaming = true, false
 					s.send("ai.interrupted", evo{turn: 1}, protocol.AIInterrupted{Reason: "BARGE_IN", ActiveGeneration: 2, SpokenSentenceCount: 0})
 					s.send("turn.completed", evo{turn: 1}, protocol.TurnCompleted{Status: "INTERRUPTED"})
+					// Two frames of the cut generation still in flight: the client discards and counts them.
+					s.audio(1, gen1Seq, 0x10)
+					s.audio(1, gen1Seq+1, 0x10)
 				}
 			}
 		}, func(ev protocol.ClientEvent) {
@@ -462,6 +465,7 @@ func TestBargeInStepMeasured(t *testing.T) {
 	// First interrupting frame sent at T; the last generation-1 frame arrived with the third
 	// interrupting frame, T+40 ms.
 	require.Equal(t, []int64{40}, rep.BargeInStopMS)
+	require.Equal(t, 2, rep.StaleFramesDropped, "frames of the old generation after ai.interrupted are counted, not delivered")
 	// Both utterances were answered: the second one 5 silence slots after its last frame.
 	require.Equal(t, []int64{100, 100}, rep.TurnLatencyMS)
 	require.Equal(t, "COMPLETED", rep.Status)
@@ -617,6 +621,48 @@ func TestDropAndResume(t *testing.T) {
 	require.Equal(t, 3, replayed)
 }
 
+// A session.start sent to a session that is already ACTIVE is a resume at the server: it replays
+// from seq 0, session.started included. The client must not take that replayed event for the end of
+// the handshake: it would start the script (and read "the last turn" from a half-processed replay)
+// before the snapshot (found by e2e E5).
+func TestReplayedSessionStartedDoesNotAttach(t *testing.T) {
+	var snapshotSent atomic.Bool
+	var framesBeforeSnapshot atomic.Int32
+	h := newHarness(t, func(s *sconn) {
+		s.ready("session.start")
+		_ = s.command()
+		s.send("session.started", evo{seq: 2, replay: true}, protocol.SessionStarted{Status: "ACTIVE"})
+		s.send("turn.started", evo{seq: 4, turn: 1, replay: true}, protocol.TurnStarted{Initiator: "USER"})
+		go func() {
+			time.Sleep(150 * time.Millisecond) // the rest of a long replay
+			s.send("turn.completed", evo{seq: 6, turn: 1, replay: true}, protocol.TurnCompleted{Status: "FAILED"})
+			snapshotSent.Store(true)
+			s.send("session.snapshot", evo{seq: 8}, protocol.SessionSnapshot{
+				Replay: "COMPLETE", ReplayedCount: 3, ServerSeqBaseline: 8, NextTurnSeq: 2, TurnState: "LISTENING",
+				RecentTurns: []protocol.RecentTurn{{TurnSeq: 1, Status: "FAILED"}},
+			})
+		}()
+		det := turnDetector{quiet: 5}
+		_ = s.serve(func(_ int, f frameRec) {
+			if !snapshotSent.Load() {
+				framesBeforeSnapshot.Add(1)
+			}
+			if det.feed(f.payload) {
+				s.answer(2, 4, lat)
+			}
+		}, func(ev protocol.ClientEvent) {
+			if ev.Type == "session.end" {
+				s.send("session.completed", evo{}, protocol.SessionCompleted{EndReason: "USER_ENDED", ChargedSeconds: 3})
+			}
+		})
+	})
+	rep, err := h.run([]Step{Speak{Packets: packets(speechA, 3)}, WaitAIDone{}, End{}})
+	require.NoError(t, err)
+	require.Zero(t, framesBeforeSnapshot.Load(), "no upstream frame before the snapshot that ends the replay")
+	require.Equal(t, "COMPLETED", rep.Status)
+	require.Equal(t, []int64{100}, rep.TurnLatencyMS, "the answer to the utterance, not the replayed turn, ended WaitAIDone")
+}
+
 func TestSnapshotResetsBaseline(t *testing.T) {
 	var resumes []int64
 	h := newHarness(t, func(s *sconn) {
@@ -745,6 +791,7 @@ func TestFatalServerErrorIsReturned(t *testing.T) {
 	require.ErrorAs(t, err, &se)
 	require.Equal(t, "PROTOCOL_VIOLATION", se.Code)
 	require.Equal(t, "ACTIVE", rep.Status)
+	require.Equal(t, int(websocket.StatusPolicyViolation), rep.CloseCode, "the close code the server ended the connection with")
 }
 
 func TestResumeRefusedFails(t *testing.T) {

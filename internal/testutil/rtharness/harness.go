@@ -91,6 +91,7 @@ type options struct {
 	wrapGen       func(provider.Generation) provider.Generation
 	sleep         func(ctx context.Context, d time.Duration) error
 	apology       func() ([][]byte, error)
+	realClock     bool
 }
 
 // Option configures New.
@@ -145,6 +146,12 @@ func WithApology(f func() ([][]byte, error)) Option { return func(o *options) { 
 // WithLimits sets the pod capacity limits (default 95/100/120).
 func WithLimits(l conversation.Limits) Option { return func(o *options) { o.limits = l } }
 
+// WithRealClock runs the runtime on the system clock, real tickers and a real-time pacer, instead of
+// the fake clock: for a test that measures real elapsed time (TestBargeInP95). The audio helpers
+// then send frames without advancing a clock, AdvanceClock and Tick are not available, and the
+// session is seeded relative to the current time.
+func WithRealClock() Option { return func(o *options) { o.realClock = true } }
+
 // Gates make a load of the start flow hang until the test closes the channel (or the context of
 // the load ends). Set the fields before Connect.
 type Gates struct {
@@ -195,6 +202,7 @@ type H struct {
 	runs    []*attachRun // every Attach this harness started, for Close
 	once    sync.Once
 	blocked atomic.Int32
+	real    bool // WithRealClock
 }
 
 // attachRun is one Manager.Attach call: done is closed when it returned, err is its result.
@@ -221,10 +229,15 @@ func New(t *testing.T, opts ...Option) *H {
 
 	h := &H{T: t, SID: SessionID, ids: idgen.NewSequence(t)}
 	h.Clock = clock.NewFake(T0)
+	var rtClock clock.Clock = h.Clock
+	t0 := T0
+	if o.realClock {
+		h.real, rtClock, t0 = true, clock.System{}, time.Now().UTC()
+	}
 	h.Tickers = &Tickers{}
 	h.Conn = NewPipeConn()
 	h.Calls = &fakes.CallRecorder{}
-	h.Session = fakes.NewSessionRuntime(h.Clock)
+	h.Session = fakes.NewSessionRuntime(rtClock)
 	h.Session.Recorder = h.Calls
 	h.Turns = fakes.NewTurnRepo()
 	h.Written = fakes.NewEventWriter()
@@ -242,10 +255,10 @@ func New(t *testing.T, opts ...Option) *H {
 	if o.tune != nil {
 		o.tune(&tuning)
 	}
-	h.Session.Seed(sessionRecord(t, o))
+	h.Session.Seed(sessionRecord(t, o, t0))
 	h.Ticket = conversation.AttachTicket{UserID: UserID, SessionID: SessionID}
 	h.Deps = conversation.Deps{
-		Cfg: tuning, Limits: o.limits, Clock: h.Clock, IDs: h.ids, Metrics: h.Metrics,
+		Cfg: tuning, Limits: o.limits, Clock: rtClock, IDs: h.ids, Metrics: h.Metrics,
 		Session: h.Session, Turns: h.Turns, Events: h.Written, Store: h.Store,
 		Configs: conversation.NewConfigLoader(h.Content, h.Content, 8),
 		Learner: learnerGate{h.Learner, h}, Memory: memoryGate{h.Memory, h},
@@ -253,6 +266,9 @@ func New(t *testing.T, opts ...Option) *H {
 		NewTicker: func(d time.Duration) conversation.Ticker { return h.Tickers.New(d) },
 		// The pacer waits on the fake clock: a sleep is the passing of that much time.
 		Sleep: func(ctx context.Context, d time.Duration) error { h.Clock.Advance(d); return ctx.Err() },
+	}
+	if o.realClock {
+		h.Deps.NewTicker, h.Deps.Sleep = conversation.NewRealTicker, nil
 	}
 	if o.sleep != nil {
 		h.Deps.Sleep = o.sleep
@@ -278,7 +294,7 @@ func DefaultTuning(t testing.TB) config.RealtimeTuning {
 }
 
 // sessionRecord is the seeded sessions row as the runtime reads it.
-func sessionRecord(t testing.TB, o options) session.RuntimeRecord {
+func sessionRecord(t testing.TB, o options, t0 time.Time) session.RuntimeRecord {
 	t.Helper()
 	snap := content.SessionSnapshot{
 		Character: content.CharacterSnapshot{
@@ -315,8 +331,8 @@ func sessionRecord(t testing.TB, o options) session.RuntimeRecord {
 		rec.OpeningPromptVersionID = &id
 	}
 	if o.status == session.StatusActive {
-		start := T0
-		exp := T0.Add(time.Duration(o.duration) * time.Second)
+		start := t0
+		exp := t0.Add(time.Duration(o.duration) * time.Second)
 		rec.StartedAt, rec.ExpiresAt, rec.RuntimeFence = &start, &exp, 1
 	}
 	return rec
@@ -395,7 +411,7 @@ func (h *H) Peer(pod string) *H {
 	p := &H{
 		T: h.T, SID: h.SID, Clock: h.Clock, Tickers: h.Tickers, Session: h.Session, Calls: h.Calls, Turns: h.Turns,
 		Written: h.Written, Store: h.Store, Learner: h.Learner, Memory: h.Memory, Router: h.Router, Content: h.Content,
-		Ticket: h.Ticket, ids: h.ids, Conn: NewPipeConn(), Reg: prometheus.NewRegistry(),
+		Ticket: h.Ticket, ids: h.ids, Conn: NewPipeConn(), Reg: prometheus.NewRegistry(), real: h.real,
 	}
 	p.enc, _ = audio.NewEncoder(48000, 32000, 5)
 	p.Metrics = conversation.NewMetrics(p.Reg)
@@ -471,7 +487,7 @@ func (h *H) SendRawUpstream(opus []byte) {
 	h.T.Helper()
 	h.Conn.Send(conversation.MessageBinary, protocol.EncodeUpstream(h.upSeq, opus))
 	h.upSeq++
-	h.Clock.Advance(20 * time.Millisecond)
+	h.advance(20 * time.Millisecond)
 }
 
 // SkipUpstream advances the upstream sequence by n without sending: the next frame shows a gap of
@@ -495,7 +511,7 @@ func (h *H) sendFrame(block []int16) {
 	}
 	h.Conn.Send(conversation.MessageBinary, protocol.EncodeUpstream(h.upSeq, pkt))
 	h.upSeq++
-	h.Clock.Advance(20 * time.Millisecond)
+	h.advance(20 * time.Millisecond)
 	if h.upSeq%25 == 0 { // never let audioIn overflow (the reader drops the newest frame when it is full)
 		h.WaitFor("pipe idle", h.Conn.Idle)
 		// ...and let the loop catch up with the audio and STT events every 500 ms of audio, so a
@@ -512,17 +528,36 @@ func (h *H) sendFrame(block []int16) {
 // ---- time ----
 
 // AdvanceClock moves the fake clock forward.
-func (h *H) AdvanceClock(d time.Duration) { h.Clock.Advance(d) }
+func (h *H) AdvanceClock(d time.Duration) {
+	h.mustBeFake()
+	h.Clock.Advance(d)
+}
+
+// advance moves the fake clock by the audio time just sent; on the real clock it does nothing.
+func (h *H) advance(d time.Duration) {
+	if !h.real {
+		h.Clock.Advance(d)
+	}
+}
+
+func (h *H) mustBeFake() {
+	h.T.Helper()
+	if h.real {
+		h.T.Fatal("rtharness: the fake clock and tickers do not exist with WithRealClock")
+	}
+}
 
 // Tick fires the runtime's tickers (the 100 ms loop and handshake tickers and the 50 ms redisSync
 // ticker), each once, with the current fake time. Deadlines of the loop are checked on the tick;
 // call Sync afterwards to wait until it has been handled.
 func (h *H) Tick() {
+	h.mustBeFake()
 	h.Tickers.Fire(h.Clock.Now(), func(d time.Duration) bool { return d < time.Second })
 }
 
 // TickPing fires the heartbeat tickers (WS_PING_INTERVAL): the idle check and the ping.
 func (h *H) TickPing() {
+	h.mustBeFake()
 	h.Tickers.Fire(h.Clock.Now(), func(d time.Duration) bool { return d >= time.Second && d <= time.Minute })
 }
 

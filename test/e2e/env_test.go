@@ -140,6 +140,9 @@ func (e *env) baseEnv(tb testing.TB, extra map[string]string) []string {
 		"FAKE_STT_FIXTURE_DIR":        e.fixtures,
 		"FAKE_PRIMARY_STT_LATENCY_MS": "250", "FAKE_PRIMARY_LLM_LATENCY_MS": "500",
 		"FAKE_LLM_TOKEN_INTERVAL_MS": "30", "FAKE_PRIMARY_TTS_LATENCY_MS": "300",
+		// The fault tests set and clear kotoki:fake:faults and move on within seconds; a fast poll
+		// keeps a pod from still holding the last test's fault when the next one begins.
+		"FAKE_FAULTS_POLL_INTERVAL": "100ms",
 	}, extra)
 	out := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + e.logDir}
 	keys := make([]string, 0, len(m))

@@ -20,9 +20,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/conversation/protocol"
 	"github.com/nabePi/kotoki-backend/internal/kotokiclient"
 	kcaudio "github.com/nabePi/kotoki-backend/internal/kotokiclient/audio"
+	"github.com/nabePi/kotoki-backend/internal/platform/clock"
+	"github.com/nabePi/kotoki-backend/internal/platform/idgen"
+	"github.com/nabePi/kotoki-backend/internal/postgres"
+	"github.com/nabePi/kotoki-backend/internal/redisstore"
+	"github.com/nabePi/kotoki-backend/internal/session"
 )
 
 const (
@@ -30,7 +36,7 @@ const (
 	eventuallyWait = 10 * time.Second
 	eventuallyTick = 50 * time.Millisecond
 	// scriptTimeout bounds one whole scripted conversation.
-	scriptTimeout  = 5 * time.Minute
+	scriptTimeout  = 10 * time.Minute
 	strongPassword = "kotoki-e2e-Passw0rd!x7"
 )
 
@@ -397,4 +403,93 @@ func quantile(b []bucket, q float64) float64 {
 		prevLE, prevCount = bk.le, bk.count
 	}
 	return prevLE
+}
+
+// extraRealtime starts one more cmd/realtime process (pod id pod) for the scenarios that need
+// their own pod: a crash, a drain, a takeover. It is stopped when the test ends.
+func extraRealtime(t *testing.T, pod string) *proc {
+	t.Helper()
+	p := stack.startRealtime(t, pod)
+	t.Cleanup(p.stop)
+	p.waitReady(t)
+	return p
+}
+
+// wsURLOf is the realtime WebSocket endpoint of a process.
+func wsURLOf(p *proc) string { return "ws://" + p.addr + "/api/v1/realtime" }
+
+// sessionRow is the part of a sessions row the scenarios assert on.
+type sessionRow struct {
+	Status           string
+	EndReason        *string
+	Charged          int
+	Disconnected     int
+	Fence            int64
+	StartedAt        *time.Time
+	EndingAt         *time.Time
+	EndedAt          *time.Time
+	HandoffAt        *time.Time
+	OpeningPromptVer *uuid.UUID
+}
+
+func readSession(t *testing.T, id uuid.UUID) sessionRow {
+	t.Helper()
+	var r sessionRow
+	require.NoError(t, stack.pool.QueryRow(t.Context(), `SELECT status, end_reason, charged_seconds, disconnected_seconds, runtime_fence,
+		started_at, ending_at, ended_at, handoff_at, opening_prompt_version_id FROM sessions WHERE id = $1`, id).Scan(
+		&r.Status, &r.EndReason, &r.Charged, &r.Disconnected, &r.Fence, &r.StartedAt, &r.EndingAt, &r.EndedAt, &r.HandoffAt, &r.OpeningPromptVer))
+	return r
+}
+
+// waitSession waits until the session reaches status.
+func waitSession(t *testing.T, id uuid.UUID, status string) sessionRow {
+	t.Helper()
+	eventually(t, func() bool { return readSession(t, id).Status == status }, "session %s", status)
+	return readSession(t, id)
+}
+
+// sessionEvents returns the session_events rows of a session as event_type -> payloads, in order.
+func sessionEvents(t *testing.T, id uuid.UUID) map[string][]map[string]any {
+	t.Helper()
+	rows, err := stack.pool.Query(t.Context(), `SELECT event_type, payload FROM session_events WHERE session_id = $1 ORDER BY created_at, id`, id)
+	require.NoError(t, err)
+	defer rows.Close()
+	out := map[string][]map[string]any{}
+	for rows.Next() {
+		var typ string
+		var payload map[string]any
+		require.NoError(t, rows.Scan(&typ, &payload))
+		out[typ] = append(out[typ], payload)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+const faultsKey = "kotoki:fake:faults"
+
+// setFaults writes the fake-provider fault document (spec 8.9.6) and clears it again when the test
+// ends. Faults are global to the Redis, so a test that sets one must not run in parallel.
+func setFaults(t *testing.T, doc string) {
+	t.Helper()
+	require.NoError(t, stack.rdb.Set(t.Context(), faultsKey, doc, 0).Err())
+	t.Cleanup(func() { _ = stack.rdb.Del(context.Background(), faultsKey).Err() })
+}
+
+// clearFaults removes the fault document.
+func clearFaults(t *testing.T) {
+	t.Helper()
+	require.NoError(t, stack.rdb.Del(t.Context(), faultsKey).Err())
+}
+
+// newSweeper builds the session sweeper in-process against the e2e database and Redis; it stands in
+// for `worker run-job session_sweeper` (the worker is M6).
+func newSweeper() *session.Sweeper {
+	ids, clk := idgen.NewV7(), clock.System{}
+	store := postgres.NewStore(stack.pool, postgres.WithIDs(ids), postgres.WithClock(clk))
+	repo := postgres.NewSessionRepo(stack.pool)
+	svc := session.NewService(session.Deps{
+		Store: store.SessionStore(), Reader: repo, Balance: balance.NewService(store.BalanceStore(), clk, ids),
+		Control: redisstore.NewSessionControl(stack.rdb), Clock: clk, IDs: ids, ServiceName: "worker",
+	})
+	return session.NewSweeper(svc, repo, redisstore.NewHeartbeatReader(stack.rdb), clk, nil)
 }

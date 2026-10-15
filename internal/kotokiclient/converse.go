@@ -175,9 +175,10 @@ type runner struct {
 	startSentAt  time.Time
 	startRecord  bool // StartMS already taken
 	resumeT0     time.Time
-	ready        bool // per connection
-	attached     bool // session.started or snapshot seen on this connection
-	connLost     bool // the reader of this connection ended
+	ready        bool          // per connection
+	attached     bool          // session.started or snapshot seen on this connection
+	connLost     bool          // the reader of this connection ended
+	staleOf      *RealtimeConn // the connection whose dropped stale frames are already in the Report
 	terminal     bool
 	fatal        *ServerError
 }
@@ -315,6 +316,12 @@ func (r *runner) apply(e Received[protocol.ServerEvent]) *protocol.ClientPlaybac
 	case protocol.SessionReady:
 		r.ready = true
 	case protocol.SessionStarted:
+		// A replayed session.started (a start sent to a session that is already ACTIVE is a resume
+		// at the server, which replays from seq 0) is no sign that the replay is over: only the
+		// snapshot that ends it attaches.
+		if ev.Replay {
+			break
+		}
 		r.attached = true
 		if !r.startRecord && !r.startSentAt.IsZero() {
 			r.startRecord = true
@@ -480,12 +487,39 @@ func (r *runner) shutdown(graceful bool) {
 	if r.conn == nil {
 		return
 	}
+	// The server closes right after a fatal error or session.failed; let its close frame arrive so
+	// the Report knows the code.
+	if r.test(func() bool { return r.fatal != nil || r.rep.Status == "FAILED" }) {
+		select {
+		case <-r.consumerDone:
+		case <-time.After(fatalCloseWait):
+		}
+	}
 	if graceful {
 		_ = r.conn.Close(websocket.StatusNormalClosure, "script finished")
 	} else {
 		_ = r.conn.Abort()
 	}
 	<-r.consumerDone
+	r.finishConn()
+}
+
+// fatalCloseWait is how long shutdown waits for the server's close frame after a fatal error or
+// session.failed.
+const fatalCloseWait = 500 * time.Millisecond
+
+// finishConn folds what the current connection ended with into the Report, once per connection:
+// the stale frames it dropped and its close code. Call it after the connection's consumer has
+// finished.
+func (r *runner) finishConn() {
+	r.with(func() {
+		if r.conn == nil || r.staleOf == r.conn {
+			return
+		}
+		r.staleOf = r.conn
+		r.rep.StaleFramesDropped += int(r.conn.StaleDropped())
+		r.rep.CloseCode = max(int(websocket.CloseStatus(r.conn.Err())), 0)
+	})
 }
 
 // --- the script --------------------------------------------------------------------------
@@ -655,6 +689,7 @@ func (r *runner) bargeIn(ctx context.Context, st BargeIn) error {
 func (r *runner) drop(ctx context.Context, away time.Duration) error {
 	_ = r.conn.Abort()
 	<-r.consumerDone // everything already received is accounted for before last_server_seq is read
+	r.finishConn()
 	if r.test(func() bool { return r.terminal }) {
 		return errSessionEnded
 	}
