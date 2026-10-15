@@ -93,18 +93,16 @@ loop:
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		p.mu.Lock()
-		if p.start.IsZero() {
-			p.start = p.clk.Now()
-		}
-		p.mu.Unlock()
 		for {
 			p.mu.Lock()
 			now := p.clk.Now()
-			lead := p.sentMS - now.Sub(p.start).Milliseconds()
-			if lead < 0 { // underrun (TTS gap): reset the clock so there is no excess burst
-				p.start = now.Add(-time.Duration(p.sentMS) * time.Millisecond)
-				lead = 0
+			var lead int64 // nothing admitted yet: no lead, only backpressure can wait
+			if !p.start.IsZero() {
+				lead = p.sentMS - now.Sub(p.start).Milliseconds()
+				if lead < 0 { // underrun (TTS gap): reset the clock so there is no excess burst
+					p.start = now.Add(-time.Duration(p.sentMS) * time.Millisecond)
+					lead = 0
+				}
 			}
 			p.mu.Unlock()
 			if lead < p.maxLeadMS && out.AudioLen() < pacerMaxQueued {
@@ -124,6 +122,11 @@ loop:
 		if hooks.Admit != nil && !hooks.Admit(f) {
 			continue
 		}
+		p.mu.Lock()
+		if p.start.IsZero() { // the clock starts with the first admitted frame
+			p.start = p.clk.Now()
+		}
+		p.mu.Unlock()
 		if count == 0 && hooks.BeforeFirst != nil {
 			hooks.BeforeFirst()
 		}

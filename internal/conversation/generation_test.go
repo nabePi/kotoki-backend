@@ -326,10 +326,145 @@ func TestSentenceLimit(t *testing.T) {
 	require.Equal(t, []string{"一つ目です。", "二つ目です。"}, sentenceTexts(evs))
 	require.Equal(t, "一つ目です。二つ目です。", cleanText(evs), "text after the limit never reaches ai.text_delta")
 	sg := h.router.Generations()[0]
-	require.True(t, sg.LLMCancelled(), "llmCancel cuts the LLM stream")
+	eventually(t, sg.LLMCancelled, "llmCancel cuts the LLM stream")
 	require.Equal(t, []int{0, 1}, ttsIndexes(sg))
 	require.InDelta(t, 1.0, h.m.SentenceLimitTotal("reply"), 0)
 	require.Zero(t, h.m.SentenceLimitTotal("opening"))
+}
+
+func TestSentenceLimitReachedInClose(t *testing.T) {
+	// the 2nd sentence ends the only delta, so it only comes out of parser.Close()
+	h := newGenHarness(t, fakes.Script{Deltas: []string{"一つ目です。二つ目です。"}})
+	h.startWriter()
+	p := h.params(conversation.GenReply, 1)
+	p.MaxSentences = 2
+	g := h.newGen(p)
+	g.StartLLM()
+	evs := h.collect(g)
+	done, ok := last(evs).(conversation.EvAudioDone)
+	require.True(t, ok, "%#v", last(evs))
+	require.True(t, done.LLMFinished)
+	require.Equal(t, []string{"一つ目です。", "二つ目です。"}, sentenceTexts(evs))
+	require.InDelta(t, 1.0, h.m.SentenceLimitTotal("reply"), 0, "the limit reached in Close is counted")
+}
+
+func TestLLMCancelKeepsParsedSentences(t *testing.T) {
+	// one delta holds 5 complete sentences (the 6th waits for more text); the loop cuts the LLM
+	// (expiry) as soon as the first sentence is announced: every parsed sentence is still spoken
+	h := newGenHarness(t, fakes.Script{Deltas: []string{"はい。そうです。いいですね。行きます。待ちます。分かりました。"}})
+	h.events = make(chan conversation.GenEvent) // unbuffered: runLLM waits for the test at each event
+	h.startWriter()
+	g := h.newGen(h.params(conversation.GenReply, 1))
+	g.StartLLM()
+	var evs []conversation.GenEvent
+	cut := false
+	timeout := time.After(5 * time.Second)
+collect:
+	for {
+		select {
+		case ev := <-h.events:
+			evs = append(evs, ev)
+			if _, ok := ev.(conversation.EvSentence); ok && !cut {
+				g.LLMCancel()
+				cut = true
+			}
+			if _, ok := ev.(conversation.EvGenFailed); ok {
+				break collect
+			}
+		case a := <-h.acks:
+			if ev, ok := g.OnWriterAck(a); ok {
+				evs = append(evs, ev)
+				break collect
+			}
+		case <-timeout:
+			t.Fatalf("no terminal event; got %#v", evs)
+		}
+	}
+	done, ok := last(evs).(conversation.EvAudioDone)
+	require.True(t, ok, "%#v", last(evs))
+	require.False(t, done.LLMFinished, "cut by the loop: the parser is not closed")
+	var parsed, spoken []int
+	for _, s := range eventsOf[conversation.EvSentence](evs) {
+		parsed = append(parsed, s.Sentence.Index)
+	}
+	for _, s := range eventsOf[conversation.EvSentenceAudio](evs) {
+		spoken = append(spoken, s.Index)
+	}
+	require.Equal(t, []int{0, 1, 2, 3, 4}, parsed)
+	require.Equal(t, parsed, spoken, "every announced sentence is spoken")
+}
+
+func TestTTSSwitchAfterFirstFrameFails(t *testing.T) {
+	// the router's switch races MarkAudioSent: the epoch arrives after a frame was admitted
+	// only sentence 0 is parsed before the gate, which keeps runLLM, and so runTTS, alive
+	gate := make(chan struct{})
+	h := newGenHarness(t, fakes.Script{Deltas: []string{"こんにちは。", "元気", "ですか？"}, Gate: gate})
+	h.router.SetOnMarkAudioSent(func() { h.router.Generations()[0].ForceEpoch(1) })
+	h.startWriter()
+	p := h.params(conversation.GenReply, 1)
+	p.Voice = withBackup
+	g := h.newGen(p)
+	g.StartLLM()
+	evs := h.collect(g)
+	require.Equal(t, conversation.EvGenFailed{Gen: 1, Cause: conversation.CauseProvider}, last(evs))
+	waitGen(t, g)
+	drainUntilQuiet(t, h, g)
+	require.Len(t, eventsOf[conversation.EvGenFailed](evs), 1)
+	calls := h.router.Generations()[0].TTSCalls()
+	require.Len(t, calls, 1, "no synthesis in epoch 1 after audio was sent")
+	require.Zero(t, calls[0].Epoch)
+	sent := h.conn.sent(t)
+	require.LessOrEqual(t, len(sent), 5, "at most sentence 0 of the old voice")
+	requireContiguous(t, sent, 1, len(sent))
+}
+
+func TestTTSSwitchBeforeFirstAdmitRestarts(t *testing.T) {
+	gate := make(chan struct{})
+	h := newGenHarness(t, fakes.Script{Deltas: threeSentences, Gate: gate})
+	const gen = 2
+	for i := range 25 { // backpressure holds the pacer before Admit
+		h.out.EnqueueAudio(audio.OutFrame{Gen: 99, Seq: uint32(i)})
+	}
+	release := make(chan struct{})
+	p := h.params(conversation.GenReply, gen)
+	p.Voice = withBackup
+	p.Sleep = func(ctx context.Context, d time.Duration) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		h.out.PurgeAudio(gen)
+		return h.sleep(ctx, d)
+	}
+	g := h.newGen(p)
+	g.StartLLM()
+	hasLog := func(entry string) func() bool {
+		return func() bool {
+			gs := h.router.Generations()
+			return len(gs) == 1 && slices.Contains(gs[0].Log(), entry)
+		}
+	}
+	eventually(t, hasLog("tts:final:1:e0"), "sentences 0 and 1 synthesised in epoch 0")
+	h.router.Generations()[0].ForceEpoch(1)
+	eventually(t, hasLog("tts:final:1:e1"), "sentences 0 and 1 synthesised again in epoch 1")
+	close(gate)
+	close(release)
+	h.startWriter()
+	evs := h.collect(g)
+	_, ok := last(evs).(conversation.EvAudioDone)
+	require.True(t, ok, "%#v", last(evs))
+	var calls [][2]int
+	for _, c := range h.router.Generations()[0].TTSCalls() {
+		calls = append(calls, [2]int{c.Index, c.Epoch})
+	}
+	require.Equal(t, [][2]int{{0, 0}, {1, 0}, {0, 1}, {1, 1}, {2, 1}}, calls)
+	requireContiguous(t, h.conn.sent(t), gen, 15)
+	// sentence 0 was fully queued before sentence 1 was requested; how much of sentence 1 reached
+	// the frames channel before the switch depends on timing
+	dropped := h.m.AudioFramesOutTotal("dropped_stale")
+	require.GreaterOrEqual(t, dropped, 5.0)
+	require.LessOrEqual(t, dropped, 10.0)
 }
 
 func TestTextDeltaSanitized(t *testing.T) {
@@ -695,7 +830,7 @@ func TestCancelNoLeak(t *testing.T) {
 	g.Cancel()
 	waitGen(t, g)
 	require.Less(t, time.Since(start), time.Second)
-	require.True(t, h.router.Generations()[0].LLMCancelled())
+	eventually(t, h.router.Generations()[0].LLMCancelled, "the LLM stream is cancelled")
 	drainUntilQuiet(t, h, g)
 
 	// cancelled before anything started: every stage still exits

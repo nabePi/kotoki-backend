@@ -264,13 +264,38 @@ func TestPacerAdmitDropsFrames(t *testing.T) {
 	// every frame dropped: a silent generation, no end marker
 	out = NewOutbound(256, nil)
 	count = -1
-	err = NewPacer(clk, fakeSleep(t, clk, &sleeps), 400).Run(context.Background(), frameCh(1, 4), out, PacerHooks{
+	p := NewPacer(clk, fakeSleep(t, clk, &sleeps), 400)
+	err = p.Run(context.Background(), frameCh(1, 4), out, PacerHooks{
 		Admit:  func(audio.OutFrame) bool { return false },
 		OnDone: func(n int, _ int64) { count = n },
 	})
 	require.NoError(t, err)
 	require.Zero(t, count)
 	require.Zero(t, countItems(out))
+	require.True(t, p.EstimatedPlaybackEnd().IsZero(), "the clock starts with the first admitted frame")
+}
+
+func TestPacerClockStartsAtFirstAdmittedFrame(t *testing.T) {
+	clk := clock.NewFake(pacerT0)
+	var sleeps int
+	out := NewOutbound(256, nil)
+	p := NewPacer(clk, fakeSleep(t, clk, &sleeps), 400)
+	var endAtFirstAdmit time.Time
+	n := 0
+	err := p.Run(context.Background(), frameCh(1, 3), out, PacerHooks{
+		Admit: func(audio.OutFrame) bool {
+			n++
+			if n == 1 {
+				endAtFirstAdmit = p.EstimatedPlaybackEnd()
+				clk.Advance(time.Second)
+				return false
+			}
+			return true
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, endAtFirstAdmit.IsZero(), "a received frame does not start the clock before it is admitted")
+	require.True(t, p.EstimatedPlaybackEnd().Equal(pacerT0.Add(time.Second+40*time.Millisecond)))
 }
 
 func TestPacerCancelWhileWaitingForFrames(t *testing.T) {

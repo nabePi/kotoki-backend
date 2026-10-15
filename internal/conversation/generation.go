@@ -175,12 +175,18 @@ type Generation struct {
 	pacer        *Pacer
 	wg           sync.WaitGroup
 
-	llmFinished  atomic.Bool  // the text is complete: STOP/MAX_TOKENS, R-17 limit, static, asset
-	failed       atomic.Bool  // EvGenFailed was decided (once)
-	audioDone    atomic.Bool  // EvAudioDone was produced (once)
-	audioStarted atomic.Bool  // a frame reached the pacer's admit point
-	ttsEpoch     atomic.Int64 // epoch of the frames the pacer may send
+	// ttsStopped is closed when runTTS exits, so the text stage never blocks on a stage that is gone.
+	ttsStopped chan struct{}
+
+	llmFinished  atomic.Bool // the text is complete: STOP/MAX_TOKENS, R-17 limit, static, asset
+	failed       atomic.Bool // EvGenFailed was decided (once)
+	audioDone    atomic.Bool // EvAudioDone was produced (once)
 	framesQueued atomic.Int64
+
+	// epochMu orders the pacer's admit decision against runTTS moving to a new TTS epoch.
+	epochMu       sync.Mutex
+	ttsEpoch      int  // frames of older epochs are dropped
+	firstAdmitted bool // a frame was admitted (it is about to be queued after MarkAudioSent)
 }
 
 // newGeneration creates the generation (and its provider.Generation) without starting it.
@@ -298,6 +304,7 @@ func (g *Generation) startStatic(openingLine string) {
 func (g *Generation) startText(text func(chan<- prompt.Sentence)) {
 	sentences := make(chan prompt.Sentence, genSentencesCap)
 	frames := make(chan audio.OutFrame, genFramesCap)
+	g.ttsStopped = make(chan struct{})
 	g.spawn(func() { text(sentences) }, func() { g.runTTS(sentences, frames) }, func() { g.runPacer(frames) })
 }
 
@@ -355,7 +362,9 @@ func (g *Generation) failFrom(ctx context.Context, err error) {
 	g.fail(CauseProvider)
 }
 
-// deliver emits the clean text and the sentences, and hands the sentences to runTTS.
+// deliver emits the clean text and the sentences, and hands the sentences to runTTS. A sentence
+// the parser has cut is always handed over, even when the LLM was cut meanwhile (expiry: parsed
+// sentences are still spoken, §7.7.2/§7.11); only the end of the generation or of runTTS stops it.
 func (g *Generation) deliver(clean string, out []prompt.Sentence, sentences chan<- prompt.Sentence) bool {
 	if clean != "" && !g.emit(EvTextDelta{Gen: g.Number, Clean: clean}) {
 		return false
@@ -366,7 +375,9 @@ func (g *Generation) deliver(clean string, out []prompt.Sentence, sentences chan
 		}
 		select {
 		case sentences <- s:
-		case <-g.llmCtx.Done():
+		case <-g.ttsStopped:
+			return false
+		case <-g.ctx.Done():
 			return false
 		}
 	}
@@ -388,6 +399,9 @@ func (g *Generation) runLLM(sentences chan<- prompt.Sentence) {
 	defer func() { _ = stream.Close() }()
 	parser := prompt.NewSentenceParser(g.p.MaxSentences)
 	for {
+		if g.llmCtx.Err() != nil { // a cut LLM wins over events already buffered: no parser.Close
+			return
+		}
 		select {
 		case <-g.llmCtx.Done():
 			return
@@ -429,6 +443,9 @@ func (g *Generation) llmDone(reason provider.FinishReason, parser *prompt.Senten
 	switch reason {
 	case provider.FinishStop, provider.FinishMaxTokens:
 		_, out := parser.Close()
+		if parser.Limited { // the MaxSentences-th sentence came out of Close (R-17)
+			g.p.Metrics.sentenceLimit(g.Kind.metricLabel())
+		}
 		if g.deliver("", out, sentences) {
 			g.llmFinished.Store(true)
 		}
@@ -504,12 +521,17 @@ func (g *Generation) runPacer(frames <-chan audio.OutFrame) {
 	_ = g.pacer.Run(g.ctx, frames, g.p.Out, hooks)
 }
 
-// admitFrame drops frames of a superseded TTS epoch and every frame of a failed generation.
-// audioStarted is stored before ttsEpoch is loaded and runTTS stores the epoch before loading
-// audioStarted, so a switch racing the first frame is always seen by one side.
+// admitFrame drops frames of a superseded TTS epoch and every frame of a failed generation. The
+// decision and firstAdmitted are taken under epochMu, the lock restart takes to move the epoch:
+// a frame is either dropped (the new epoch came first) or admitted before restart looks.
 func (g *Generation) admitFrame(f audio.OutFrame) bool {
-	g.audioStarted.Store(true)
-	if int64(f.Epoch) < g.ttsEpoch.Load() || g.failed.Load() {
+	g.epochMu.Lock()
+	ok := f.Epoch >= g.ttsEpoch && !g.failed.Load()
+	if ok {
+		g.firstAdmitted = true
+	}
+	g.epochMu.Unlock()
+	if !ok {
 		g.p.Metrics.audioOut("dropped_stale", 1)
 		return false
 	}
@@ -521,6 +543,7 @@ func (g *Generation) admitFrame(f audio.OutFrame) bool {
 // generation), frames the PCM into 20 ms blocks and encodes them (one encoder per epoch).
 func (g *Generation) runTTS(sentences <-chan prompt.Sentence, frames chan<- audio.OutFrame) {
 	defer close(frames)
+	defer close(g.ttsStopped)
 	st := &ttsStage{g: g, frames: frames, in: sentences, epochCh: g.pg.TTSEpochChanged()}
 	if !st.newEncoder() {
 		return
@@ -596,10 +619,13 @@ func (st *ttsStage) restart(e int) bool {
 		return true // nothing new
 	}
 	st.epoch = e
-	g.ttsEpoch.Store(int64(e))
-	if g.audioStarted.Load() {
-		// the switch raced the first frame (MarkAudioSent): audio of the old voice may be on its
-		// way and the voice cannot change once audio is sent (S-12)
+	g.epochMu.Lock()
+	g.ttsEpoch = e
+	admitted := g.firstAdmitted
+	g.epochMu.Unlock()
+	if admitted {
+		// the switch raced the first frame (MarkAudioSent): audio of the old voice is on its way
+		// and the voice cannot change once audio is sent (S-12)
 		g.fail(CauseProvider)
 		return false
 	}
@@ -670,6 +696,9 @@ func (st *ttsStage) speak(s prompt.Sentence) speakResult {
 			}
 			if c.Epoch < st.epoch {
 				continue // a chunk of a superseded epoch
+			}
+			if c.Epoch > st.epoch { // the router switched before TTSEpochChanged was read here
+				return st.restartResult(c.Epoch)
 			}
 			if c.Err != nil {
 				if c.Err.VendorCode == vendorCodeTTSSwitched {

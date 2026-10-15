@@ -190,6 +190,20 @@ func (g *ScriptedGeneration) MarkAudioSent() {
 	}
 }
 
+// ForceEpoch moves TTS to epoch n at once and announces it on TTSEpochChanged, whether or not
+// audio was sent: it stands in for a router switch that raced MarkAudioSent. Later requests are
+// bound to epoch n (the first one starts with a stale epoch-0 chunk).
+func (g *ScriptedGeneration) ForceEpoch(n int) {
+	g.mu.Lock()
+	g.epoch, g.switched = n, true
+	g.log = append(g.log, fmt.Sprintf("force:e%d", n))
+	g.mu.Unlock()
+	select {
+	case g.epochCh <- n:
+	default:
+	}
+}
+
 // TTSEpochChanged implements provider.Generation.
 func (g *ScriptedGeneration) TTSEpochChanged() <-chan int { return g.epochCh }
 
