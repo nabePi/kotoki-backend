@@ -188,3 +188,11 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`TestRedisTimeout` memakai `CLIENT PAUSE 2000 ALL`, bukan `DEBUG SLEEP`**: `DEBUG` dinonaktifkan Redis untuk koneksi non-lokal (container). Efeknya sama (server tidak menjawab); `UNPAUSE` di-defer.
 - **`TestEveryKeyHasTTL`**: stream juga ber-TTL (`EXPIRE 120`), jadi asersinya `TTL > 0` untuk semua key termasuk stream (lebih ketat dari plan, yang mengecualikan stream), ditambah batas atas 120 s.
 - Backoff resubscribe: 100 ms berlipat dua hingga 1 s (plan: "≤ 1 s backoff").
+
+## M5-T17 — Event writer adapter & config loader
+- Plan menyebut `ConfigLoader` "LRU per version ID" dengan `content.SessionConfigLoader` yang memuat topic+scenario+prompt sekaligus. Cache memakai kunci tiga ID `(topic, scenarioVersion, promptVersion)` untuk hasil `Load`, dan satu LRU terpisah untuk OPENING per ID; bukan LRU per ID tunggal untuk tiap versi. Snapshot karakter tetap tidak di-cache.
+- Snapshot rusak → `CONTENT_MISCONFIGURED` (sesuai plan), diperiksa di `ConfigLoader` sebelum cache/`Load` (loader `content` sendiri memakai `INTERNAL_ERROR`).
+- Plan menaruh `config_loader.go` di `internal/conversation` padahal ada `content/config_loader.go` dengan nama serupa; tidak bentrok (paket berbeda).
+- `size <= 0` jatuh ke 128. Tidak ada pustaka LRU di go.mod; LRU kecil generik ditulis sendiri (`container/list`).
+- Pesan commit memakai Step 5 plan (`feat(conversation): audio store, event writer, config loader`) walau "audio store" tidak ada di task ini.
+- Test-first: tes dan implementasi ditulis bersamaan; kegagalan merah tidak dijalankan terpisah.

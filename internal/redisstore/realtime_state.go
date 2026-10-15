@@ -29,8 +29,8 @@ const (
 
 // Subscribe backoff after the Pub/Sub connection drops: 100 ms doubling up to 1 s (spec 7.9.4).
 const (
-	subBackoffMin = 100 * time.Millisecond
-	subBackoffMax = time.Second
+	subBackoffInitial = 100 * time.Millisecond
+	subBackoffCeiling = time.Second
 )
 
 // ownerAcquireLua is the acquire / refresh / takeover script of spec 7.9.2, verbatim.
@@ -415,7 +415,7 @@ func (s *RealtimeState) subscribe(ctx context.Context, pod string) (*redis.PubSu
 
 func (s *RealtimeState) pumpTakeovers(ctx context.Context, pod string, ps *redis.PubSub, out chan<- rtstate.Takeover) {
 	defer close(out)
-	backoff := subBackoffMin
+	backoff := subBackoffInitial
 	for ps != nil && ctx.Err() == nil {
 		// Closing ps unblocks ReceiveMessage whatever the client's ContextTimeoutEnabled is.
 		stop := context.AfterFunc(ctx, func() { _ = ps.Close() })
@@ -433,9 +433,9 @@ func (s *RealtimeState) pumpTakeovers(ctx context.Context, pod string, ps *redis
 				return
 			case <-time.After(backoff):
 			}
-			backoff = min(backoff*2, subBackoffMax)
+			backoff = min(backoff*2, subBackoffCeiling)
 			if p, err := s.subscribe(ctx, pod); err == nil {
-				ps, backoff = p, subBackoffMin
+				ps, backoff = p, subBackoffInitial
 			}
 		}
 	}
