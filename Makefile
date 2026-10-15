@@ -21,7 +21,7 @@ GIT_COMMIT      ?= $(shell git rev-parse --short HEAD)
 N               ?= 1
 
 .PHONY: env up up-obs down reset migrate-up migrate-down migrate-create seed promote-admin \
-        sqlc sqlc-check tidy-check migrations-check modelname-check arch-check \
+        sqlc sqlc-check tidy-check migrations-check modelname-check arch-check assets-apology fixtures fixtures16k \
         test test-cover test-cover-integration test-integration test-e2e test-live lint vuln \
         run-api run-realtime run-worker build cli docker-build load
 
@@ -82,6 +82,15 @@ arch-check:     ## §2.2 aturan 5: api & worker tanpa cgo (depguard menangani im
 	CGO_ENABLED=0 $(GO) build -o /dev/null $$pkgs || exit 1; \
 	if $(GO) list -deps $$pkgs | grep -E 'internal/conversation/audio|hraban/opus|go-webrtcvad'; then \
 	  echo 'cmd/api atau cmd/worker bergantung pada paket cgo (§2.2 aturan 5)'; exit 1; fi
+
+assets-apology: ## regenerate audio/assets/apology_ja.opus (mode fake; M9 menambah -tts)
+	$(GO) run ./test/tools/genapology -o internal/conversation/audio/assets/apology_ja.opus
+
+fixtures:       ## regenerate testdata/audio/synth (fixture sintetis §14.5, deterministik)
+	$(GO) run ./test/tools/genaudio -out testdata/audio/synth
+
+fixtures16k:    ## salinan 16 kHz + .txt untuk FAKE_STT_FIXTURE_DIR (out/fixtures16k)
+	$(GO) run ./test/tools/genaudio -to16k out/fixtures16k -src testdata/audio/synth
 
 test:           ## unit + contract + component, race
 	$(GO) test -race -short -count=1 ./...

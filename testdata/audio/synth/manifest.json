@@ -1,0 +1,183 @@
+{
+  "fixtures": [
+    {
+      "name": "ja_greeting_short",
+      "duration_ms": 1500,
+      "tags": [
+        "speech",
+        "e1",
+        "load"
+      ],
+      "expect": {
+        "turns": 1
+      },
+      "segments": [
+        {
+          "start_ms": 250,
+          "end_ms": 1250
+        }
+      ]
+    },
+    {
+      "name": "ja_self_intro",
+      "duration_ms": 4000,
+      "tags": [
+        "speech",
+        "e1",
+        "live-stt"
+      ],
+      "expect": {
+        "turns": 1
+      },
+      "segments": [
+        {
+          "start_ms": 200,
+          "end_ms": 3800
+        }
+      ]
+    },
+    {
+      "name": "ja_filler_pause",
+      "duration_ms": 4000,
+      "tags": [
+        "speech",
+        "turn-engine",
+        "filler",
+        "pause"
+      ],
+      "expect": {
+        "turns": 1
+      },
+      "segments": [
+        {
+          "start_ms": 200,
+          "end_ms": 800
+        },
+        {
+          "start_ms": 1800,
+          "end_ms": 3800
+        }
+      ]
+    },
+    {
+      "name": "ja_conjunction_pause",
+      "duration_ms": 4000,
+      "tags": [
+        "speech",
+        "turn-engine",
+        "conjunction",
+        "pause"
+      ],
+      "expect": {
+        "turns": 1
+      },
+      "segments": [
+        {
+          "start_ms": 150,
+          "end_ms": 1550
+        },
+        {
+          "start_ms": 2650,
+          "end_ms": 3850
+        }
+      ]
+    },
+    {
+      "name": "ja_question",
+      "duration_ms": 2000,
+      "tags": [
+        "speech",
+        "turn-engine",
+        "question"
+      ],
+      "expect": {
+        "turns": 1
+      },
+      "segments": [
+        {
+          "start_ms": 200,
+          "end_ms": 1600
+        }
+      ]
+    },
+    {
+      "name": "ja_long_utterance",
+      "duration_ms": 20000,
+      "tags": [
+        "speech",
+        "load",
+        "stt",
+        "long"
+      ],
+      "expect": {
+        "turns": 1
+      },
+      "segments": [
+        {
+          "start_ms": 200,
+          "end_ms": 19800
+        }
+      ]
+    },
+    {
+      "name": "ja_max_utterance",
+      "duration_ms": 50000,
+      "tags": [
+        "speech",
+        "turn-engine",
+        "max-utterance",
+        "long"
+      ],
+      "expect": {
+        "turns": 1
+      },
+      "segments": [
+        {
+          "start_ms": 200,
+          "end_ms": 49800
+        }
+      ]
+    },
+    {
+      "name": "ja_barge_in",
+      "duration_ms": 3000,
+      "tags": [
+        "speech",
+        "e3",
+        "load",
+        "barge-in"
+      ],
+      "expect": {
+        "turns": 1
+      },
+      "segments": [
+        {
+          "start_ms": 200,
+          "end_ms": 2800
+        }
+      ]
+    },
+    {
+      "name": "noise_only",
+      "duration_ms": 5000,
+      "tags": [
+        "noise",
+        "vad"
+      ],
+      "expect": {
+        "turns": 0
+      }
+    },
+    {
+      "name": "silence_5s",
+      "duration_ms": 5000,
+      "tags": [
+        "silence",
+        "pacing"
+      ],
+      "expect": {
+        "turns": 0
+      }
+    }
+  ]
+}

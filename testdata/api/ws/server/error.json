@@ -1,0 +1,19 @@
+{
+  "type": "error",
+  "version": 1,
+  "event_id": "01929a4e-6f2c-7c3a-9a51-3f1f0b7c2d19",
+  "server_seq": 19,
+  "session_id": "01929a40-1111-7abc-8def-000000000001",
+  "ts": "2026-10-12T06:30:15.123Z",
+  "payload": {
+    "error": {
+      "code": "AUDIO_FRAME_INVALID",
+      "message": "Audio dari mikrofon tidak terbaca dengan baik.",
+      "request_id": "0192f1a0-2222-7000-8000-000000000009",
+      "details": null
+    },
+    "retryable": false,
+    "fatal": false,
+    "ref_event_id": null
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "type": "session.started",
+  "version": 1,
+  "event_id": "01929a4e-6f2c-7c3a-9a51-3f1f0b7c2d02",
+  "server_seq": 2,
+  "session_id": "01929a40-1111-7abc-8def-000000000001",
+  "generation": 7,
+  "ts": "2026-10-12T06:30:15.123Z",
+  "payload": {
+    "status": "ACTIVE",
+    "conversation_start_mode": "AI_FIRST",
+    "started_at": "2026-10-12T06:30:01.200Z",
+    "expires_at": "2026-10-12T06:40:01.200Z",
+    "duration_seconds": 600,
+    "remaining_seconds": 600,
+    "turn_state": "LISTENING"
+  }
+}

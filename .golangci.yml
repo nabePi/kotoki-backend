@@ -126,6 +126,7 @@ linters:
             - "!**/internal/conversation/**"
             - "!**/internal/wsgateway/**"
             - "!**/internal/kotokiclient/**"
+            - "!**/internal/testutil/audiofx/**" # §14.9.5: loader fixture audio; root internal/testutil tetap cgo-free
             - "!**/test/**"
           deny:
             - {pkg: "github.com/nabePi/kotoki-backend/internal/conversation/audio", desc: "§2.2 aturan 5: paket cgo; cmd/api & cmd/worker harus CGO_ENABLED=0"}

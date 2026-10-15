@@ -1,0 +1,13 @@
+{
+  "type": "stt.partial",
+  "version": 1,
+  "event_id": "01929a4e-6f2c-7c3a-9a51-3f1f0b7c2d09",
+  "server_seq": 9,
+  "session_id": "01929a40-1111-7abc-8def-000000000001",
+  "turn_id": "01929a4e-5a00-7d00-8000-0000000000aa",
+  "turn_seq": 3,
+  "ts": "2026-10-12T06:30:15.123Z",
+  "payload": {
+    "text": "昨日会社に"
+  }
+}

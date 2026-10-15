@@ -77,6 +77,7 @@ type Realtime struct {
 	ReadyMaxSessions   int      `env:"REALTIME_READY_MAX_SESSIONS"`
 	MaxSessions        int      `env:"REALTIME_MAX_SESSIONS"`
 	HardMaxSessions    int      `env:"REALTIME_HARD_MAX_SESSIONS"`
+	RealtimeTuning
 }
 
 // Worker is the configuration of cmd/worker.
@@ -133,6 +134,7 @@ func defaultRealtime() Realtime {
 		HTTPAddr: ":8081", OpsAddr: ":9091",
 		WSAllowedOrigins: []string{"http://localhost:3000"},
 		ReadyMaxSessions: 95, MaxSessions: 100, HardMaxSessions: 120,
+		RealtimeTuning: defaultRealtimeTuning(),
 	}
 }
 
