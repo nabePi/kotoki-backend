@@ -940,3 +940,9 @@ Tanggal: 2026-10-14
 - Golden `testdata/api/ws/{client,server}/*.json` (27 file, indent 2, UUID/waktu tetap) dibuat dengan `go test ./internal/conversation/protocol -update`.
 - Tes: `TestGoldenServer/TestGoldenClient` (marshal JSONEq, decode→re-marshal, kelengkapan dua arah), `TestDurableSet`, `TestEnvelopeOmitsEmpty`, `TestDecodeClient`.
 - Keputusan: field tak dikenal diabaikan (§7.4.2 menang atas §14.4), lihat deviations.
+
+## M5-T4 — Protokol: frame biner, katalog error, close code
+- `internal/conversation/protocol/binary.go`: `EncodeUpstream/DecodeUpstream/EncodeDownstream/DecodeDownstream` (big-endian), `MaxBinary=4096`, `ErrFrameTooShort/ErrFrameTooLarge/ErrBadType` (pemanggil memetakan semuanya ke `PROTOCOL_VIOLATION` 1008). Payload kosong dianggap terlalu pendek (1 ≤ N).
+- `errors.go`: `Spec{Fatal, Close, Retryable}`, `Catalog` (tabel §7.4.8), `CloseCode`, `NewError(code, requestID, ref, details, ...ErrorOption)` + `WithRetryable`. `request_id` = `ref` bila ada; pesan dari `errs.Messages`. `SESSION_STATE_CONFLICT.Retryable=false` di katalog, pemanggil menimpa `WithRetryable(true)` hanya untuk status `STARTING`.
+- `Catalog[code].Fatal` adalah penentu durable-nya event `error` (durable hanya bila non-fatal, §7.4.3); `IsDurable("error")` tetap false.
+- Golden `testdata/api/ws/frames/{upstream_audio,downstream_audio}.hex`. Tes: `TestBinaryFrameGolden`, `TestUpstreamValidation`, `TestDownstreamValidation`, `TestCatalog`, `TestNewErrorFormat`; lint bersih.

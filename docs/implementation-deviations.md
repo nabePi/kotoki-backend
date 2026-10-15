@@ -76,3 +76,6 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - Decoder `DecodeClientEvent`/`DecodeServerEvent` **mengabaikan** field payload (dan envelope) yang tidak dikenal, mengikuti §7.4.2 ("Field yang tidak dikenal diabaikan, forward compatibility"). §14.4 butir (c) menulis "decoder menolak field tak dikenal"; kedua teks bertentangan dan §7.4.2 dipilih karena menyangkut kompatibilitas client. `type` tak dikenal tetap ditolak (`ErrUnknownType`), `version != 1` → `ErrUnsupportedVersion`, payload bukan object/salah tipe → `ErrInvalidPayload`.
 - `IsDurable("error")` selalu `false`: durable-nya `error` bergantung `ErrorPayload.Fatal` (hanya non-fatal), jadi diputuskan pemanggil.
 - Jumlah golden WS = 27 (6 client + 21 server), bukan 28 seperti di brief task; setiap tipe di §7.4.4/§7.4.5 punya tepat satu golden.
+
+## M5-T4 — katalog error WS
+- Tabel §7.4.8 memuat 23 baris, bukan 24 seperti di brief task; `TestCatalog` mencakup semua 23.
