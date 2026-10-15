@@ -83,3 +83,9 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 ## M5-T6 — aset APOLOGY
 - Paket APOLOGY dienkode pada 24 kHz tetapi didekode oleh `Decoder` 16 kHz Task 5: Opus mendekode paket 20 ms ke laju keluaran mana pun (320 sampel @ 16 kHz), jadi tidak ada API baru.
 - Bootstrap: `go:embed` gagal bila file belum ada, sehingga generator pertama kali dijalankan dengan file kosong sebagai placeholder.
+
+## M5-T7 — fixture audio sintetis
+- Total ukuran `testdata/audio/synth` 9 476 367 byte (98,5 s × 96 KB/s PCM16 48 kHz), melebihi "< 8 MB" §14.5; batas validator dinaikkan ke 10 000 000 byte (keputusan plan). Mencapai 8 MB berarti memangkas durasi wajib atau mengganti format (§14.5 mewajibkan WAV PCM16 48 kHz).
+- Semua 10 fixture sintetis (bukan TTS dan bukan rekaman). "Minimal 4 fixture direkam penutur asli" §14.5 = tugas pemilik produk (M9, disimpan di `testdata/audio/` dan didahulukan oleh `audiofx.LoadFixture`); fixture sintetis tidak dapat dipakai untuk live STT (tidak bisa dipahami).
+- Validator hidup di `internal/testutil/audiofx` (bukan `internal/testutil` seperti teks §14.5) karena memakai `conversation/audio` (cgo) dan root `internal/testutil` harus tetap cgo-free (§14.9.5).
+- `ja_filler_pause` dan `ja_conjunction_pause` masing-masing 4 000 ms (durasi tidak disebut §14.5; dipilih agar total 98,5 s sesuai plan). `manifest.json` menambah field `segments` (rentang bicara) di luar `name/duration_ms/tags/expect`, dipakai `TestFixturesVADSanity` dan pemeriksaan jeda; `noise_only`/`silence_5s` memakai transcript placeholder `（雑音のみ）`/`（無音）` karena `.txt` wajib ada dan tidak boleh kosong.

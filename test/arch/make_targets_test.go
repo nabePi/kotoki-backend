@@ -17,6 +17,8 @@ func TestMakeTargetsExist(t *testing.T) {
 		"sqlc-check", "tidy-check", "migrations-check", "modelname-check",
 		"arch-check", "test-cover", "test-e2e", "test-live", "vuln", "build",
 		"cli", "docker-build", "load",
+		// M5 (fixture audio §14.5)
+		"fixtures", "fixtures16k",
 	}
 	for _, tg := range targets {
 		t.Run(tg, func(t *testing.T) {
