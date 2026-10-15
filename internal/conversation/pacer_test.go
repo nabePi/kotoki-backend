@@ -244,6 +244,35 @@ func countItemsKeep(t *testing.T, out *Outbound, gen uint32) int {
 	return n
 }
 
+func TestPacerAdmitDropsFrames(t *testing.T) {
+	clk := clock.NewFake(pacerT0)
+	var sleeps int
+	out := NewOutbound(256, nil)
+	var order []string
+	var count int
+	err := NewPacer(clk, fakeSleep(t, clk, &sleeps), 400).Run(context.Background(), frameCh(1, 6), out, PacerHooks{
+		Admit:           func(f audio.OutFrame) bool { order = append(order, "admit"); return f.Seq%2 == 1 },
+		BeforeFirst:     func() { order = append(order, "before") },
+		OnSentenceStart: func(audio.OutFrame) { order = append(order, "sentence") },
+		OnDone:          func(n int, _ int64) { count = n },
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, count, "dropped frames are not counted")
+	require.Equal(t, []string{"admit", "admit", "before", "sentence", "admit", "admit", "sentence", "admit", "admit", "sentence"}, order)
+	require.Equal(t, 4, countItemsKeep(t, out, 1), "3 frames + end marker")
+
+	// every frame dropped: a silent generation, no end marker
+	out = NewOutbound(256, nil)
+	count = -1
+	err = NewPacer(clk, fakeSleep(t, clk, &sleeps), 400).Run(context.Background(), frameCh(1, 4), out, PacerHooks{
+		Admit:  func(audio.OutFrame) bool { return false },
+		OnDone: func(n int, _ int64) { count = n },
+	})
+	require.NoError(t, err)
+	require.Zero(t, count)
+	require.Zero(t, countItems(out))
+}
+
 func TestPacerCancelWhileWaitingForFrames(t *testing.T) {
 	noLeak(t)
 	clk := clock.NewFake(pacerT0)

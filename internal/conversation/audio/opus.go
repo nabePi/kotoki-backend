@@ -30,6 +30,9 @@ type OutFrame struct {
 	SentenceIdx    int
 	LastOfSentence bool
 	Opus           []byte
+	// Epoch is the TTS epoch the frame was synthesised in (server-internal, never sent): after a
+	// TTS fallback switch the frames of older epochs are dropped before they are queued.
+	Epoch int
 }
 
 // Decoder decodes 20 ms Opus packets to 16 kHz mono PCM. Not safe for concurrent use.

@@ -17,8 +17,11 @@ const (
 )
 
 // PacerHooks are optional callbacks of Pacer.Run, all called on the pacer goroutine.
-// Order for the first frame: BeforeFirst, EnqueueAudio, OnFirst, OnSentenceStart.
+// Order for the first frame: Admit, BeforeFirst, EnqueueAudio, OnFirst, OnSentenceStart.
 type PacerHooks struct {
+	// Admit runs for every frame after the pacing wait, right before it would be enqueued; false
+	// drops the frame (stale TTS epoch): it is not enqueued, counted or timed.
+	Admit func(f audio.OutFrame) bool
 	// BeforeFirst runs right before the first frame is enqueued ("audio sent", MarkAudioSent).
 	BeforeFirst func()
 	// OnFirst runs right after the first frame is enqueued.
@@ -117,6 +120,9 @@ loop:
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+		}
+		if hooks.Admit != nil && !hooks.Admit(f) {
+			continue
 		}
 		if count == 0 && hooks.BeforeFirst != nil {
 			hooks.BeforeFirst()
