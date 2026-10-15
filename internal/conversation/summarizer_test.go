@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func seqTurns(seqs ...int) []TurnContext {
 }
 
 func TestSummarizerTrigger(t *testing.T) {
-	s := NewSummarizer(&textRouter{}, NewPromptBuilder(), time.Second)
+	s := NewSummarizer(&textRouter{}, NewPromptBuilder(), time.Second, uuid.New())
 	turns := seqTurns(1, 2, 3, 4, 5, 6)
 	// oldest=5: seq<=4 and >0 → 4 turns
 	if !s.ShouldRun(turns, 0, 5, false) {
@@ -57,7 +58,7 @@ func TestSummarizerTrigger(t *testing.T) {
 	if s.ShouldRun(d, 0, 5, false) {
 		t.Error("DISCARDED turns do not count")
 	}
-	if got := NewSummarizer(&textRouter{}, NewPromptBuilder(), time.Second, WithSummaryTrigger(2)); !got.ShouldRun(seqTurns(1, 2), 0, 3, false) {
+	if got := NewSummarizer(&textRouter{}, NewPromptBuilder(), time.Second, uuid.New(), WithSummaryTrigger(2)); !got.ShouldRun(seqTurns(1, 2), 0, 3, false) {
 		t.Error("trigger option ignored")
 	}
 }
@@ -68,10 +69,11 @@ func TestSummarizerRequest(t *testing.T) {
 	r := &textRouter{fn: func(context.Context, provider.TextRequest) (provider.TextResult, error) {
 		return provider.TextResult{Text: "  要約です。\n"}, nil
 	}}
-	s := NewSummarizer(r, NewPromptBuilder(), time.Second, WithSummaryModel("m-1"), WithSummarySession(sid))
+	s := NewSummarizer(r, NewPromptBuilder(), time.Second, sid, WithSummaryModel("m-1"))
 	turns := seqTurns(2, 3, 4)
 	turns[2].Status = "DISCARDED"
-	res, err := s.Run(context.Background(), SummaryInput{PreviousSummary: "前", Turns: turns, MaxRunes: 300})
+	in := SummaryInput{PreviousSummary: "前", Turns: turns, MaxRunes: 300}
+	res, err := s.Run(context.Background(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +88,15 @@ func TestSummarizerRequest(t *testing.T) {
 	if len(q.Messages) != 2 || q.Messages[0].Role != provider.RoleSystem || q.Messages[1].Role != provider.RoleUser {
 		t.Fatalf("bad messages %+v", q.Messages)
 	}
+	built, _ := NewPromptBuilder().BuildRollingSummary(in)
+	for i, m := range built.Messages {
+		if q.Messages[i].Role != provider.Role(m.Role) || q.Messages[i].Content != m.Content || m.Content == "" {
+			t.Fatalf("message %d differs from BuildRollingSummary: %+v", i, q.Messages[i])
+		}
+	}
+	if !strings.Contains(q.Messages[1].Content, "これまでの要約:\n前") {
+		t.Fatalf("user message lacks the previous summary: %q", q.Messages[1].Content)
+	}
 }
 
 func TestSummarizerTimeoutAndStop(t *testing.T) {
@@ -94,15 +105,17 @@ func TestSummarizerTimeoutAndStop(t *testing.T) {
 		<-ctx.Done()
 		return provider.TextResult{}, ctx.Err()
 	}}
-	s := NewSummarizer(r, NewPromptBuilder(), 20*time.Millisecond)
+	s := NewSummarizer(r, NewPromptBuilder(), 20*time.Millisecond, uuid.New())
+	parent, cancelParent := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelParent()
 	turns := seqTurns(1, 2, 3, 4, 5)
 	in := SummaryInput{Turns: turns}
 	for i := 0; i < 3; i++ {
 		if !s.ShouldRun(turns, 0, 5, false) {
 			t.Fatalf("must still run before failure %d", i+1)
 		}
-		_, err := s.Run(context.Background(), in)
-		if !errors.Is(err, context.DeadlineExceeded) {
+		_, err := s.Run(parent, in)
+		if !errors.Is(err, context.DeadlineExceeded) || parent.Err() != nil {
 			t.Fatalf("want timeout, got %v", err)
 		}
 	}
@@ -119,7 +132,7 @@ func TestSummarizerSuccessResetsFailures(t *testing.T) {
 		}
 		return provider.TextResult{Text: "ok"}, nil
 	}}
-	s := NewSummarizer(r, NewPromptBuilder(), time.Second)
+	s := NewSummarizer(r, NewPromptBuilder(), time.Second, uuid.New())
 	turns := seqTurns(1, 2, 3, 4, 5)
 	for i := 0; i < 2; i++ {
 		_, _ = s.Run(context.Background(), SummaryInput{Turns: turns})
@@ -142,7 +155,7 @@ func TestSummarizerCancelNotCounted(t *testing.T) {
 		<-ctx.Done()
 		return provider.TextResult{}, ctx.Err()
 	}}
-	s := NewSummarizer(r, NewPromptBuilder(), time.Minute)
+	s := NewSummarizer(r, NewPromptBuilder(), time.Minute, uuid.New())
 	turns := seqTurns(1, 2, 3, 4, 5)
 	for i := 0; i < 4; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -160,8 +173,33 @@ func TestSummarizerEmptyTextIsFailure(t *testing.T) {
 	r := &textRouter{fn: func(context.Context, provider.TextRequest) (provider.TextResult, error) {
 		return provider.TextResult{Text: " \n"}, nil
 	}}
-	s := NewSummarizer(r, NewPromptBuilder(), time.Second)
+	s := NewSummarizer(r, NewPromptBuilder(), time.Second, uuid.New())
 	if _, err := s.Run(context.Background(), SummaryInput{Turns: seqTurns(1)}); err == nil {
 		t.Fatal("empty summary must fail")
+	}
+}
+
+func TestSummarizerNilSessionRejected(t *testing.T) {
+	r := &textRouter{fn: func(context.Context, provider.TextRequest) (provider.TextResult, error) {
+		return provider.TextResult{Text: "ok"}, nil
+	}}
+	s := NewSummarizer(r, NewPromptBuilder(), time.Second, uuid.Nil)
+	if _, err := s.Run(context.Background(), SummaryInput{Turns: seqTurns(1)}); err == nil || len(r.reqs) != 0 {
+		t.Fatalf("nil session id must fail before any LLM call: %v", err)
+	}
+}
+
+func TestSummarizerNonPositiveTimeoutDefaults(t *testing.T) {
+	r := &textRouter{fn: func(ctx context.Context, _ provider.TextRequest) (provider.TextResult, error) {
+		if dl, ok := ctx.Deadline(); !ok || time.Until(dl) < 5*time.Second {
+			return provider.TextResult{}, errors.New("deadline too short")
+		}
+		return provider.TextResult{Text: "ok"}, nil
+	}}
+	for _, d := range []time.Duration{0, -time.Second} {
+		s := NewSummarizer(r, NewPromptBuilder(), d, uuid.New())
+		if _, err := s.Run(context.Background(), SummaryInput{Turns: seqTurns(1)}); err != nil {
+			t.Fatalf("timeout %v: %v", d, err)
+		}
 	}
 }

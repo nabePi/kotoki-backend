@@ -70,6 +70,12 @@ func TestMaybeAdjust(t *testing.T) {
 			t.Fatalf("got %v %+v", ok, out.Current)
 		}
 	})
+	t.Run("oldest of exactly six counts", func(t *testing.T) {
+		texts := []string{"もう一度", "a", "b", "c", "d", "ゆっくり"}
+		if _, ok := MaybeAdjust(adaptiveFixture(), texts); !ok {
+			t.Fatal("signals at both ends of a 6-wide window must count")
+		}
+	})
 	t.Run("only last six count", func(t *testing.T) {
 		texts := append([]string{"もう一度", "ゆっくり"}, "a", "b", "c", "d", "e", "f")
 		if _, ok := MaybeAdjust(adaptiveFixture(), texts); ok {
