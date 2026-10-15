@@ -20,6 +20,8 @@ func NewClient(cfg config.Redis, m *metrics.Redis) (redis.UniversalClient, error
 			MasterName: cfg.SentinelMaster, SentinelAddrs: cfg.SentinelAddrs, Password: cfg.Password.Reveal(),
 			PoolSize: cfg.PoolSize, DialTimeout: cfg.DialTimeout, ReadTimeout: cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout,
 			DisableIdentity: true, // CLIENT SETINFO is unknown to Redis 7.0/7.1 and logs noise
+			// Without this go-redis ignores context deadlines on the socket (the 200 ms bound of the realtime state).
+			ContextTimeoutEnabled: true,
 		})
 	} else {
 		opt, perr := redis.ParseURL(cfg.URL.Reveal())
@@ -43,6 +45,7 @@ func NewClient(cfg config.Redis, m *metrics.Redis) (redis.UniversalClient, error
 			opt.WriteTimeout = cfg.WriteTimeout
 		}
 		opt.DisableIdentity = true
+		opt.ContextTimeoutEnabled = true
 		c = redis.NewClient(opt)
 	}
 	c.AddHook(NewTraceHook(m))
