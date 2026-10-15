@@ -4,14 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/nabePi/kotoki-backend/internal/provider"
 	"github.com/nabePi/kotoki-backend/internal/testutil/replay"
 )
-
-var _ provider.RoutedSTTSession = (*replay.ScriptedSTT)(nil)
 
 var frame20ms = make([]byte, 640)
 
@@ -163,4 +162,82 @@ func TestLoadTimeline(t *testing.T) {
 	require.Error(t, err, "at_ms must not go backwards")
 	_, err = replay.LoadTimeline(filepath.Join(dir, "missing.json"))
 	require.Error(t, err)
+
+	for name, body := range map[string]string{
+		"unknown key":        `[{"at_ms":100,"text":"a","fianl":true}]`,
+		"empty partial text": `[{"at_ms":100,"text":""}]`,
+		"missing text":       `[{"at_ms":100}]`,
+		"trailing data":      `[{"at_ms":100,"text":"a"}] []`,
+		"not an array":       `{"at_ms":100,"text":"a"}`,
+	} {
+		f := filepath.Join(dir, "case.json")
+		require.NoError(t, os.WriteFile(f, []byte(body), 0o600))
+		_, err := replay.LoadTimeline(f)
+		require.Error(t, err, name)
+	}
+	ok := filepath.Join(dir, "ok.json")
+	require.NoError(t, os.WriteFile(ok, []byte(`[{"at_ms":100,"text":"a"},{"at_ms":200,"text":"","final":true}]`), 0o600))
+	tl, err = replay.LoadTimeline(ok)
+	require.NoError(t, err, "an empty FINAL is allowed")
+	require.Len(t, tl, 2)
+}
+
+// collect reads Events until it is closed, failing after a second.
+func collect(t *testing.T, s *replay.ScriptedSTT) []provider.STTEvent {
+	t.Helper()
+	var out []provider.STTEvent
+	timeout := time.After(time.Second)
+	for {
+		select {
+		case ev, ok := <-s.Events():
+			if !ok {
+				return out
+			}
+			out = append(out, ev)
+		case <-timeout:
+			t.Fatalf("Events not closed; got %+v", out)
+		}
+	}
+}
+
+func texts(evs []provider.STTEvent) []string {
+	out := make([]string, 0, len(evs))
+	for _, ev := range evs {
+		out = append(out, string(ev.Type)+":"+ev.Text)
+	}
+	return out
+}
+
+func TestScriptedSTTFullBufferDropsOldestPartial(t *testing.T) {
+	tl := replay.Timeline{{AtMs: 20, Text: "p1"}, {AtMs: 40, Text: "p2"}, {AtMs: 60, Text: "p3"}, {AtMs: 80, Text: "p4"}}
+	s := replay.NewScriptedSTT(tl, replay.WithEventBuffer(3))
+	require.Equal(t, replay.DefaultEventBuffer, 64, "port contract: Events buffered (64)")
+	for range 3 {
+		require.NoError(t, s.SendAudio(frame20ms))
+	}
+	require.NoError(t, s.Finalize()) // buffer full of PARTIALs: the oldest goes, the FINAL stays
+	require.NoError(t, s.SendAudio(frame20ms))
+	require.Equal(t, 2, s.DroppedPartials())
+	require.Equal(t, []string{"PARTIAL:p3", "FINAL:p3", "PARTIAL:p4"}, texts(drain(s)))
+}
+
+func TestScriptedSTTFullBufferNeverDropsFinalOrClosed(t *testing.T) {
+	s := replay.NewScriptedSTT(nil, replay.WithEventBuffer(2))
+	for _, txt := range []string{"一", "二", "三"} {
+		s.SetFinalizeText(txt)
+		require.NoError(t, s.Finalize())
+	}
+	require.NotZero(t, s.Barrier())
+	require.NoError(t, s.Close(), "Close neither blocks nor panics on an undrained buffer")
+	got := texts(collect(t, s))
+	require.Equal(t, []string{"FINAL:一", "FINAL:二", "FINAL:三", "BARRIER:1", "CLOSED:"}, got)
+	require.Zero(t, s.DroppedPartials())
+}
+
+func TestScriptedSTTBarrierAfterClose(t *testing.T) {
+	s := replay.NewScriptedSTT(nil)
+	require.Equal(t, uint64(1), s.Barrier())
+	require.NoError(t, s.Close())
+	require.Zero(t, s.Barrier(), "no sentinel after Close: 0, nothing to wait for")
+	require.Equal(t, []string{"BARRIER:1", "CLOSED:"}, texts(collect(t, s)))
 }

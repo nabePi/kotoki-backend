@@ -2,6 +2,7 @@ package replay
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 
@@ -11,8 +12,8 @@ import (
 // bytesPerMs is PCM16LE mono 16 kHz: 640 bytes = 20 ms.
 const bytesPerMs = 2 * provider.STTSampleRate / 1000
 
-// DefaultEventBuffer is the Events() capacity; a test that lets it overflow panics.
-const DefaultEventBuffer = 1024
+// DefaultEventBuffer is the Events() capacity of the port contract (provider.STTSession).
+const DefaultEventBuffer = 64
 
 // EventBarrier is the type of the sentinel Barrier puts on Events(); it is no vendor event,
 // so consumers that only know PARTIAL/FINAL/ERROR/CLOSED must skip or recognise it.
@@ -33,6 +34,14 @@ func WithEventBuffer(n int) Option { return func(s *ScriptedSTT) { s.bufSize = m
 // FINAL that closes the segment. Finalize always yields exactly one FINAL{FromFinalize:true},
 // in call order. Events are queued on a buffered channel without a goroutine, so after a call
 // returns its events can be drained. Safe for concurrent use.
+//
+// A full buffer follows the port contract: the oldest PARTIAL is dropped (DroppedPartials);
+// FINAL, CLOSED and BARRIER never are. When the buffer holds no PARTIAL to drop, the event
+// waits in an overflow list that later calls move into the channel, and Close hands that
+// list plus CLOSED to a goroutine that delivers them and then closes Events (so Close never
+// blocks or panics; the goroutine only exists, and only lingers, if more than the buffer of
+// FINAL/BARRIER events is left undrained). Making room drains and refills the channel, which
+// is not atomic against a concurrent receiver; a consumer that keeps up never triggers it.
 type ScriptedSTT struct {
 	mu            sync.Mutex
 	tl            Timeline
@@ -51,7 +60,11 @@ type ScriptedSTT struct {
 	name          provider.Name
 	bufSize       int
 	events        chan provider.STTEvent
+	overflow      []provider.STTEvent // non-droppable events waiting for room, in order
+	dropped       int                 // PARTIALs dropped on a full buffer
 }
+
+var _ provider.RoutedSTTSession = (*ScriptedSTT)(nil)
 
 // NewScriptedSTT returns a session that plays tl; steps are played in slice order.
 func NewScriptedSTT(tl Timeline, opts ...Option) *ScriptedSTT {
@@ -66,10 +79,49 @@ func NewScriptedSTT(tl Timeline, opts ...Option) *ScriptedSTT {
 // emit queues ev; the caller holds mu.
 func (s *ScriptedSTT) emit(ev provider.STTEvent) {
 	ev.Provider = s.name
-	select {
-	case s.events <- ev:
-	default:
-		panic(fmt.Sprintf("replay: ScriptedSTT event buffer full (%d); drain Events()", s.bufSize))
+	s.flush()
+	if len(s.overflow) == 0 {
+		select {
+		case s.events <- ev:
+			return
+		default:
+		}
+	}
+	// Full: drop the oldest PARTIAL among the buffered, overflowed and new events.
+	q := make([]provider.STTEvent, 0, s.bufSize+len(s.overflow)+1)
+	for drained := false; !drained; {
+		select {
+		case e := <-s.events:
+			q = append(q, e)
+		default:
+			drained = true
+		}
+	}
+	q = append(append(q, s.overflow...), ev)
+	s.overflow = nil
+	if i := slices.IndexFunc(q, func(e provider.STTEvent) bool { return e.Type == provider.STTPartial }); i >= 0 {
+		q = slices.Delete(q, i, i+1)
+		s.dropped++
+	}
+	for i, e := range q {
+		select {
+		case s.events <- e:
+		default:
+			s.overflow = append(s.overflow, q[i:]...)
+			return
+		}
+	}
+}
+
+// flush moves overflowed events into the channel while there is room; the caller holds mu.
+func (s *ScriptedSTT) flush() {
+	for len(s.overflow) > 0 {
+		select {
+		case s.events <- s.overflow[0]:
+			s.overflow = s.overflow[1:]
+		default:
+			return
+		}
 	}
 }
 
@@ -83,6 +135,7 @@ func (s *ScriptedSTT) SendAudio(pcm []byte) error {
 	if s.closed {
 		return provider.ErrSessionClosed
 	}
+	s.flush()
 	s.audioBytes += int64(len(pcm))
 	s.audioMs = s.audioBytes / bytesPerMs
 	for s.next < len(s.tl) && s.tl[s.next].AtMs <= s.audioMs {
@@ -146,14 +199,16 @@ func (s *ScriptedSTT) HoldFinalize(on bool) {
 }
 
 // Barrier queues a sentinel event (Type EventBarrier) behind everything emitted so far and
-// returns its id; once a consumer sees it, every earlier event has been delivered.
+// returns its id (from 1); once a consumer sees it, every earlier event has been delivered.
+// After Close it queues nothing and returns 0: there is nothing to wait for.
 func (s *ScriptedSTT) Barrier() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.barriers++
-	if !s.closed {
-		s.emit(provider.STTEvent{Type: EventBarrier, Text: strconv.FormatUint(s.barriers, 10)})
+	if s.closed {
+		return 0
 	}
+	s.barriers++
+	s.emit(provider.STTEvent{Type: EventBarrier, Text: strconv.FormatUint(s.barriers, 10)})
 	return s.barriers
 }
 
@@ -173,6 +228,13 @@ func (s *ScriptedSTT) FinalizeCalls() int {
 	return s.finalizeCalls
 }
 
+// DroppedPartials is the number of PARTIALs dropped because Events was full.
+func (s *ScriptedSTT) DroppedPartials() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dropped
+}
+
 // FinalTimeoutReports is the number of ReportFinalTimeout calls so far.
 func (s *ScriptedSTT) FinalTimeoutReports() int {
 	s.mu.Lock()
@@ -190,7 +252,7 @@ func (s *ScriptedSTT) AudioMs() int64 {
 // Events delivers PARTIAL/FINAL/BARRIER events and a last CLOSED; it is closed after Close.
 func (s *ScriptedSTT) Events() <-chan provider.STTEvent { return s.events }
 
-// Close emits CLOSED and closes Events; idempotent.
+// Close emits CLOSED (never dropped) and closes Events; idempotent and never blocks.
 func (s *ScriptedSTT) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -199,7 +261,18 @@ func (s *ScriptedSTT) Close() error {
 	}
 	s.closed = true
 	s.emit(provider.STTEvent{Type: provider.STTClosed})
-	close(s.events)
+	if len(s.overflow) == 0 {
+		close(s.events)
+		return nil
+	}
+	rest := s.overflow
+	s.overflow = nil
+	go func() {
+		for _, ev := range rest {
+			s.events <- ev
+		}
+		close(s.events)
+	}()
 	return nil
 }
 

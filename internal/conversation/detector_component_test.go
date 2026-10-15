@@ -236,13 +236,19 @@ func TestDetectorFixtures(t *testing.T) {
 	// after longer bursts), so a 100 ms cut is 9 voiced frames (180 ms VAD) and is ignored,
 	// while a 150 ms cut is 13 voiced frames (260 ms VAD) and is a valid speech start.
 	for _, tc := range []struct {
-		cutMs  int
-		speech bool
-	}{{cutMs: 100, speech: false}, {cutMs: 150, speech: true}} {
-		t.Run(fmt.Sprintf("speech_cut_%dms", tc.cutMs), func(t *testing.T) {
+		cutMs, offsetMs int // offsetMs from the segment start
+		speech          bool
+	}{
+		{cutMs: 100, offsetMs: 0, speech: false},
+		{cutMs: 100, offsetMs: 300, speech: false},
+		{cutMs: 100, offsetMs: 600, speech: false},
+		{cutMs: 150, offsetMs: 0, speech: true},
+	} {
+		t.Run(fmt.Sprintf("speech_cut_%dms_at_%d", tc.cutMs, tc.offsetMs), func(t *testing.T) {
 			seg := fixtureEntry(t, "ja_greeting_short").Segments[0]
-			from, to := seg.StartMs, seg.StartMs+tc.cutMs
-			require.LessOrEqual(t, to, seg.EndMs)
+			from := seg.StartMs + tc.offsetMs
+			to := from + tc.cutMs
+			require.True(t, fixtureEntry(t, "ja_greeting_short").SegmentCovers(from, to), "cut inside the speech")
 			pcm16 := loadFixture16k(t, "ja_greeting_short")
 			cut := pcm16[from*audio.UpstreamRate/1000 : to*audio.UpstreamRate/1000]
 			voiced := vadVoicedFrames(t, cut)

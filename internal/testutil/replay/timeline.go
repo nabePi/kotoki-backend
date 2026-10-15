@@ -4,8 +4,11 @@
 package replay
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -20,15 +23,22 @@ type Step struct {
 // Timeline is a list of steps with non-decreasing AtMs.
 type Timeline []Step
 
-// LoadTimeline reads a timeline JSON file (array of {at_ms, text, final}).
+// LoadTimeline reads a timeline JSON file: one array of {at_ms, text, final}; unknown keys,
+// trailing data, a negative or backwards at_ms and an empty partial text are rejected (an
+// empty FINAL is allowed).
 func LoadTimeline(path string) (Timeline, error) {
 	b, err := os.ReadFile(path) //nolint:gosec // test fixture path
 	if err != nil {
 		return nil, fmt.Errorf("replay: timeline: %w", err)
 	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
 	var tl Timeline
-	if err := json.Unmarshal(b, &tl); err != nil {
+	if err := dec.Decode(&tl); err != nil {
 		return nil, fmt.Errorf("replay: timeline %s: %w", path, err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("replay: timeline %s: data after the array", path)
 	}
 	if err := tl.validate(); err != nil {
 		return nil, fmt.Errorf("replay: timeline %s: %w", path, err)
@@ -41,6 +51,9 @@ func (tl Timeline) validate() error {
 	for i, s := range tl {
 		if s.AtMs < 0 {
 			return fmt.Errorf("step %d: at_ms %d < 0", i, s.AtMs)
+		}
+		if s.Text == "" && !s.Final {
+			return fmt.Errorf("step %d: empty text on a partial step", i)
 		}
 		if s.AtMs < prev {
 			return fmt.Errorf("step %d: at_ms %d before %d", i, s.AtMs, prev)
