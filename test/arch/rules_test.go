@@ -22,7 +22,7 @@ var (
 	handlers     = []string{"internal/httpapi", "internal/wsgateway"}
 	audioPkg     = "internal/conversation/audio"
 	audioAllowed = []string{"cmd/realtime", "cmd/kotoki-cli", "internal/conversation", "internal/wsgateway", "internal/kotokiclient",
-		"internal/testutil/audiofx", "test"} // audiofx: §14.9.5 exception; the internal/testutil root stays cgo-free
+		"internal/testutil/audiofx", "internal/testutil/rtharness", "test"} // audiofx, rtharness: test-helper exceptions (§14.9.5); the internal/testutil root stays cgo-free
 
 	featureDenyExternal = []string{
 		"github.com/go-chi/chi/v5", "github.com/jackc/pgx/v5", "github.com/pgvector/pgvector-go",

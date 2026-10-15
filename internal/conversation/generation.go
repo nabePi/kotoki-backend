@@ -152,6 +152,10 @@ type genParams struct {
 	// Asset returns the APOLOGY packets and AssetText their text; nil/"" → the embedded clip.
 	Asset     func() ([][]byte, error)
 	AssetText string
+	// OnPanic, when set, receives the value of a panic in any goroutine of the generation (which is
+	// recovered): the runtime turns it into FATAL{SERVER_ERROR} (§7.7.2, §7.11.4). Nil: the panic
+	// propagates, as it does in a test that wants to see it.
+	OnPanic func(v any)
 }
 
 // Generation is one AI generation (§7.7.4): runLLM (or runStatic) → sentences(8) → runTTS →
@@ -319,6 +323,14 @@ func (g *Generation) spawn(fns ...func()) {
 	for _, f := range fns {
 		go func() {
 			defer g.wg.Done()
+			if g.p.OnPanic != nil {
+				defer func() {
+					if v := recover(); v != nil {
+						g.cancel() // the other goroutines stop and send nothing more: the fatal error is the only outcome
+						g.p.OnPanic(v)
+					}
+				}()
+			}
 			f()
 		}()
 	}

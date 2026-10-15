@@ -1,10 +1,14 @@
 package conversation
 
 import (
+	"context"
+
 	promtest "github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/nabePi/kotoki-backend/internal/content"
+	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"github.com/nabePi/kotoki-backend/internal/provider"
+	"github.com/nabePi/kotoki-backend/internal/session"
 )
 
 // Exports for the external test package conversation_test, which exists because
@@ -52,3 +56,45 @@ func (m *Metrics) FenceLostTotal() float64 { return promtest.ToFloat64(m.fenceLo
 
 // RedisSyncPassHook runs f after every pass of the sync loop (the tests wait on it).
 func RedisSyncPassHook(f func()) RedisSyncOption { return func(s *RedisSync) { s.passHook = f } }
+
+// OpeningFallbackTotal reads kotoki_content_opening_fallback_total.
+func (m *Metrics) OpeningFallbackTotal() float64 { return promtest.ToFloat64(m.openingFallback) }
+
+// ConnectionsTotal reads connections_total{result}.
+func (m *Metrics) ConnectionsTotal(result string) float64 {
+	return promtest.ToFloat64(m.connections.WithLabelValues(result))
+}
+
+// TurnsTotal reads turns_total{status}.
+func (m *Metrics) TurnsTotal(status string) float64 {
+	return promtest.ToFloat64(m.turns.WithLabelValues(status))
+}
+
+// STTDiscardedTotal reads stt_discarded_commits_total{boundary}.
+func (m *Metrics) STTDiscardedTotal(boundary string) float64 {
+	return promtest.ToFloat64(m.sttDiscarded.WithLabelValues(boundary))
+}
+
+// PlaybackFinishedMissingTotal reads playback_finished_missing_total.
+func (m *Metrics) PlaybackFinishedMissingTotal() float64 {
+	return promtest.ToFloat64(m.playbackMissing)
+}
+
+// WSCloseTotal reads ws_close_total{code}.
+func (m *Metrics) WSCloseTotal(code string) float64 {
+	return promtest.ToFloat64(m.wsClose.WithLabelValues(code))
+}
+
+// ProtocolViolationsTotal reads protocol_violations_total{kind}.
+func (m *Metrics) ProtocolViolationsTotal(kind string) float64 {
+	return promtest.ToFloat64(m.protocolViolations.WithLabelValues(kind))
+}
+
+// SetResumeHook replaces the resume flow of the Manager (Task 21's seam) with one that reports
+// the last_server_seq it was asked to resume from and refuses the connection.
+func SetResumeHook(m *Manager, f func(lastServerSeq int64)) {
+	m.resume = func(_ context.Context, h *handshake, _ session.RuntimeRecord, last int64) error {
+		f(last)
+		return h.fail(errs.CodeServiceUnavailable)
+	}
+}

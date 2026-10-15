@@ -31,6 +31,7 @@ func TestForbiddenImportsTable(t *testing.T) {
 		{"wsgateway imports audio", "internal/wsgateway", []string{m + "internal/conversation/audio"}, nil},
 		{"jobs imports audio", "internal/jobs", []string{m + "internal/conversation/audio"}, []string{m + "internal/conversation/audio"}},
 		{"audiofx imports audio", "internal/testutil/audiofx", []string{m + "internal/conversation/audio"}, nil},
+		{"rtharness imports audio", "internal/testutil/rtharness", []string{m + "internal/conversation/audio"}, nil},
 		{"testutil root imports audio", "internal/testutil", []string{m + "internal/conversation/audio"}, []string{m + "internal/conversation/audio"}},
 		{"testutil fakes imports audio", "internal/testutil/fakes", []string{m + "internal/conversation/audio"}, []string{m + "internal/conversation/audio"}},
 		{"unrelated imports", "internal/session", []string{"context", "log/slog"}, nil},

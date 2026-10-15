@@ -28,9 +28,13 @@ type rtSession struct {
 // a no-op. Safe for concurrent use; FailNext("<Method>", err) fails the next call of a method.
 type SessionRuntime struct {
 	FailInjector
+	// Recorder, when set, receives the name of every method called (before the armed failure
+	// and the fence check), so a test can assert the order of transitions.
+	Recorder *CallRecorder
 	clk      clock.Clock
 	mu       sync.Mutex
 	sessions map[uuid.UUID]*rtSession
+	claims   [][]session.Status
 }
 
 // NewSessionRuntime returns an empty fake driven by clk.
@@ -43,6 +47,13 @@ func (r *SessionRuntime) Seed(rec session.RuntimeRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions[rec.ID] = &rtSession{rec: rec, disc: rec.DisconnectedSeconds}
+}
+
+// Claims returns the allowed-status lists of the ClaimRuntime calls so far.
+func (r *SessionRuntime) Claims() [][]session.Status {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([][]session.Status(nil), r.claims...)
 }
 
 // Disconnected returns disconnected_seconds of a session, for assertions.
@@ -68,6 +79,7 @@ func (r *SessionRuntime) HandoffAt(id uuid.UUID) *time.Time {
 // get returns the session after the armed failure and the fence check; fence < 0 skips the check.
 // The caller holds r.mu.
 func (r *SessionRuntime) get(method string, id uuid.UUID, fence int64) (*rtSession, error) {
+	r.Recorder.Record(method)
 	if err := r.Take(method); err != nil {
 		return nil, err
 	}
@@ -107,6 +119,7 @@ func (r *SessionRuntime) GetForAttach(_ context.Context, id uuid.UUID) (session.
 func (r *SessionRuntime) ClaimRuntime(_ context.Context, id uuid.UUID, allowed []session.Status) (int64, session.RuntimeRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.claims = append(r.claims, append([]session.Status(nil), allowed...))
 	s, err := r.get("ClaimRuntime", id, -1)
 	if err != nil {
 		return 0, session.RuntimeRecord{}, err

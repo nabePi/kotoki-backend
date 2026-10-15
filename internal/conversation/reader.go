@@ -51,6 +51,10 @@ type AudioIn struct {
 	Seq  uint32
 	Opus []byte
 	At   time.Time
+	// Barrier is a test seam, never set by the reader: Runtime.Barrier sends an AudioIn with it
+	// through the audio pipeline, which hands it to Runtime.loop in order with the frame events
+	// (frameEvent.barrier); the loop closes it, so the sender knows every earlier frame was handled.
+	Barrier chan struct{}
 }
 
 // ReaderNotice is a non-fatal problem the loop answers with an `error` event (INVALID_MESSAGE).
