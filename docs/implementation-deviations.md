@@ -367,3 +367,11 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`Report` mendapat dua field baru**, `stale_frames_dropped` dan `close_code` (juga di `summary.json` CLI): kode close WebSocket koneksi terakhir (0 bila tanpa close frame). Setelah error fatal atau `session.failed`, klien menunggu close frame server ≤ 500 ms sebelum menutup koneksinya sendiri supaya kode itu terbaca.
 - **`session.ready` selalu membawa `server_seq` 1** (dikirim gateway sebelum runtime ada), juga pada koneksi resume; E4 mengecualikannya dari pemeriksaan "tanpa duplikat". Klien tidak terpengaruh (baseline diganti `session.snapshot`). Tidak diubah.
 - **Durasi e2e:** seluruh suite ± 11 menit tanpa E10 (SLO 145 s, E13 ≈ 65 s dua sesi lima turn, E14 ≈ 40 s, `TestBargeInP95` ≈ 30 s); `E2E_LONG=1` menambah 300 s. Muat dalam `-timeout 30m`.
+
+## M5 — ringkasan gerbang milestone
+- Pemisahan `rtstate` (port state Redis tanpa cgo), `SessionEventWriter.turnID`, `LearnerContextProvider.Rerender`: lihat § M5-T2 dan T17.
+- Goleak tidak ada di D-003: pengganti `testutil.NoGoroutineLeak` (§ M5-T2).
+- Field payload klien yang tak dikenal diabaikan (§7.4.2 menang atas §14.4), STT final kosong → `DISCARDED` (§7.6.2 menang atas Review Focus), turn non-Jepang → `FAILED` dengan `error_code="STT_NON_JAPANESE"` (§ M5-T20).
+- Ukuran fixture sintetis > 8 MB (≤ 10 MB) dan rekaman penutur asli ditunda ke M9 (§ M5-T7).
+- `session end` pada `kotoki-cli` dilayani lewat WS singkat resume+end (§ M5-T28).
+- E8 (pipeline async) dan E9 (hapus akun) ditunda ke M6–M8; bagian TTS-fallback E7 ditunda (tak ada karakter seed dengan `voice.fallback`).
