@@ -46,3 +46,9 @@ func (m *Metrics) LLMTruncatedTotal() float64 { return promtest.ToFloat64(m.llmT
 func (m *Metrics) AudioFramesOutTotal(result string) float64 {
 	return promtest.ToFloat64(m.audioFramesOut.WithLabelValues(result))
 }
+
+// FenceLostTotal reads fence_lost_total.
+func (m *Metrics) FenceLostTotal() float64 { return promtest.ToFloat64(m.fenceLost) }
+
+// RedisSyncPassHook runs f after every pass of the sync loop (the tests wait on it).
+func RedisSyncPassHook(f func()) RedisSyncOption { return func(s *RedisSync) { s.passHook = f } }
