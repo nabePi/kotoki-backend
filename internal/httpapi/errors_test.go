@@ -134,11 +134,17 @@ func TestWriteErrorUnknownAndWSOnlyCodes(t *testing.T) {
 	internal := errs.Messages[errs.CodeInternalError]
 	var wsOnly []errs.Code
 	for _, c := range errs.AllCodes() {
-		if _, rest := wantStatus[string(c)]; !rest {
-			wsOnly = append(wsOnly, c)
+		if _, rest := wantStatus[string(c)]; rest {
+			continue
 		}
+		// pre-upgrade HTTP rejections of the realtime gateway (spec 7.3.1 step 3, M5)
+		if c == errs.CodeServerDraining || c == errs.CodeServerAtCapacity {
+			require.Equal(t, 503, httpapi.StatusOf(c), c)
+			continue
+		}
+		wsOnly = append(wsOnly, c)
 	}
-	require.Len(t, wsOnly, 17)
+	require.Len(t, wsOnly, 15)
 	for _, c := range append(wsOnly, errs.Code("NO_SUCH_CODE")) {
 		rec, logs := writeErr(errs.WithDetails(errs.New(c, "x"), map[string]any{"secret": "leak"}))
 		require.Equal(t, 500, rec.Code, c)

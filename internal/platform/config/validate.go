@@ -168,6 +168,9 @@ func (c Realtime) Validate() error {
 	if c.MaxSessions > c.HardMaxSessions {
 		v.fail("REALTIME_MAX_SESSIONS", "%d exceeds REALTIME_HARD_MAX_SESSIONS %d", c.MaxSessions, c.HardMaxSessions)
 	}
+	if err := c.RealtimeTuning.Validate(); err != nil {
+		v.errs = append(v.errs, err)
+	}
 	return v.err()
 }
 

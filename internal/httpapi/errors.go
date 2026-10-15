@@ -10,7 +10,8 @@ import (
 )
 
 // statusByCode maps the REST error catalog (spec 5.10) to HTTP statuses. Codes
-// that exist only in the WebSocket catalog are intentionally absent: a handler
+// that exist only in the WebSocket catalog (except SERVER_DRAINING/SERVER_AT_CAPACITY, which
+// the realtime gateway also returns as HTTP 503 before upgrade) are intentionally absent: a handler
 // that returns one has a bug and the client gets a generic 500.
 var statusByCode = map[errs.Code]int{
 	errs.CodeInvalidJson:                 400,
@@ -62,7 +63,10 @@ var statusByCode = map[errs.Code]int{
 	errs.CodeRateLimited:                 429,
 	errs.CodeInternalError:               500,
 	errs.CodeContentMisconfigured:        500,
-	errs.CodeServiceUnavailable:          503}
+	errs.CodeServiceUnavailable:          503,
+	// Realtime pre-upgrade rejections (spec 7.3.1 step 3) are plain HTTP 503s.
+	errs.CodeServerDraining:   503,
+	errs.CodeServerAtCapacity: 503}
 
 // StatusOf returns the HTTP status of code; unknown codes are 500.
 func StatusOf(c errs.Code) int {
