@@ -11,9 +11,13 @@ import (
 // tailTrim is what NormalizeTail strips from the end besides whitespace (spec 7.6.2).
 const tailTrim = "、,…ー〜～"
 
-// fillerTokens are the long filler tokens of IsFillerOnly (spec 7.6.2), longest first so a
-// shorter token never eats part of a longer one.
-var fillerTokens = []string{"えっと", "ええと", "なんか", "うーん", "あの", "その", "まあ", "えー", "んー"}
+// fillerTokens removes the long filler tokens of IsFillerOnly (spec 7.6.2) in one left-to-right
+// pass: a removal never builds a new token ("そあのの" → "その", kept), and at a position the
+// longer token is tried first.
+var fillerTokens = strings.NewReplacer(
+	"えっと", "", "ええと", "", "なんか", "", "うーん", "",
+	"あの", "", "その", "", "まあ", "", "えー", "", "んー", "",
+)
 
 // NormalizeTail repeatedly removes trailing whitespace (including U+3000) and the characters
 // 、,…ー〜～: "えっとー" → "えっと", "あのー…" → "あの".
@@ -35,18 +39,12 @@ func HasSuffixAny(s string, suffixes []string) bool {
 	return false
 }
 
-// IsFillerOnly reports whether s holds at least one speakable rune and nothing is left once the
-// long filler tokens, punctuation, symbols, whitespace and the lengthening marks ー〜～ are
-// removed ("えっと、あの" → true, "えっと、昨日" → false).
+// IsFillerOnly reports whether nothing is left of s after removing the long filler tokens and
+// then whitespace, punctuation and symbols (spec 7.6.2): "えっと、あの" and "。" → true,
+// "えっと、昨日" and "え、っと" → false. The lengthening mark ー is a letter and stays, so
+// "あのー、えっと" → false. Empty text is true; Threshold handles it before calling this.
 func IsFillerOnly(s string) bool {
-	t := prompt.NormalizeSpeakable(s)
-	if t == "" {
-		return false
-	}
-	for _, tok := range fillerTokens {
-		t = strings.ReplaceAll(t, tok, "")
-	}
-	return strings.Trim(t, "ー〜～") == ""
+	return prompt.NormalizeSpeakable(fillerTokens.Replace(s)) == ""
 }
 
 // RuneLen is the number of runes in s.

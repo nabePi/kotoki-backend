@@ -40,12 +40,18 @@ func TestJapaneseIsFillerOnly(t *testing.T) {
 		"ええと…まあ":      true,
 		"うーん、えー。":     true,
 		"んー":          true,
-		"あのー、えっと":     true,
+		"あのー、えっと":     false, // ー is a letter (Lm), not punctuation: spec literal
+		"え、っと":        false, // tokens are removed before punctuation
+		"あ、の":         false,
+		"そあのの":        false, // a single removal pass does not build a new token
+		"。":           true,  // punctuation-only: nothing left after removal
+		"？":           true,
+		"「」":          true,
 		"なんか その":      true,
 		"えっと、昨日":      false,
 		"ですが":         false,
-		"":            false,
-		"、。":          false,
+		"":            true,
+		"、。":          true,
 		"あの人":         false,
 		"その本はおもしろかった": false,
 	} {
@@ -86,4 +92,6 @@ func TestJapaneseHasJapanese(t *testing.T) {
 	require.True(t, HasJapanese("OKです"))
 	require.True(t, HasJapanese("カタカナ"))
 	require.True(t, HasJapanese("漢字"))
+	require.True(t, HasJapanese("ｶ"), "halfwidth katakana")
+	require.True(t, HasJapanese("々"), "ideographic iteration mark")
 }

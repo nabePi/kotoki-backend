@@ -85,6 +85,15 @@ func TestSpeechStart(t *testing.T) {
 		require.Equal(t, int64(400), d.NowMs())
 	}
 
+	// Scattered voiced frames below 10 of 15 never confirm speech: alternating frames keep at
+	// most 8 voiced per window, 3-of-5 periods exactly 9.
+	for _, pattern := range [][]bool{{true, false}, {true, false, true, false, true}} {
+		d := newTestDetector()
+		for i := range 300 {
+			require.Empty(t, d.Push(pattern[i%len(pattern)], StateListening, fakeText{}), "pattern %v frame %d", pattern, i+1)
+		}
+	}
+
 	// USER_SPEAKING and AI_SPEAKING never confirm speech.
 	for _, st := range []TurnState{StateUserSpeaking, StateAISpeaking} {
 		d := newTestDetector()
@@ -111,6 +120,10 @@ func TestSilenceThresholds(t *testing.T) {
 		{"ですか", true, 500},
 		{"", false, 800},
 		{"", true, 800},
+		{"。", true, 2000}, // punctuation-only text is filler-only (nothing left after removal)
+		{"？", false, 2000},
+		{"「」", false, 2000},
+		{"あのー、えっと", false, 1400}, // ー is a letter, so not filler-only; ends in えっと
 	}
 	for _, c := range cases {
 		t.Run(c.text, func(t *testing.T) {
@@ -149,7 +162,8 @@ func TestMaxUtterance(t *testing.T) {
 		require.Empty(t, d.Push(false, StateListening, fakeText{}))
 	}
 	var onset int64 = -1
-	for onset < 0 {
+	for i := 0; onset < 0; i++ {
+		require.Less(t, i, 15, "SPEECH_CONFIRMED never fired")
 		for _, e := range d.Push(true, StateListening, fakeText{}) {
 			require.Equal(t, EventSpeechConfirmed, e.Kind)
 			onset = e.OnsetMs
@@ -158,7 +172,8 @@ func TestMaxUtterance(t *testing.T) {
 	require.Equal(t, int64(140), onset)
 
 	tx := fakeText{turn: "えっと", onsetMs: onset}
-	for {
+	for i := 0; ; i++ {
+		require.Less(t, i, 45000/20+1, "MAX_UTTERANCE never fired")
 		ev := d.Push(true, StateUserSpeaking, tx)
 		if d.NowMs()-onset < 45000 {
 			require.Empty(t, ev, "now=%d", d.NowMs())
@@ -259,7 +274,8 @@ func TestBargeInRules(t *testing.T) {
 		newStart := d.NowMs() // start of the next frame
 		tx := fakeText{since: "あの"}
 		var got []Event
-		for got == nil {
+		for i := 0; got == nil; i++ {
+			require.Less(t, i, 20, "BARGE_IN_CONFIRMED never fired")
 			got = d.Push(true, StateAISpeaking, tx)
 		}
 		require.Equal(t, []Event{{Kind: EventBargeInConfirmed, OnsetMs: newStart}}, got)
