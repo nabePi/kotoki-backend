@@ -22,5 +22,5 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/realtime /usr/local/bin/realtime
 USER 65532:65532
-EXPOSE 8081 9090
+EXPOSE 8081 9091
 ENTRYPOINT ["/usr/local/bin/realtime"]

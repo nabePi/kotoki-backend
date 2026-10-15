@@ -10,6 +10,7 @@ import (
 
 	"github.com/nabePi/kotoki-backend/internal/conversation/protocol"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
+	"github.com/nabePi/kotoki-backend/internal/platform/otel"
 	"github.com/nabePi/kotoki-backend/internal/session"
 )
 
@@ -97,6 +98,7 @@ func (m *Manager) Attach(ctx context.Context, conn Conn, t AttachTicket) error {
 		seen = r.seen
 	}
 	cs := newConnState(ctx, m.d, conn, t.SessionID, seen)
+	otel.SetString(ctx, "conn.id", cs.id) // the ws.connection span of the gateway (§7.14 tracing)
 	cs.start()
 	defer cs.wait()
 	h := &handshake{m: m, cs: cs, sid: t.SessionID, seen: seen}
@@ -217,8 +219,10 @@ func (m *Manager) dispatchFirst(ctx context.Context, h *handshake, rec session.R
 			return h.fail(errs.CodeUnsupportedAudioFormat)
 		}
 		if rec.Status == session.StatusActive { // §7.3.2: an idempotent start is a resume from 0
+			otel.SetBool(ctx, "resume", true)
 			return m.resume(ctx, h, rec, 0)
 		}
+		otel.SetBool(ctx, "resume", false)
 		return m.startRuntime(ctx, h, rec)
 	case protocol.SessionResume:
 		if !p.Audio.Valid() {
@@ -229,6 +233,7 @@ func (m *Manager) dispatchFirst(ctx context.Context, h *handshake, rec session.R
 			m.d.Metrics.Connection(ConnRejectedState)
 			return h.fail(errs.CodeSessionStateConflict)
 		}
+		otel.SetBool(ctx, "resume", true)
 		return m.resume(ctx, h, rec, p.LastServerSeq)
 	}
 	m.d.Metrics.protocolViolation(ViolationHeader)

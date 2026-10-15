@@ -84,9 +84,14 @@ func (a Auth) JWTPreviousSecretBytes() ([]byte, error) {
 }
 
 // TrustedProxyPrefixes parses TRUSTED_PROXY_CIDRS (already validated by Validate).
-func (a Auth) TrustedProxyPrefixes() []netip.Prefix {
+func (a Auth) TrustedProxyPrefixes() []netip.Prefix { return parsePrefixes(a.TrustedProxyCIDRs) }
+
+// TrustedProxyPrefixes parses TRUSTED_PROXY_CIDRS (already validated by Validate).
+func (c Realtime) TrustedProxyPrefixes() []netip.Prefix { return parsePrefixes(c.TrustedProxyCIDRs) }
+
+func parsePrefixes(cidrs []string) []netip.Prefix {
 	var out []netip.Prefix
-	for _, c := range a.TrustedProxyCIDRs {
+	for _, c := range cidrs {
 		if p, err := netip.ParsePrefix(strings.TrimSpace(c)); err == nil {
 			out = append(out, p)
 		}

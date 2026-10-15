@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -158,6 +159,11 @@ func (c Realtime) Validate() error {
 	validateOrigins(v, "WS_ALLOWED_ORIGINS", c.WSAllowedOrigins, c.Common)
 	if c.WSAllowEmptyOrigin && c.strict() {
 		v.fail("WS_ALLOW_EMPTY_ORIGIN", "true is rejected when APP_ENV is staging or prod")
+	}
+	for _, cidr := range c.TrustedProxyCIDRs {
+		if _, err := netip.ParsePrefix(strings.TrimSpace(cidr)); err != nil {
+			v.fail("TRUSTED_PROXY_CIDRS", "invalid CIDR %q", cidr)
+		}
 	}
 	if c.ReadyMaxSessions <= 0 {
 		v.fail("REALTIME_READY_MAX_SESSIONS", "must be > 0, got %d", c.ReadyMaxSessions)

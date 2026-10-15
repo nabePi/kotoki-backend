@@ -122,15 +122,15 @@ vuln:
 run-api:
 	$(GO) run ./cmd/api
 
-run-realtime:
-	$(GO) run ./cmd/realtime
+run-realtime: fixtures16k  ## cgo (opus, webrtcvad); PROVIDER_MODE=fake membaca FAKE_STT_FIXTURE_DIR=out/fixtures16k
+	CGO_ENABLED=1 $(GO) run ./cmd/realtime
 
 run-worker:      ## WORKER_HTTP_ADDR default Bab 9 (:8081) bentrok dengan realtime di host → :9092
 	WORKER_HTTP_ADDR=:9092 $(GO) run ./cmd/worker --handlers=outbox,evaluation,memory,learner,summary,sweeper,cleanup
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -o bin/ ./cmd/api ./cmd/worker
-	CGO_ENABLED=1 $(GO) build -trimpath -o bin/ ./cmd/realtime ./cmd/kotoki-cli
+	CGO_ENABLED=1 $(GO) build -trimpath -o bin/ ./cmd/realtime $$([ -d cmd/kotoki-cli ] && echo ./cmd/kotoki-cli)
 
 cli:
 	CGO_ENABLED=1 $(GO) build -o bin/kotoki-cli ./cmd/kotoki-cli

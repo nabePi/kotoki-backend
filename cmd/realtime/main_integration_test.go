@@ -16,7 +16,8 @@ func baseEnv(t *testing.T, addr string, overrides map[string]string) map[string]
 	t.Helper()
 	m := map[string]string{
 		"DB_URL": testutil.NewEmptyPostgresDSN(t), "REDIS_URL": "redis://" + testutil.NewRedis(t).Options().Addr,
-		"OPS_ADDR": addr, "LOG_FORMAT": "text",
+		"OPS_ADDR": addr, "HTTP_ADDR": testutil.FreeAddr(t), "LOG_FORMAT": "text",
+		"PROVIDER_MODE": "fake", // M5 has fake providers only (M9 adds real)
 	}
 	for k, v := range overrides {
 		m[k] = v
@@ -51,4 +52,15 @@ func TestRunFailsFastOnBadConfig(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "DB_URL")
 	testutil.AssertNothingListening(t, addr)
+}
+
+func TestRunRefusesRealModeBeforeListening(t *testing.T) {
+	addr := testutil.FreeAddr(t)
+	env := baseEnv(t, addr, map[string]string{"PROVIDER_MODE": "real"})
+	testutil.ApplyEnv(t, env)
+	err := run(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "M9")
+	testutil.AssertNothingListening(t, addr)
+	testutil.AssertNothingListening(t, env["HTTP_ADDR"])
 }

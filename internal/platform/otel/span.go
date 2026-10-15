@@ -86,3 +86,21 @@ func End(span trace.Span, errp *error) {
 		span.SetStatus(codes.Error, code)
 	}
 }
+
+// SetString sets a string attribute on the span in ctx (no span: no-op). The value is redacted
+// like Start's attributes, so feature code never reaches span.SetAttributes itself.
+func SetString(ctx context.Context, key, value string) { setAttr(ctx, attribute.String(key, value)) }
+
+// SetBool sets a boolean attribute on the span in ctx.
+func SetBool(ctx context.Context, key string, value bool) { setAttr(ctx, attribute.Bool(key, value)) }
+
+// SetInt sets an integer attribute on the span in ctx.
+func SetInt(ctx context.Context, key string, value int) { setAttr(ctx, attribute.Int(key, value)) }
+
+func setAttr(ctx context.Context, kv attribute.KeyValue) {
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return
+	}
+	span.SetAttributes(redact([]attribute.KeyValue{kv})...)
+}

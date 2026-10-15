@@ -28,6 +28,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/platform/config"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"github.com/nabePi/kotoki-backend/internal/platform/idgen"
+	"github.com/nabePi/kotoki-backend/internal/platform/otel"
 	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
 )
 
@@ -94,7 +95,16 @@ func (h *Handler) now() time.Time {
 // before the upgrade and before the ticket is touched (R-22); steps 5–6 refuse with an error
 // event and a close code.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	// The span covers the whole request: a refusal before the upgrade is traced too. session.id and
+	// resume are set once they are known (here and in Manager.Attach); close.code when it ends.
+	ctx, span := otel.Start(r.Context(), "ws.connection")
+	defer otel.End(span, nil)
+	var ws *conn
+	defer func() {
+		if ws != nil && ws.closeCode() != 0 {
+			otel.SetInt(ctx, "close.code", ws.closeCode())
+		}
+	}()
 	log := h.log().With("path", r.URL.Path, "query", RedactQuery(r.URL.RawQuery)) // never the raw query
 
 	// 1. Origin.
@@ -141,7 +151,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.SetReadLimit(h.Tuning.WSMaxJSONBytes)
-	ws := NewConn(c)
+	ws = newConn(c)
 
 	// 5. Ticket (GETDEL).
 	ticket, err := h.consume(ctx, r.URL.Query().Get("ticket"))
@@ -157,6 +167,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.refuse(ctx, ws, uuid.Nil, code)
 		return
 	}
+
+	otel.SetString(ctx, "session.id", ticket.SessionID.String())
 
 	// 6. Rate limit per user.
 	if _, ok := h.allow(ctx, "ws_attach_user", ticket.UserID.String()); !ok {
