@@ -63,3 +63,11 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - Respons admin menyensor `provider_name`/`model_name`/`voice_id`/`voice.fallback` menjadi `"[REDACTED]"` (D-015, §5.9.8) dengan men-decode lalu meng-encode ulang `config_snapshot`, sehingga urutan key di respons alfabetis, bukan urutan spec; `voice.fallback` yang `null`/tidak ada dibiarkan.
 - `status` turn yang sedang berjalan adalah `null` di respons admin (respons user tidak pernah memuat turn itu).
 - Cursor events = `[created_at RFC 3339 nano, id]` (bukan milidetik) agar mikrodetik `timestamptz` tidak hilang di keyset; limit events default dan maks 100, limit turns 50/100 seperti endpoint user, list sesi 20/100.
+
+## M5-T2 — port & fake
+- `conversation.TurnRepository` hanya enam method yang dipakai runtime (tanpa `SetUserAudioKey`, D-099 seperti M3-T13); `*session.TurnRepository` memenuhinya.
+- `SessionEventWriter.Append` mendapat parameter `turnID *uuid.UUID` dan `LearnerContextProvider` mendapat `Rerender` (keduanya tambahan dari plan, bukan §7.13.1).
+- `ReleaseOwner(sid, pod, fence)` mencocokkan pod dan fence (Lua §7.9.2 membandingkan nilai `pod|fence` utuh).
+- `fakes.AudioStore` adalah blob store generik (Put/Get/Delete): belum ada port yang memakainya dan audio user tidak pernah disimpan (D-099); Task berikutnya boleh mempersempitnya.
+- Fake `RuntimeStore` mengabaikan TTL (tidak ada kedaluwarsa) dan memangkas stream tepat 500 (Redis `MAXLEN ~`).
+- `memory.MemoryContext` memakai `//nolint:revive` karena nama ditetapkan §11.7.1.
