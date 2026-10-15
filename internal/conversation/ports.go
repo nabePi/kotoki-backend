@@ -1,5 +1,7 @@
 // Package conversation is the realtime runtime. ports.go lists what it consumes (spec 7.13.1);
-// interfaces live on the consumer side (D-005). The package stays free of cgo.
+// interfaces live on the consumer side (D-005). The package imports conversation/audio (the only
+// cgo package), so it belongs to the realtime graph only; cmd/api and cmd/worker never import it
+// (§2.2 rule 5).
 package conversation
 
 import (
