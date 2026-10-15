@@ -39,3 +39,27 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - Rotasi koneksi STT membuka koneksi baru tanpa melewati breaker/semaphore lagi (sesi tetap memegang satu slot semaphore dan satu keputusan breaker dari `Open` awal); pseudocode §8.5.8 menulis "breaker+semaphore" untuk `Open` rotasi. Kegagalan `Open` rotasi tetap menjadi `STTError` dan masuk hitungan breaker lewat `ReportFinal`/`Record` hanya bila berupa ERROR vendor.
 - `fake`: `CapConfig.HangAfter` / `FAKE_<INST>_<CAP>_HANG_AFTER` / fault `after_events` ditambahkan agar skenario S-7 (macet setelah N delta) bisa diuji.
 - Wiring `RouterConfig`/`fake.Config` ke `platform/config` dan `cmd/*`, handler `GET /internal/providers` (hanya `HealthSnapshot` yang ada), serta observasi `kotoki_session_cost_usd` saat sesi terminal menjadi tugas M5/M6/M7.
+
+## M3-T7 — validator konten
+- Key prompt tanpa versi `PUBLISHED` di `ValidateCatalog`: ERROR hanya untuk `CONVERSATION`; WARNING `missing_published_prompt` untuk `OPENING`, `SUMMARY`, `EVALUATION`, `MEMORY_EXTRACTION` (versi SUMMARY/EVALUATION/MEMORY_EXTRACTION dan fixture-nya ditambahkan M7/M8; OPENING boleh tidak ada karena fallback `opening_line`, S-2).
+- `provider_not_configured` (karakter `ACTIVE` dengan vendor TTS tidak enabled) berlaku di mode fake maupun real, mengikuti brief plan (spec §6.10.1 menyebut hanya mode real).
+- Normalisasi huruf besar nama vendor diekspos sebagai `content.NormalizeCharacter` (validator mengembalikan daftar isu, bukan nilai); `ParseVoice` dan `ParseLLMParams` memeriksa key tak dikenal dari JSON mentah (`voice.providers`, `model` di `llm_params`, dst.) karena tipe Go tidak bisa memuat key asing.
+
+## M3-T10 / T12 — admin konten
+- §6.13.1 menulis action audit `CONTENT_CHARACTER_UPDATED` dan kolom `metadata`; implementasi memakai action `CHARACTER_UPDATED` dan kolom `details` sesuai CHECK `admin_audit_logs` (Bab 3).
+- Retire version prompt `PUBLISHED` selalu 409 `CONTENT_VERSION_REQUIRED` (§6.13.1/§6.x: tidak boleh tanpa pengganti, dan hanya satu `PUBLISHED` per induk, jadi satu-satunya jalan adalah publish pengganti). Skenario e2e E12 yang me-retire `OPENING` lewat endpoint retire harus memakai jalur lain.
+
+## M3-T13 / T15 — session
+- `TurnRepository` tidak memuat `SetUserAudioKey` (§7.13.1) karena §5.3.2/D-099: audio user tidak pernah disimpan dan `session_turns` tidak punya kolom referensi audio.
+- `MaxSeqAndGeneration` mengembalikan `(-1, 0)` bila belum ada turn; `Stats.hasAudio` = ada `stt_audio_ms` atau `tts_first_audio_ms`.
+
+## M3-T21 — sweeper
+- Kandidat aturan (b) memakai bentuk §9.9.2 (semua sesi `ACTIVE` non-handoff, LIMIT 5000, heartbeat dicek in-process via MGET per 500 key; kandidat bila heartbeat hilang/usang > 45 s **dan** `started_at < now − 45 s`), bukan teks §5.6.4 (LIMIT 2000 dan filter `started_at` di SQL). `ListActiveForHeartbeat(ctx, limit)` tidak menerima cutoff.
+- Probe konektivitas Redis untuk `HeartbeatGuard` = `HeartbeatReader.Read(ctx, nil)` (adapter Redis menjalankan `PING`), bukan method terpisah, agar port `HeartbeatReader` tetap satu method.
+- Aturan (e) memakai `Service.EndStaleHandoff`, yang memeriksa ulang `handoff_at IS NOT NULL AND handoff_at < cutoff` di bawah row lock (spec §9.9.2); sesi yang sudah di-claim runtime baru → no-op.
+
+## M3-T24 — admin sesi
+- Audit `SESSION_TRANSCRIPT_VIEW` ditulis **setelah** query turns berhasil (sesuai brief plan), bukan "sebelum data dikembalikan" secara harfiah di §3.12: 404/410 tidak meninggalkan baris audit; bila penulisan audit gagal, handler membalas 500 dan transcript tidak dikirim. `admin.Service.RecordTranscriptView` memakai transaksi singkatnya sendiri.
+- Respons admin menyensor `provider_name`/`model_name`/`voice_id`/`voice.fallback` menjadi `"[REDACTED]"` (D-015, §5.9.8) dengan men-decode lalu meng-encode ulang `config_snapshot`, sehingga urutan key di respons alfabetis, bukan urutan spec; `voice.fallback` yang `null`/tidak ada dibiarkan.
+- `status` turn yang sedang berjalan adalah `null` di respons admin (respons user tidak pernah memuat turn itu).
+- Cursor events = `[created_at RFC 3339 nano, id]` (bukan milidetik) agar mikrodetik `timestamptz` tidak hilang di keyset; limit events default dan maks 100, limit turns 50/100 seperti endpoint user, list sesi 20/100.

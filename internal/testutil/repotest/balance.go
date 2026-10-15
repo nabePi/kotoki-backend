@@ -16,6 +16,33 @@ import (
 type BalanceHarness struct {
 	Store    balance.Store
 	SeedUser func(t *testing.T) uuid.UUID
+	// SeedSession returns the id of a session row owned by userID (balance_reservations has a
+	// foreign key to sessions in PostgreSQL); nil means any fresh uuid will do (the fake).
+	SeedSession func(t *testing.T, userID uuid.UUID) uuid.UUID
+	// Unreconciled tells the harness the case books reservations without the matching ledger
+	// entries or session states, so the end-of-test reconciliation must be skipped (nil: no-op).
+	Unreconciled func()
+}
+
+func (h BalanceHarness) unreconciled() {
+	if h.Unreconciled != nil {
+		h.Unreconciled()
+	}
+}
+
+func (h BalanceHarness) session(t *testing.T, userID uuid.UUID) uuid.UUID {
+	t.Helper()
+	if h.SeedSession != nil {
+		return h.SeedSession(t, userID)
+	}
+	return uuid.Must(uuid.NewV7())
+}
+
+func heldReservation(userID, accountID, sessionID uuid.UUID, seconds int64) balance.Reservation {
+	return balance.Reservation{
+		ID: uuid.Must(uuid.NewV7()), UserID: userID, AccountID: accountID, SessionID: sessionID, ReservedSeconds: seconds,
+		Status: balance.ReservationHeld, StartDeadlineAt: at.Add(5 * time.Minute), CreatedAt: at,
+	}
 }
 
 var at = time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
@@ -155,6 +182,93 @@ func BalanceRepoSuite(t *testing.T, newHarness func(t *testing.T) BalanceHarness
 				require.Empty(t, other)
 				return nil
 			}))
+		}},
+		Case[BalanceHarness]{Name: "ReservationLifecycleSettled", Run: func(t *testing.T, h BalanceHarness) {
+			h.unreconciled()
+			uid := openAccount(t, h)
+			sid := h.session(t, uid)
+			require.NoError(t, h.Store.WithinTx(context.Background(), func(ctx context.Context, tx balance.Tx) error {
+				repo := tx.Balance()
+				_, err := repo.LockReservationBySessionID(ctx, sid)
+				require.ErrorIs(t, err, balance.ErrReservationNotFound)
+
+				acc, err := repo.LockAccountByUserID(ctx, uid)
+				require.NoError(t, err)
+				res := heldReservation(uid, acc.ID, sid, 600)
+				require.NoError(t, repo.InsertReservation(ctx, res))
+				got, err := repo.LockReservationBySessionID(ctx, sid)
+				require.NoError(t, err)
+				require.Equal(t, res.ID, got.ID)
+				require.Equal(t, balance.ReservationHeld, got.Status)
+				require.Nil(t, got.ConsumedSeconds)
+				require.True(t, got.StartDeadlineAt.Equal(at.Add(5*time.Minute)))
+
+				require.NoError(t, repo.MarkReservationSettled(ctx, res.ID, 421, 179, at.Add(time.Hour)))
+				got, err = repo.LockReservationBySessionID(ctx, sid)
+				require.NoError(t, err)
+				require.Equal(t, balance.ReservationSettled, got.Status)
+				require.EqualValues(t, 421, *got.ConsumedSeconds)
+				require.EqualValues(t, 179, *got.ReleasedSeconds)
+				require.NotNil(t, got.SettledAt)
+				require.Nil(t, got.ReleasedAt)
+				return nil
+			}))
+		}},
+		Case[BalanceHarness]{Name: "ReservationLifecycleReleased", Run: func(t *testing.T, h BalanceHarness) {
+			h.unreconciled()
+			uid := openAccount(t, h)
+			sid := h.session(t, uid)
+			require.NoError(t, h.Store.WithinTx(context.Background(), func(ctx context.Context, tx balance.Tx) error {
+				repo := tx.Balance()
+				acc, err := repo.LockAccountByUserID(ctx, uid)
+				require.NoError(t, err)
+				res := heldReservation(uid, acc.ID, sid, 300)
+				require.NoError(t, repo.InsertReservation(ctx, res))
+				require.NoError(t, repo.MarkReservationReleased(ctx, res.ID, at.Add(time.Minute)))
+				got, err := repo.LockReservationBySessionID(ctx, sid)
+				require.NoError(t, err)
+				require.Equal(t, balance.ReservationReleased, got.Status)
+				require.EqualValues(t, 0, *got.ConsumedSeconds)
+				require.EqualValues(t, 300, *got.ReleasedSeconds)
+				require.NotNil(t, got.ReleasedAt)
+				require.Nil(t, got.SettledAt)
+				return nil
+			}))
+		}},
+		Case[BalanceHarness]{Name: "ReservationConstraints", Run: func(t *testing.T, h BalanceHarness) {
+			h.unreconciled()
+			uid := openAccount(t, h)
+			sid := h.session(t, uid)
+			inconsistent := func(name string, fn func(ctx context.Context, repo balance.Repository, res balance.Reservation) error) {
+				err := h.Store.WithinTx(context.Background(), func(ctx context.Context, tx balance.Tx) error {
+					repo := tx.Balance()
+					acc, err := repo.LockAccountByUserID(ctx, uid)
+					require.NoError(t, err)
+					res := heldReservation(uid, acc.ID, h.session(t, uid), 600)
+					require.NoError(t, repo.InsertReservation(ctx, res))
+					return fn(ctx, repo, res)
+				})
+				require.Error(t, err, name)
+			}
+			inconsistent("SETTLED must satisfy consumed + released = reserved", func(ctx context.Context, repo balance.Repository, res balance.Reservation) error {
+				return repo.MarkReservationSettled(ctx, res.ID, 400, 100, at)
+			})
+			inconsistent("consumed above reserved", func(ctx context.Context, repo balance.Repository, res balance.Reservation) error {
+				return repo.MarkReservationSettled(ctx, res.ID, 700, -100, at)
+			})
+			require.NoError(t, h.Store.WithinTx(context.Background(), func(ctx context.Context, tx balance.Tx) error {
+				repo := tx.Balance()
+				acc, err := repo.LockAccountByUserID(ctx, uid)
+				require.NoError(t, err)
+				require.NoError(t, repo.InsertReservation(ctx, heldReservation(uid, acc.ID, sid, 600)))
+				return nil
+			}))
+			err := h.Store.WithinTx(context.Background(), func(ctx context.Context, tx balance.Tx) error {
+				acc, err := tx.Balance().LockAccountByUserID(ctx, uid)
+				require.NoError(t, err)
+				return tx.Balance().InsertReservation(ctx, heldReservation(uid, acc.ID, sid, 600))
+			})
+			require.Error(t, err, "one reservation per session (ux_balance_reservations_session)")
 		}},
 	)
 }

@@ -56,6 +56,7 @@ type API struct {
 	Redis
 	OTel
 	Auth
+	Content
 	HTTPAddr           string        `env:"HTTP_ADDR"`
 	OpsAddr            string        `env:"OPS_ADDR"`
 	ShutdownTimeout    time.Duration `env:"SHUTDOWN_TIMEOUT"`
@@ -121,6 +122,7 @@ func defaultAPI() API {
 		HTTPMaxBodyBytes:   65536,
 		CORSAllowedOrigins: []string{"http://localhost:3000"},
 		Auth:               defaultAuth(),
+		Content:            defaultContent(),
 	}
 }
 

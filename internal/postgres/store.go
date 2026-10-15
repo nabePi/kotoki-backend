@@ -36,6 +36,7 @@ type Store struct {
 	statement time.Duration
 	backoff   []time.Duration
 	sleep     func(ctx context.Context, d time.Duration) error
+	canceller SessionCanceller
 }
 
 // StoreOption customises a Store.

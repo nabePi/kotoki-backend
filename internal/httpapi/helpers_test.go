@@ -18,11 +18,13 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/admin"
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/balance"
+	"github.com/nabePi/kotoki-backend/internal/content"
 	"github.com/nabePi/kotoki-backend/internal/httpapi"
 	"github.com/nabePi/kotoki-backend/internal/mailer"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/idgen"
 	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
+	"github.com/nabePi/kotoki-backend/internal/session"
 	"github.com/nabePi/kotoki-backend/internal/testutil/fakes"
 )
 
@@ -80,6 +82,15 @@ type apiEnv struct {
 	svc     *auth.Service
 	users   *auth.UserService
 	deps    httpapi.Deps
+
+	content      *fakes.ContentRepo
+	contentStore *fakes.ContentStore
+
+	sessions      *fakes.SessionStore
+	ticketTargets *fakes.TicketSessionReader
+	gate          *fakes.UserGate
+	sessionSvc    *session.Service
+	adminStore    *fakes.AdminStore
 }
 
 const apiTerms = "2026-10-01"
@@ -107,9 +118,29 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 	users := auth.NewUserService(store, hasher, deleter, clk, log, apiTerms)
 	limiter := &recordingLimiter{deny: map[string]bool{}}
 	balSvc := balance.NewService(bal, clk, ids)
-	adminSvc := admin.NewService(fakes.NewAdminStore(store, bal), balSvc, clk, ids, log)
+	adminStore := fakes.NewAdminStore(store, bal)
+	adminSvc := admin.NewService(adminStore, balSvc, clk, ids, log)
+
+	contentRepo := fakes.NewContentRepo()
+	contentStore := fakes.NewContentStore(contentRepo)
+	catalog := content.NewCatalogService(contentRepo, content.ResolverConfig{TTSMode: "fake", LLMConfigured: true})
+	contentAdmin := content.NewAdminService(content.AdminDeps{Store: contentStore, Clock: clk, IDs: ids,
+		Validator: content.ValidatorConfig{TTSEnabled: func(string) bool { return true }}})
+
+	sessStore := fakes.NewSessionStore(bal)
+	gate := fakes.NewUserGate(session.UserGateInfo{Status: "ACTIVE", TermsVersion: apiTerms})
+	sessSvc := session.NewService(session.Deps{
+		Store: sessStore, Reader: sessStore.Reader(), Balance: balSvc,
+		Resolver: content.NewResolver(contentRepo, content.ResolverConfig{TTSMode: "fake", LLMConfigured: true}, nil),
+		Adaptive: fakes.NewAdaptive(""), Users: gate, OpeningPrompts: &fakes.OpeningSource{}, Clock: clk, IDs: ids, TermsVersion: apiTerms, ServiceName: "api",
+	})
+	ticketTargets := fakes.NewTicketSessionReader()
+	ticketSvc := auth.NewTicketService(store, ticketTargets, fakes.NewTicketStore(), clk, auth.TicketConfig{TTL: 30 * time.Second, RealtimeURL: "https://realtime.example"})
 
 	deps := httpapi.Deps{
+		Session: sessSvc, SessionQuery: session.NewQueryService(fakes.NewSessionViews(sessStore, contentRepo), sessStore.TurnReader(), clk, 180), Tickets: ticketSvc,
+		Content: catalog, ContentAdmin: contentAdmin,
+		AdminSessions: session.NewAdminQueryService(fakes.NewSessionAdmin(sessStore, contentRepo), clk, 180), AdminAudit: adminSvc,
 		Log: log, Limiter: limiter, Tokens: tokens, Clock: clk, Auth: svc, Users: users, Balance: balSvc, Admin: adminSvc, AdminGate: allowAdmin{},
 		Cfg: httpapi.Config{
 			CORSOrigins: []string{"http://localhost:3000"}, BodyLimit: 64 << 10,
@@ -120,7 +151,8 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 		m(&deps)
 	}
 	return &apiEnv{handler: httpapi.NewRouter(deps), limiter: limiter, clk: clk, store: store, bal: bal, mail: fm, deleter: deleter,
-		tokens: tokens, logs: logs, svc: svc, users: users, deps: deps}
+		tokens: tokens, logs: logs, svc: svc, users: users, deps: deps, content: contentRepo, contentStore: contentStore,
+		sessions: sessStore, ticketTargets: ticketTargets, gate: gate, sessionSvc: sessSvc, adminStore: adminStore}
 }
 
 type allowAdmin struct{}

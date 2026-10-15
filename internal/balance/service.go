@@ -3,6 +3,7 @@ package balance
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -265,4 +266,129 @@ func (s *Service) Grant(ctx context.Context, in GrantInput) (MovementResult, err
 // Adjust is the standalone form of AdjustTx.
 func (s *Service) Adjust(ctx context.Context, in AdjustInput) (MovementResult, error) {
 	return s.withDuplicateRetry(ctx, func(ctx context.Context, tx Tx) (MovementResult, error) { return s.AdjustTx(ctx, tx, in) })
+}
+
+// startDeadline is how long a RESERVED session may wait for the runtime to start it (D-035).
+const startDeadline = 5 * time.Minute
+
+// ReserveInput describes the reservation booked while a session is created (spec 4.6.1).
+type ReserveInput struct {
+	ReservationID, SessionID uuid.UUID
+	Seconds                  int64
+	At                       time.Time
+}
+
+// Reserve inserts the HELD reservation (+5 minutes to start) and books the RESERVE movement
+// on the already locked account. Insufficient balance is BALANCE_INSUFFICIENT.
+func (s *Service) Reserve(ctx context.Context, tx Tx, acc Account, in ReserveInput) (Reservation, error) {
+	if !slices.Contains(AllowedDurations, in.Seconds) {
+		return Reservation{}, validationError("duration_seconds", "not_allowed")
+	}
+	if acc.AvailableSeconds < in.Seconds {
+		return Reservation{}, errs.WithDetails(errs.New(errs.CodeBalanceInsufficient, "insufficient balance"),
+			map[string]any{"available_seconds": acc.AvailableSeconds, "requested_seconds": in.Seconds})
+	}
+	res := Reservation{
+		ID: in.ReservationID, UserID: acc.UserID, AccountID: acc.ID, SessionID: in.SessionID,
+		ReservedSeconds: in.Seconds, Status: ReservationHeld, StartDeadlineAt: in.At.Add(startDeadline), CreatedAt: in.At,
+	}
+	repo := tx.Balance()
+	if err := repo.InsertReservation(ctx, res); err != nil {
+		return Reservation{}, err
+	}
+	sid, rid := in.SessionID, in.ReservationID
+	if _, err := repo.ApplyMovement(ctx, acc, Movement{
+		EntryType: EntryReserve, AvailableDelta: -in.Seconds, ReservedDelta: in.Seconds,
+		SessionID: &sid, ReservationID: &rid, ReferenceType: RefSession, IdempotencyKey: "reserve:" + rid.String(), At: in.At,
+	}); err != nil {
+		return Reservation{}, err
+	}
+	return res, nil
+}
+
+func lockHeld(ctx context.Context, tx Tx, sessionID uuid.UUID) (Reservation, error) {
+	res, err := tx.Balance().LockReservationBySessionID(ctx, sessionID)
+	if err != nil {
+		return Reservation{}, err
+	}
+	if res.Status != ReservationHeld {
+		return Reservation{}, ErrReservationState
+	}
+	return res, nil
+}
+
+// ReleaseReservation returns the whole reservation to the account (session never ACTIVE,
+// spec 4.6.2 steps 3–5) and reports the seconds released.
+func (s *Service) ReleaseReservation(ctx context.Context, tx Tx, acc Account, sessionID uuid.UUID, at time.Time) (int64, error) {
+	res, err := lockHeld(ctx, tx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	repo := tx.Balance()
+	if err := repo.MarkReservationReleased(ctx, res.ID, at); err != nil {
+		return 0, err
+	}
+	sid, rid := res.SessionID, res.ID
+	if _, err := repo.ApplyMovement(ctx, acc, Movement{
+		EntryType: EntryRelease, AvailableDelta: res.ReservedSeconds, ReservedDelta: -res.ReservedSeconds,
+		SessionID: &sid, ReservationID: &rid, ReferenceType: RefSession, IdempotencyKey: "release:" + rid.String(), At: at,
+	}); err != nil {
+		return 0, err
+	}
+	return res.ReservedSeconds, nil
+}
+
+// SettleInput carries what the charge formula needs (spec 4.5); the caller maps
+// ServiceFault = end_reason ∈ {PROVIDER_FAILURE, SERVER_ERROR}.
+type SettleInput struct {
+	SessionID                     uuid.UUID
+	StartedAt, EndedAt, ExpiresAt time.Time
+	EndingAt                      *time.Time
+	DisconnectedSeconds           int64
+	ServiceFault                  bool
+	At                            time.Time
+}
+
+// SettleResult is what was charged and returned, plus the numbers behind it.
+type SettleResult struct {
+	Charged, Released, ActiveMs int64
+	BillableEnd                 time.Time
+}
+
+// SettleReservation charges the session and returns the rest (spec 4.6.3 steps 3–6): a CONSUME
+// entry when charged > 0, then a RELEASE entry when released > 0 (zero entries are not written).
+func (s *Service) SettleReservation(ctx context.Context, tx Tx, acc Account, in SettleInput) (SettleResult, error) {
+	res, err := lockHeld(ctx, tx, in.SessionID)
+	if err != nil {
+		return SettleResult{}, err
+	}
+	end := BillableEnd(in.EndingAt, in.EndedAt, in.ExpiresAt)
+	charged := ComputeCharge(res.ReservedSeconds, in.StartedAt, end, in.DisconnectedSeconds, in.ServiceFault)
+	released := res.ReservedSeconds - charged
+	activeMs := max(end.Sub(in.StartedAt).Milliseconds()-in.DisconnectedSeconds*1000, 0)
+
+	repo := tx.Balance()
+	if err := repo.MarkReservationSettled(ctx, res.ID, charged, released, in.At); err != nil {
+		return SettleResult{}, err
+	}
+	sid, rid := res.SessionID, res.ID
+	if charged > 0 {
+		e, err := repo.ApplyMovement(ctx, acc, Movement{
+			EntryType: EntryConsume, ReservedDelta: -charged, SessionID: &sid, ReservationID: &rid,
+			ReferenceType: RefSession, IdempotencyKey: "consume:" + rid.String(), At: in.At,
+		})
+		if err != nil {
+			return SettleResult{}, err
+		}
+		acc = accountAfter(acc, e)
+	}
+	if released > 0 {
+		if _, err := repo.ApplyMovement(ctx, acc, Movement{
+			EntryType: EntryRelease, AvailableDelta: released, ReservedDelta: -released, SessionID: &sid, ReservationID: &rid,
+			ReferenceType: RefSession, IdempotencyKey: "release:" + rid.String(), At: in.At,
+		}); err != nil {
+			return SettleResult{}, err
+		}
+	}
+	return SettleResult{Charged: charged, Released: released, ActiveMs: activeMs, BillableEnd: end}, nil
 }

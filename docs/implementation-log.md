@@ -764,3 +764,161 @@ Tanggal: 2026-10-14
 - STT: ERROR vendor tidak lagi dihitung/diteruskan dua kali dan `Close` normal tidak menghitung kegagalan (flag `ending`); rotasi diset sinkron di `handle` (audio tidak pernah ditolak), Finalize yang belum dijawab diulang di koneksi baru, FINAL koneksi lama dibuang, trigger saat replay memicu rotasi ulang, `AudioMsSent` tidak ganda, titik replay dijepit ke audio yang tertulis, `ReportFinalTimeout` setelah close diabaikan
 - TTS: slot yang tak terdaftar tidak lagi menyebabkan nil-pointer; `audioSent` dicek ulang di bawah `g.mu` saat switch; memilih voice + mendaftarkan stream satu critical section; stream yang ditutup/deadline pemanggil tidak memicu switch
 - Router: menunggu slot semaphore bukan vonis breaker; `INVALID_RESPONSE` diulang sekali; `httpx` tidak lagi menggaungkan body mentah dan menyamarkan `sk_…`; `ttsCandidates` (kode mati) dihapus
+
+## M3-T1 — Preflight kontrak M1/M2/M4 dan kode error
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- Tes karakterisasi: `internal/platform/errs/m3codes_test.go` (23 kode M3: pesan tidak kosong + status HTTP; 3 kode yang dihapus tidak ada; total 67), `internal/m3preflight_test.go` (kompilasi simbol M1/M2/M4 yang dipakai M3)
+### Test
+- `go test ./internal/... -run 'TestM3|TestPreflight'` — PASS langsung (kontrak sesuai)
+
+## M3-T2 — `BillableEnd` dan `ComputeCharge`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/balance/charge.go`: rumus §4.5 apa adanya (satu-satunya tempat)
+### Test
+- `charge_test.go`: 11 contoh §4.5 (billable end + charged) dan batas (59.999/60.000 ms untuk kegagalan, clamp ke reservasi, ending_at ± expires_at, disconnected > aktif) — PASS
+
+## M3-T3 — Reservasi dan operasi `balance.Service` tx-bound
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `balance.Reservation`/`ReservationRepository` (di-embed ke `Repository`), `Service.Reserve` (validasi durasi, `BALANCE_INSUFFICIENT`, deadline +5 menit, RESERVE `reserve:{rid}`), `ReleaseReservation` (RELEASE `release:{rid}`), `SettleReservation` (CONSUME lalu RELEASE; entry nol tidak ditulis); `ErrReservationNotFound`/`ErrReservationState`
+- `fakes.BalanceStore`: reservasi + `chk_reservation_state` setara, rollback-copy ikut menyalin reservasi; `repotest.BalanceRepoSuite` + kasus reservasi dan hook `SeedSession`
+### Test
+- `internal/balance/reservation_test.go` (10 tes) — PASS
+### Penyimpangan
+- Repo Postgres untuk reservasi baru di Task 5; sementara method menolak (lihat ledger)
+
+## M3-T4 — `balance.Service.Reconcile`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/balance/reconcile.go`: `ReconcileRepository.RunCheck`, `Violation`, `Reconcile` (R1–R6 berurutan, berhenti pada error yang menyebut check); SQL di Postgres (Task 5)
+### Test
+- `reconcile_test.go` — PASS
+
+## M3-T5 — Repository reservasi dan reconcile di Postgres
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `db/queries/balance.sql`: `LockReservationBySession`, `InsertReservation`, `MarkReservationSettled/Released` (hanya dari `HELD`), `ReconcileR1..R6` (§4.8, satu kolom teks tanpa data pribadi); `postgres.balanceRepo` kini memenuhi `ReservationRepository` (stub T3 dihapus); `postgres.NewReconcileRepo` (`RunCheck`)
+- `BalanceRepoSuite`: hook `Unreconciled`; harness Postgres menyediakan `SeedSession` (sesi per user baru)
+### Test
+- `balance_repo_integration_test.go`: suite kontrak (fake + Postgres), reserve+settle contoh 1 bersih, `chk_ledger_shape`, `chk_reservation_state`, R1/R3/R4/R6 mendeteksi pelanggaran — PASS (Podman)
+
+## M3-T6 — Domain konten, `ScenarioFormality`, `SpeakingRate`, voice/snapshot
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/content/{types,character}.go`: tipe §6.5 (Topic, Scenario, ScenarioVersion, PromptVersion + `Template()`, Character/Voice/TTSBinding, CharacterSnapshot/SessionSnapshot), `ScenarioFormality`, `DifficultyBand`, `DefaultStyle`, `SpeakingRate` (clamp 0,80–1,05), `NormalizeProviderName`, `MarshalJSONB`/`ParseSnapshot` (key tak dikenal ditolak); `content` hanya mengimpor `prompt`
+### Test
+- `types_test.go` — PASS; `make arch-check` bersih
+
+## M3-T7 — `content.Validator`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/content/validator.go`: `Issue`, `Validator` (`ValidateDraft`/`ValidatePublish`/`ValidateCharacter`/`ValidateCatalog`), aturan scenario/karakter/prompt §6.10.1 (dry-run render semua fixture, JSON Schema 2020-12 via `jsonschema/v6`, batas render 12.000 karakter), `NormalizeCharacter`, `ParseVoice`, `ParseLLMParams`, `Observer`/`NopObserver`, `ReportCatalog`
+- `internal/platform/metrics/content.go`: `metrics.Content` (`kotoki_content_resolve_errors_total{code}`, `kotoki_content_voice_fallback_missing_total{character}`, `kotoki_content_validation_issues{severity}`)
+### Test
+- `validator_test.go` (satu kasus per aturan), `metrics/content_test.go` — PASS
+
+## M3-T8 — Repository konten, cache, `Resolver`, `SessionConfigLoader`
+Status: DONE
+Tanggal: 2026-10-14
+### Implementasi
+- `internal/content/{ports,cache,resolver,config_loader}.go`: `Repository` (baca; keluarga "live" ber-TTL dan keluarga by-id LRU 1.000 tanpa TTL), `CachedRepository` (+`Invalidate`), `Resolver` §6.9 (urutan topic → scenario → mismatch → versi → karakter → TTS → prompt → LLM; vendor TTS tidak enabled → `CHARACTER_NOT_AVAILABLE` di kedua mode; mode real: model/voice kosong atau placeholder → `CONTENT_MISCONFIGURED`; fallback hilang → WARN + `VoiceFallbackMissing`; snapshot salinan dalam), `SessionConfigLoader` (tanpa filter status, snapshot dari sesi bukan baris karakter hidup)
+- `fakes.ContentRepo` (pencacah panggilan untuk tes cache)
+### Test
+- `resolver_test.go`, `cache_test.go` — PASS (race)
+
+## M3-T9 — Repository konten di Postgres
+- `db/queries/content.sql` + sqlc; `postgres.NewContentRepo` (`content.Repository`) dan `(*Tx).Content()` (`content.TxRepository`, `internal/content/tx.go`): lock parent → versi, `NextVersionNumber`, insert draft, publish/retire/delete, status topik/skenario, lock+update karakter.
+- Tes integrasi: published-only, load by id, unik satu PUBLISHED, versi immutable (trigger), nomor versi di bawah lock parent (2 tx paralel → 2 dan 3), round-trip karakter + `voice.fallback`, patch karakter paralel serial, `GetUserVoiceExposure` (hanya COMPLETED, stabil setelah voice karakter diubah).
+- Ruling: `ListPublic*` (§6.12) dilewati — katalog publik disusun dari `content.Repository` di Task berikutnya; `GetUserVoiceExposure` dipakai lewat sqlc langsung sampai ada konsumennya.
+
+## M3-T10 — CatalogService & AdminService konten
+- `content.Store/Tx/AuditWriter/AuditEntry` (`tx.go`), `CatalogService` (usable-filter = langkah 1–3 resolver; karakter tersembunyi bila vendor mati, atau placeholder/kosong di mode real), `AdminService` (CreateDraft/copy_from, Publish idempoten + rollback RETIRED→PUBLISHED, Retire, DeleteDraft, SetStatus, ListVersions/GetVersion, ValidationReport, GetCharacter, UpdateCharacter) dan `postgres.Store.ContentStore()` (audit ke `admin_audit_logs`). Fake: `fakes.ContentStore` (snapshot/rollback + log audit), `ContentRepo` mengimplementasi `TxRepository`.
+- Tes unit (admin_test, catalog_test) + integrasi `test/integration` (`TestPublishConcurrent -count=20`, publish prompt, `TestCharacterEditDoesNotChangeExistingSnapshot`).
+- Ruling: retire versi prompt `PUBLISHED` selalu 409 `CONTENT_VERSION_REQUIRED` (spec §6.13.1 baris 4269: hanya publish pengganti yang meretire). Ini berbenturan dengan skenario e2e E12 (retire OPENING lewat endpoint retire) — E12 perlu menyesuaikan (publish pengganti / SQL) saat M-e2e dikerjakan.
+- Ruling: `content.Issue` diberi tag JSON (`entity` omitempty) agar `details` 422 memakai bentuk spec; `Entity` tetap tampil di validation-report.
+- Ruling: `SetStatus` tidak membatasi transisi antar `ACTIVE/DISABLED/ARCHIVED` (spec tidak mendefinisikannya); status yang sama = no-op tanpa audit/invalidasi.
+- Ruling: `AuditEntry.RequestID` diisi lewat `AdminDeps.RequestID` (content tidak boleh mengimpor httpapi); kosong → "unknown".
+- Catatan deviations: teks §6.13.1 menulis `metadata`/`CONTENT_CHARACTER_UPDATED`; implementasi memakai kolom `details` dan action `CHARACTER_UPDATED` sesuai CHECK `admin_audit_logs`.
+
+## M3-T11 — Seed SQL & `make seed`
+- `seed/0010_topics.sql` (5), `0050_characters.sql` (4, inline voice, placeholder TTS ids), `0060_scenarios.sql` (13 scenario + v1 PUBLISHED), `0070_prompts.sql` (5 `prompt_configs` + CONVERSATION/OPENING v1 dari `prompt.ConversationV1/OpeningV1` byte-per-byte), `seed/env/example/0900_voice_ids.sql`; `make seed` menjalankan juga `seed/env/$KOTOKI_ENV/*.sql` bila ada.
+- Tes `test/integration/m3_seed_test.go` (valid, idempoten, jumlah, formality, karakter, placeholder real/fake, override suara, resolve HARUKA×BACKEND, render, konstanta M4, nama lengkap tak pernah dirender). Konstanta `expectedPromptVersionCount = 2` satu-satunya tempat angka itu.
+- Ruling: 12 scenario selain `BACKEND_ENGINEER_INTERVIEW` ditulis penulis (spec hanya memberi satu contoh, tabel §6.13.4 memberi kode/level/formality); isi dapat dituning produk lewat versi baru. Dipakai `ValidatorConfig.TTSModeReal` (bukan `ProviderModeReal` seperti tertulis di brief).
+
+## M3-T12 — REST konten (katalog + admin content)
+- `content_{routes,handler,dto}.go` (5 GET katalog, `{"items":[…]}`, `Cache-Control: private, max-age=60` hanya pada sukses, limiter `api_user_default`) dan `admin_content_{routes,handler,dto}.go` (versions CRUD/publish/retire, status topics|scenarios, GET/PATCH karakter, validation-report). `Request.PathParam` ditambahkan; `Deps.Content`/`Deps.ContentAdmin` bertipe interface kecil.
+- Tes: golden `testdata/api/rest/content/*`, `TestCharacterResponseHasNoVoiceIDs`, error/403/PATCH karakter/lifecycle, `TestRouteTable` (5 baris katalog Ready + 10 baris admin content).
+- Ruling: `POST …/versions` memakai body `json.RawMessage` yang di-decode ketat oleh `AdminService` (field per family berbeda); field tak dikenal → 400 `VALIDATION_FAILED`. Objek `voice` PATCH yang cacat (key tak dikenal) → 422 `CONTENT_VALIDATION_FAILED` dengan issue `unknown_key`.
+- Catatan: wiring `cmd/api` (Deps.Content/ContentAdmin) ditunda ke Task 23 sesuai plan; sampai saat itu route konten di binary `cmd/api` belum berfungsi.
+
+## M3-T13 — Domain `session`
+- `internal/session/{session,tx,transition,ports}.go`: `Status/EndReason/Actor/StartMode/Fence`, `CanTransition` (tabel privat, matriks 8×8 teruji), `TerminalStatusFor`, error domain, `Session`/`RuntimeRecord`/`Settlement`/`Event`/`Turn*`, `Patch`, `Repository`/`TurnRepository`/`EventRepository`, `Store/Tx`, port `UserGate/AdaptiveProvider/OpeningPromptSource/ControlPublisher/HeartbeatReader`.
+- Ruling: `TurnRepository` tidak memuat `SetUserAudioKey` (signature §7.13.1 menyebutnya, tetapi §5.3.2/D-099: audio user tidak pernah disimpan dan `session_turns` tidak punya kolom referensi audio). Biaya bila salah: satu method tambahan di M5.
+- Ruling: `internal/events/outbox.go` (`Event`, `OutboxWriter`) dimajukan dari Task 14 karena `session.Tx.Outbox()` membutuhkannya; Task 14 menambah `types.go`, builder dan writer Postgres.
+- Ruling: bentuk field `TurnStart/TurnUser/TurnFinal/TurnRecord/Patch/ListFilter/ActiveRef` ditetapkan dari kolom DDL §5.3.2 dan transisi §5.4–5.6 (spec hanya memberi nama tipe); `CreatedAt` turn ikut dibawa untuk partition pruning.
+
+## M3-T14 — Paket `events` + outbox writer
+- `internal/events/types.go` (`SessionCompletedPayload` v1 dengan timestamp milidetik UTC, `NewSessionCompleted`, `ActiveSeconds`), `postgres.Tx.Outbox()` (INSERT `event_outbox`, traceparent/tracestate dari propagator ctx), `db/queries/outbox.sql`, `fakes.Outbox`.
+- Tes: golden payload, floor active_seconds, 16 key; integrasi `TestOutboxWriterInsertsPendingRow`, `TestOutboxWriterRollsBackWithTx`.
+
+## M3-T15 — Repository session/turn/event di Postgres
+- `db/queries/{sessions,session_turns,session_events}.sql`; `postgres.NewSessionRepo/NewTurnRepo/NewEventRepo` dan `(*Tx).Sessions()/Turns()/Events()`; `Store.SessionStore()`. Tulis runtime ber-fence dengan pola `INSERT … SELECT … WHERE EXISTS` / `UPDATE … AND EXISTS` (0 baris → `ErrFenceLost`); `FailInProgress` memeriksa fence terpisah bila tidak ada turn yang diubah; 23505 diterjemahkan ke `ErrAlreadyOpen`/`ErrDuplicateIdempotency` lewat nama index.
+- `repotest.RunSessionRepoSuite` (kontrak yang nanti juga dijalankan terhadap fake session store) + tes integrasi: CHECK, partisi, tanpa FK ke tabel partisi, pruning, snapshot immutable (`TestConfigSnapshotImmutable` mem-parse sqlc), kandidat abandon.
+- Ruling: port sweeper memakai cutoff yang dihitung pemanggil (`ListExpired(expiredBefore)`, `ListActiveForHeartbeat(startedBefore, limit)`), bukan `now`; `MaxSeqAndGeneration` mengembalikan `(-1, 0)` bila belum ada turn (AI_FIRST mulai dari 0, USER_FIRST dari 1); `Stats.hasAudio` = ada turn dengan `stt_audio_ms` atau `tts_first_audio_ms` (D-099: tak ada referensi audio tersimpan); `ListForUser` mengecualikan turn `DISCARDED`; `ListRecent` mengembalikan semua status, urut naik — penyaringan milik konsumen (M5).
+
+## M3-T16 — `session.Service.Create`
+- `internal/session/{service,create}.go`: `Deps`, `Metrics`/`NopMetrics`, `NewService`, `CreateSessionInput/Result`, `HashCreateRequest`, `Create` mengikuti §4.6.1 (gate → resolve → adaptive → hash di luar tx; di tx: lock account → replay/reuse → satu sesi terbuka → Insert → `Balance.Reserve` → `SESSION_RESERVED`); `ErrAlreadyOpen/ErrDuplicateIdempotency` dari backstop → rollback lalu keputusan diulang lewat `Reader`. `metrics.NewSession` (`kotoki_sessions_created_total`, `kotoki_sessions_ended_total`).
+- Fakes: `fakes.SessionStore` (mengikuti semantik repo Postgres, lulus `RunSessionRepoSuite`; satu transaksi bersama balance dan outbox; hook `BeforeInsert` + `PutSession` mensimulasikan baris yang di-commit pihak lain), `fakes.UserGate`, `fakes.Adaptive`.
+- Tes unit (create_test) + integrasi `TestCreate20ParallelDifferentKeys/SameKey`, `TestCreateUniqueViolationBackstop` (+`AssertReconciled`).
+- Ruling: metrik `created` menghitung `error` untuk 5xx (INTERNAL_ERROR, SERVICE_UNAVAILABLE, CONTENT_MISCONFIGURED, error non-errs); replay dan 4xx lain tidak dihitung.
+- Ruling: separuh kedua `TestCreate_20Parallel_DifferentKeys` ("setelah Cancel lagi 20 → tepat 1") ditunda ke Task 17 karena `Cancel` baru ada di sana.
+
+## M3-T17 — Jalur release & start
+- `internal/session/{lifecycle,control}.go`: `releaseInTx` (spec 4.6.2: pra-tx `OwnerOf` → lock account → `GetForUpdate` → lock reservasi → `ReleaseReservation` → CAS dengan `BumpFence` → event), dipakai `Cancel`, `Abandon`, `FailStart`, `CancelInTx`; `BeginStart` (lock sesi → reservasi, OPENING dibaca sebelum tx; terlambat → `Abandon` inline lalu `ErrStartDeadlinePassed`), `Activate` (>10 s → `FailStart(PROVIDER_FAILURE,"start_timeout")` + `ErrStartTimeout`). `TransitionError` (membungkus `ErrInvalidTransition` dengan From/To); control `status_changed` dan metrik `Ended` hanya setelah commit transisi yang benar-benar mengubah sesuatu.
+- Postgres: stub `SessionGate.CancelReserved` diganti `CancelInTx` lewat `Store.SetSessionCanceller(svc)`; tes M2 `TestPGSessionGateCancelReservedNotWired` dibalik menjadi `TestPGSessionGateCancelReserved*` dan `TestPGDeleteAccountCancelsReservedSession`. `var _ session.Tx = (*Tx)(nil)`.
+- Fakes: `fakes.ControlPublisher`, `fakes.OpeningSource`. Tes integrasi: `TestCancelVsBeginStartRace` (50×, jitter, kedua urutan terjadi), `TestCancelInTxUsedByAdminTx`, babak kedua `TestCreate20ParallelDifferentKeys` setelah Cancel.
+- Ruling: `Abandon` sebelum deadline mengembalikan sesi apa adanya tanpa error (job melewati); `CancelInTx` tidak mem-publish control (commit milik pemanggil) tetapi menghitung metrik; `CancelReserved(…, at)` memakai jam service, argumen `at` diabaikan; `cmd/api/main.go` perlu memanggil `store.SetSessionCanceller(svc)` — dikerjakan di Task 23 (wiring).
+
+## M3-T18 — Transisi runtime & settlement
+- `internal/session/runtime_ops.go`: `ClaimRuntime`, `AddDisconnected`, `MarkHandoff`, `SetSummary`, `BeginEnding` (ending_at = COALESCE(handoff_at, now), alasan pertama menang, non-runtime menaikkan fence, control `ENDING` setelah commit), `Finalize` dan `FailActive` lewat `settleTx/settleInTx` (§4.6.3: lock account → sesi (terminal → idempoten sebelum cek fence) → `SettleReservation` → `FailDangling` → CAS `BumpFence` → event → outbox `session.completed` dengan producer REALTIME/WORKER; control + metrik `Ended` hanya sekali).
+- Tes unit (`lifecycle_end_test`: contoh 1, 9, 11, handoff, fence, idempotensi, payload outbox, metrik) dan integrasi (`TestFinalizeRuntimeVsSweeperRace` 100×, `TestHandoffThenSweeperRuleEExample10`, `TestTakeoverOldFenceCannotWriteTurn`, count=3).
+- Ruling: `FailActive` memotong `ended_at` ke [started_at, expires_at]; `SetSummary` tidak menimpa ringkasan yang sudah ada (no-op) dan menolak sesi yang tidak pernah ACTIVE; `whyNoRow` memeriksa status lebih dulu lalu fence (urutan error spec: `ErrInvalidTransition` sebelum `ErrFenceLost`).
+
+## M3-T19 — `session.RuntimeService`
+- `internal/session/runtime.go`: fasad ber-fence dengan signature §7.13.1 (`GetForAttach/ClaimRuntime/MarkStarting/Activate/FailStart/AddDisconnected/MarkHandoff/BeginEnding/Complete/Fail`) di atas `Service`; `Settlement` dari baris sesi (waktu nol bila sesi tak pernah mulai). `RuntimeRecord` mendapat `CharacterID`; `session.RuntimeRecordOf(Session)` dipakai postgres dan fake.
+- Tes: assertion kompilasi terhadap salinan `conversation.SessionRuntime`, opening id, snapshot dapat di-`ParseSnapshot`, settlement, alasan `Fail` berbeda → alasan tersimpan + WARN, fence basi.
+
+## M3-T20 — `session.QueryService`
+- `internal/session/query.go` (`View`, `ViewRepository`, `QueryService.Get/List/Turns`), `postgres.NewSessionViewRepo` + `db/queries/session_views.sql` (join topics/scenarios, LEFT JOIN reservasi; nama/avatar karakter dari `config_snapshot`), `fakes.SessionViews`, `SessionStore.TurnReader()`.
+- `Turns`: 404 untuk sesi orang lain; 410 `TRANSCRIPT_EXPIRED` bila `transcript_purged_at` atau `ended_at` > retensi (180 hari); sesi tanpa `starting_at` → daftar kosong tanpa query; hanya turn `COMPLETED/INTERRUPTED/FAILED` (SQL `status IN (…)`, jadi paginasi tetap benar).
+- Ruling: `NewQueryService` menerima `TurnRepository` tambahan (brief tidak menyebutnya tetapi `Turns` membutuhkannya); batas pruning (`starting_at − 1 menit`, `ended_at + 1 menit`) diterapkan di repo Postgres, jadi tes unit menegaskan bahwa service meneruskan `starting_at`/`ended_at` apa adanya.
+
+## M3-T21 — Sweeper & adapter Redis
+- `internal/session/{sweeper,guard}.go` (`Sweeper.Tick` urutan e,a,b,c,d; `HeartbeatGuard` 45 s sehat; skip massal ≥20 kandidat dan ≥50% dari ACTIVE non-handoff), `Service.EndStaleHandoff`, `redisstore.NewHeartbeatReader` (MGET, `Read(nil)` = PING) dan `NewSessionControl` (PUBLISH), `fakes.Heartbeats`. `ListActiveForHeartbeat(ctx, limit)` mengembalikan `id, started_at, expires_at`.
+- Tes unit: tiap aturan dengan batas waktu (14/16 s, 59/61 s, 29/31 s), contoh 7, 9, 10, urutan aturan, guard, skip massal, handoff tak dihitung, 19 dari 20, Redis mati, error satu sesi, kalah dari owner; integrasi Redis (`TestHeartbeatReaderMGet`, `TestSessionControlPublish`) dan Postgres+Redis (`TestSweeperRuleBWithRealPostgresAndRedis`, Redis mati).
+
+## M3-T22 — REST sesi
+- `internal/httpapi/session_{routes,handler,dto}.go`: `POST|GET /sessions`, `GET /sessions/{id}`, `POST …/cancel`, `POST …/realtime-ticket`, `GET …/turns` dengan rate policy per route (`session_create_user`, `ticket_user`, `api_user_default`); `Deps.Session/SessionQuery/Tickets` (interface kecil); `Request.PathUUIDOr` (id sesi tak valid → `SESSION_NOT_FOUND`). `createSessionRequest` memakai string id agar id rusak menjadi field error (`VALIDATION_FAILED`), field asing (`version_id`, `conversation_style_id`, …) ditolak `unknown_field`. Replay → 200 + `Idempotent-Replayed`, baru → 201 + `Location`. `remaining_seconds` hanya untuk `ACTIVE` (`ceil`, min 0); nama topik/skenario dari induk, karakter dari snapshot; tidak ada `adaptive_difficulty/runtime_fence/config_snapshot`.
+- Tes: golden `testdata/api/rest/sessions/*` (create, get, list, turns), error/404/409/410, paginasi, tiket (`auth.TicketService` dengan fake reader), `TestRouteTable` (6 baris sesi Ready) dan `TestRouteTableUserGroupPrefixes` (11 route di prefix sesi + katalog, tanpa `/conversation-styles`/`/expression-profiles`).
+- Ruling: cursor turns = `sequence_number`; limit turns default 50 (maks 100) berbeda dari default list umum (20).
+
+## M3-T23 — Lifecycle lintas paket, wiring, rekonsiliasi akhir
+- `internal/session/adaptive_stub.go` (`NeutralAdaptiveProvider`, snapshot netral; hanya `formality` dari snapshot), `cmd/api/adapters.go` (`userGate` di atas `auth.UserService.RequireActive`, `openingPromptSource`, `resolverConfig/validatorConfig` dari variabel `PROVIDER_*` yang sama dengan router — `provider.RouterConfig` di-parse dengan `env`, tanpa validasi kunci), wiring `cmd/api/main.go` (cache konten 30 s, `ReportCatalog` saat start, catalog/admin, session service, `SetSessionCanceller`, query service, ticket service, `Deps.Content/ContentAdmin/Session/SessionQuery/Tickets`), config `CONTENT_CACHE_TTL_SECONDS` (30) dan `RETENTION_TRANSCRIPT_DAYS` (180) + `.env.example`.
+- `test/integration/m3_lifecycle_test.go` (`TestLifecycle`): happy path AI_FIRST (421 s), karakter diubah/di-DISABLE saat sesi aktif, fallback OPENING, kegagalan provider (+STARTING tanpa outbox), double-click lewat HTTP, pod mati → sweeper (b) sekali, reservasi terbengkalai, akses transcript (410 setelah 181 hari), lalu `AssertReconciled` + `balance.Reconcile` R1–R6 kosong dan tidak ada reservasi yatim.
+- `go test -race -tags=integration -p 1 ./...` hijau, `golangci-lint` bersih.
+- Ruling: `userGate` memakai `RequireActive` saja (mengembalikan `User.TermsVersion`), tidak memanggil `Me` terpisah; `NewAdminQueryService` dan wiring `RuntimeService/Sweeper` bukan bagian api (T24, M5, M6).
+
+## M3-T24 — Endpoint admin sesi + audit `SESSION_TRANSCRIPT_VIEW`
+- `internal/session/admin_query.go` (`AdminView`, `AdminRepository`, `AdminQueryService.ListByUser/Get/Turns/Events`, `RedactSnapshot`), `postgres.NewSessionAdminRepo` + `db/queries/session_admin.sql` (JOIN `balance_reservations`, semua turn termasuk `DISCARDED`/berjalan, events keyset `(created_at,id)` tanpa subquery by id), `fakes.SessionAdmin`.
+- `admin.Service.RecordTranscriptView` (action `SESSION_TRANSCRIPT_VIEW`, target `SESSION`, `target_user_id` = pemilik); `internal/httpapi/admin_session_{routes,handler,dto}.go` dengan 4 route di grup Admin (`admin_user`), `Deps.AdminSessions/AdminAudit`, wiring `cmd/api/main.go`.
+- Tes: unit `admin_query_test` (redaksi, pemilik bebas, turn DISCARDED/berjalan, 410, cursor events, filter status + keyset), `admin/service_audit_test`, handler `admin_session_handler_test` + golden `testdata/api/rest/admin_sessions/*` (tepat satu audit untuk turns, 404/410 tanpa audit, audit gagal → 500 tanpa transcript), `TestRouteTable` (4 baris Ready) + `TestRouteTable_AdminSessions`, integrasi `TestAdminSessions` (reservasi `SETTLED`, `charged_seconds == consumed_seconds == 421`, audit di DB, events keyset, 410).
+- Catatan proses: kode `admin_query.go` dan repo Postgres pertama kali ditulis sebelum tesnya (sesi terputus); `admin_query.go` ditulis ulang dari tes, sedangkan repo Postgres dipulihkan dari versi awal lalu dibuktikan oleh tes integrasi.

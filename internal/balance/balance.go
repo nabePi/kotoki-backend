@@ -78,13 +78,50 @@ type Movement struct {
 
 // Sentinel errors of the repository port.
 var (
-	ErrAccountNotFound   = errors.New("balance: account not found")
-	ErrDuplicateMovement = errors.New("balance: duplicate idempotency key")
+	ErrAccountNotFound     = errors.New("balance: account not found")
+	ErrDuplicateMovement   = errors.New("balance: duplicate idempotency key")
+	ErrReservationNotFound = errors.New("balance: reservation not found")
+	// ErrReservationState means a reservation is not HELD where it must be; callers log it as
+	// reservation_state_mismatch and answer INTERNAL_ERROR (spec 4.6.2/4.6.3).
+	ErrReservationState = errors.New("balance: reservation state mismatch")
 )
+
+// ReservationStatus is the lifecycle of a reservation (spec 4.3.2).
+type ReservationStatus string
+
+// Reservation statuses.
+const (
+	ReservationHeld     ReservationStatus = "HELD"
+	ReservationSettled  ReservationStatus = "SETTLED"
+	ReservationReleased ReservationStatus = "RELEASED"
+)
+
+// Reservation mirrors balance_reservations (spec 4.3.2): the seconds held for one session.
+type Reservation struct {
+	ID, UserID, AccountID, SessionID uuid.UUID
+	ReservedSeconds                  int64
+	ConsumedSeconds, ReleasedSeconds *int64
+	Status                           ReservationStatus
+	StartDeadlineAt, CreatedAt       time.Time
+	SettledAt, ReleasedAt            *time.Time
+}
+
+// ReservationRepository is the reservation part of the persistence port. Callers hold the
+// account lock first (lock order, spec 4.6.0).
+type ReservationRepository interface {
+	// LockReservationBySessionID is SELECT … FOR UPDATE; ErrReservationNotFound when absent.
+	LockReservationBySessionID(ctx context.Context, sessionID uuid.UUID) (Reservation, error)
+	InsertReservation(ctx context.Context, r Reservation) error
+	// MarkReservationSettled sets SETTLED with consumed+released = reserved (chk_reservation_state).
+	MarkReservationSettled(ctx context.Context, id uuid.UUID, consumed, released int64, at time.Time) error
+	// MarkReservationReleased sets RELEASED with consumed = 0 and released = reserved.
+	MarkReservationReleased(ctx context.Context, id uuid.UUID, at time.Time) error
+}
 
 // Repository is the persistence port for accounts and the ledger. M3 extends it
 // with reservation methods (spec 4.2).
 type Repository interface {
+	ReservationRepository
 	LockAccountByUserID(ctx context.Context, userID uuid.UUID) (Account, error) // SELECT … FOR UPDATE; ErrAccountNotFound
 	GetAccountByUserID(ctx context.Context, userID uuid.UUID) (Account, error)  // no lock; ErrAccountNotFound
 	InsertAccount(ctx context.Context, a Account) error
