@@ -25,7 +25,10 @@ const (
 // included), or the barrier marker of Runtime.Barrier.
 type frameEvent struct {
 	barrier chan struct{}
-	voiced  bool
+	// cs is the connection whose pipeline produced the frame: a frame of a connection that has
+	// been replaced (a reconnect) is dropped by the loop.
+	cs     *connState
+	voiced bool
 	// invalid asks the loop for an AUDIO_FRAME_INVALID error event (already rate limited to one
 	// per 5 s by the pipeline).
 	invalid bool
@@ -33,7 +36,7 @@ type frameEvent struct {
 }
 
 // sttBox lets the audio goroutine read the STT stream the loop owns without a lock: the loop
-// stores the stream when the session is active (Task 21 stores nil when the stream is closed).
+// stores the stream when the session is active (and nil when the stream is closed on a disconnect).
 type sttBox struct{ s provider.RoutedSTTSession }
 
 // audioPipeline is the audioPipeline goroutine of one connection (§7.5, §7.7.2): it takes the
@@ -187,7 +190,7 @@ func (p *audioPipeline) frame(ctx context.Context, pcm []int16, at time.Time, in
 		}
 	}
 	select {
-	case p.r.frameEvents <- frameEvent{voiced: voiced, invalid: invalid, at: at}:
+	case p.r.frameEvents <- frameEvent{cs: p.cs, voiced: voiced, invalid: invalid, at: at}:
 		return true
 	case <-ctx.Done():
 		return false
@@ -204,6 +207,9 @@ func (r *Runtime) onFrameEvent(fe frameEvent) {
 		return
 	}
 	r.handled++
+	if fe.cs != r.cs || !r.connected {
+		return // a connection that is gone or was replaced: its frames are not the session's
+	}
 	if r.status != session.StatusActive && r.status != session.StatusEnding {
 		return
 	}

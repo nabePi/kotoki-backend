@@ -178,16 +178,24 @@ type H struct {
 	SID    uuid.UUID
 	Ticket conversation.AttachTicket
 
-	ids      idgen.Generator
-	ctx      context.Context
-	cancel   context.CancelFunc
-	enc      *audio.Encoder
-	upSeq    uint32
-	attached bool
-	done     chan struct{} // closed when Attach returned
-	attachEr error
-	once     sync.Once
-	blocked  atomic.Int32
+	// Prev is the connection a Reconnect replaced (nil before the first one).
+	Prev *PipeConn
+
+	ids     idgen.Generator
+	ctx     context.Context
+	cancel  context.CancelFunc
+	enc     *audio.Encoder
+	upSeq   uint32
+	cur     *attachRun   // the Attach of the current connection (nil before Attach)
+	runs    []*attachRun // every Attach this harness started, for Close
+	once    sync.Once
+	blocked atomic.Int32
+}
+
+// attachRun is one Manager.Attach call: done is closed when it returned, err is its result.
+type attachRun struct {
+	done chan struct{}
+	err  error
 }
 
 // New builds the harness: the fakes are seeded with one session (RESERVED unless WithStatus) and
@@ -206,7 +214,7 @@ func New(t *testing.T, opts ...Option) *H {
 	testutil.NoGoroutineLeak(t, convPkg)
 	testutil.NoGoroutineLeak(t, fakesPkg)
 
-	h := &H{T: t, SID: SessionID, ids: idgen.NewSequence(t), done: make(chan struct{})}
+	h := &H{T: t, SID: SessionID, ids: idgen.NewSequence(t)}
 	h.Clock = clock.NewFake(T0)
 	h.Tickers = &Tickers{}
 	h.Conn = NewPipeConn()
@@ -215,6 +223,7 @@ func New(t *testing.T, opts ...Option) *H {
 	h.Session.Recorder = h.Calls
 	h.Turns = fakes.NewTurnRepo()
 	h.Written = fakes.NewEventWriter()
+	h.Turns.FenceOf, h.Written.FenceOf = h.Session.Fence, h.Session.Fence // a stale owner's writes are refused, as the fenced SQL does
 	h.Store = fakes.NewRuntimeStore()
 	h.Learner = &fakes.LearnerContext{Ctx: prompt.LearnerContext{DisplayName: "タロウ"}}
 	h.Memory = &fakes.MemoryRetrieval{}
@@ -346,14 +355,50 @@ func (h *H) Connect(first protocol.ClientEvent) {
 // Attach attaches the connection without sending a command (the handshake waits for one).
 func (h *H) Attach() {
 	h.T.Helper()
-	if h.attached {
-		h.T.Fatal("rtharness: Attach called twice")
+	if h.cur != nil {
+		h.T.Fatal("rtharness: Attach called twice on one connection (use Reconnect for another)")
 	}
-	h.attached = true
+	run := &attachRun{done: make(chan struct{})}
+	h.cur = run
+	h.runs = append(h.runs, run)
+	mgr, conn, ticket, ctx := h.Mgr, h.Conn, h.Ticket, h.ctx
 	go func() {
-		h.attachEr = h.Mgr.Attach(h.ctx, h.Conn, h.Ticket)
-		close(h.done)
+		run.err = mgr.Attach(ctx, conn, ticket)
+		close(run.done)
 	}()
+}
+
+// Reconnect gives the harness a new connection, as a client that dropped and came back: Conn is a
+// fresh PipeConn (the old one stays in Prev, still attached unless it ended), the upstream sequence
+// starts at 0 again, and the next Connect/Attach attaches it. Events, Frames and the like read the
+// new connection.
+func (h *H) Reconnect() {
+	h.T.Helper()
+	h.Prev = h.Conn
+	h.Conn = NewPipeConn()
+	h.cur = nil
+	h.upSeq = 0
+}
+
+// Peer builds a second pod over the same session: its own Manager and connection, the same clock,
+// tickers, fakes and session (so the fence of Postgres and the state of Redis are shared). Use it
+// for a takeover: Connect a resume on the peer.
+func (h *H) Peer(pod string) *H {
+	h.T.Helper()
+	p := &H{
+		T: h.T, SID: h.SID, Clock: h.Clock, Tickers: h.Tickers, Session: h.Session, Calls: h.Calls, Turns: h.Turns,
+		Written: h.Written, Store: h.Store, Learner: h.Learner, Memory: h.Memory, Router: h.Router, Content: h.Content,
+		Ticket: h.Ticket, ids: h.ids, Conn: NewPipeConn(), Reg: prometheus.NewRegistry(),
+	}
+	p.enc, _ = audio.NewEncoder(48000, 32000, 5)
+	p.Metrics = conversation.NewMetrics(p.Reg)
+	p.Deps = h.Deps
+	p.Deps.Metrics = p.Metrics
+	p.Deps.Cfg.PodID = pod
+	p.Mgr = conversation.NewManager(p.Deps)
+	p.ctx, p.cancel = context.WithCancel(context.Background())
+	h.T.Cleanup(p.Close)
+	return p
 }
 
 // Send sends a client command on the open connection.
@@ -362,18 +407,22 @@ func (h *H) Send(ev protocol.ClientEvent) {
 	h.Conn.SendEvent(h.T, ev)
 }
 
-// AttachResult waits for Attach to return and returns its error.
+// AttachResult waits for the Attach of the current connection to return and returns its error.
 func (h *H) AttachResult() error {
 	h.T.Helper()
+	if h.cur == nil {
+		h.T.Fatal("rtharness: no Attach to wait for")
+	}
+	run := h.cur
 	h.WaitFor("Attach to return", func() bool {
 		select {
-		case <-h.done:
+		case <-run.done:
 			return true
 		default:
 			return false
 		}
 	})
-	return h.attachEr
+	return run.err
 }
 
 // ---- audio ----
@@ -503,14 +552,11 @@ func (h *H) Sync() {
 		if time.Now().After(deadline) {
 			h.T.Fatal("rtharness: Sync timed out")
 		}
-		select {
-		case <-h.done:
-			h.drainRuntime()
-			return
-		default:
-		}
 		r, ok := h.Runtime()
 		if !ok {
+			if h.attachDone() { // the runtime is gone and so is its connection
+				return
+			}
 			time.Sleep(200 * time.Microsecond)
 			continue
 		}
@@ -540,6 +586,19 @@ func (h *H) Sync() {
 			return
 		}
 		time.Sleep(200 * time.Microsecond)
+	}
+}
+
+// attachDone reports that the Attach of the current connection has returned.
+func (h *H) attachDone() bool {
+	if h.cur == nil {
+		return false
+	}
+	select {
+	case <-h.cur.done:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -657,9 +716,9 @@ func (h *H) Close() {
 	h.once.Do(func() {
 		h.Mgr.Close()
 		h.cancel()
-		if h.attached {
+		for _, run := range h.runs {
 			select {
-			case <-h.done:
+			case <-run.done:
 			case <-time.After(waitTimeout):
 				h.T.Error("rtharness: Attach did not return after Close")
 			}

@@ -167,7 +167,7 @@ func (r *Runtime) completeFailedTurn(toListening bool) {
 	}
 	fin := *t.failed
 	fin.CompletedAt = r.d.Clock.Now()
-	r.submit(FinalizeTurn{TurnID: t.id, Final: fin})
+	r.finalize(t.id, fin)
 	r.d.Metrics.Turn(string(session.TurnFailed))
 	tc := protocol.TurnCompleted{Status: string(session.TurnFailed), AssistantText: fin.AssistantText, AssistantSpokenText: fin.AssistantSpokenText}
 	if t.hasUser {
@@ -206,10 +206,13 @@ func (r *Runtime) endForFailedTurns() {
 		fmt.Errorf("conversation: %d consecutive failed turns", r.failedTurns))
 }
 
-// sttFailed ends the session for an STT error (§7.7.6, §7.11.4): the router has no other vendor to
+// sttFailed ends the session for an STT error, or a stream that closed unasked (§7.7.6, §7.11.4): the router has no other vendor to
 // move to, so the session ends PROVIDER_FAILURE; there is no PROVIDER_FALLBACK.
 func (r *Runtime) sttFailed(ev provider.STTEvent) {
 	cause := fmt.Errorf("conversation: stt error from %s", ev.Provider)
+	if ev.Type == provider.STTClosed {
+		cause = fmt.Errorf("conversation: stt stream of %s closed that nobody asked to close", ev.Provider)
+	}
 	if ev.Err != nil {
 		cause = fmt.Errorf("conversation: stt error from %s: %w", ev.Provider, ev.Err)
 	}

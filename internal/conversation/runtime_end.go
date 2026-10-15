@@ -22,7 +22,7 @@ const userEndGrace = 2
 // onSessionEnd is session.end (§7.11.3): remembered while STARTING, ignored once ending.
 func (r *Runtime) onSessionEnd() {
 	switch {
-	case r.status == session.StatusStarting:
+	case r.status == session.StatusStarting || r.takingOver:
 		r.pendingEnd = true
 	case r.ending || r.status != session.StatusActive:
 		// idempotent: a second session.end changes nothing
@@ -46,6 +46,9 @@ func (r *Runtime) endWith(reason session.EndReason, graceSeconds int) {
 	r.ending, r.accepting = true, false
 	ctx, cancel := r.ioCtx()
 	defer cancel()
+	if !r.settleDisconnected(ctx) { // a client that is away at the end: the time away is not charged (§7.10.1)
+		return
+	}
 	if err := r.d.Session.BeginEnding(ctx, r.sid, r.fence, reason); err != nil {
 		r.endCallFailed("BeginEnding", err)
 		return
@@ -73,7 +76,7 @@ func (r *Runtime) closeTurnForEnd() {
 	}
 	spokenCount := r.interruptGeneration("SESSION_ENDING")
 	spoken := g.spokenText(spokenCount)
-	r.submit(FinalizeTurn{TurnID: t.id, Final: r.finalOf(g, session.TurnInterrupted, spoken)})
+	r.finalize(t.id, r.finalOf(g, session.TurnInterrupted, spoken))
 	r.d.Metrics.Turn(string(session.TurnInterrupted))
 	text := g.g.Text()
 	r.emit("turn.completed", evMeta{turn: t}, protocol.TurnCompleted{
@@ -164,6 +167,9 @@ func (r *Runtime) fatal(reason session.EndReason, code errs.Code, cause error) {
 	r.failTurnSilently()
 	ctx, cancel := r.ioCtx()
 	defer cancel()
+	if !r.settleDisconnected(ctx) {
+		return
+	}
 	if err := r.d.Session.BeginEnding(ctx, r.sid, r.fence, reason); err != nil {
 		r.endCallFailed("BeginEnding", err)
 		return
@@ -208,7 +214,7 @@ func (r *Runtime) failTurnSilently() {
 		c := string(errs.CodeInternalError)
 		fin.ErrorCode = &c
 	}
-	r.submit(FinalizeTurn{TurnID: t.id, Final: fin})
+	r.finalize(t.id, fin)
 	r.d.Metrics.Turn(string(session.TurnFailed))
 	r.turn = nil
 	r.sync.ClearTurn()
@@ -235,6 +241,7 @@ func (r *Runtime) onFenceLost(err error) {
 		return
 	}
 	r.lg().Warn("fence lost: stopping without further writes", "error", err.Error())
+	r.latch.trip() // fence_lost_total once, whichever way the runtime found out (persister, owner key, TAKEOVER)
 	r.persister.Abort()
 	r.sync.Abort()
 	r.cancelGeneration()

@@ -26,9 +26,20 @@ type WrittenEvent struct {
 // err) fails the next append.
 type EventWriter struct {
 	FailInjector
-	mu     sync.Mutex
-	fence  int64
-	events []WrittenEvent
+	mu    sync.Mutex
+	fence int64
+	// FenceOf, when set, is the fence of the session in the database (SessionRuntime.Fence).
+	FenceOf  func(sid uuid.UUID) int64
+	events   []WrittenEvent
+	attempts []WriteAttempt
+}
+
+// Attempts returns every Append call so far in order (Method is the event type), the refused
+// ones included.
+func (w *EventWriter) Attempts() []WriteAttempt {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]WriteAttempt(nil), w.attempts...)
 }
 
 // NewEventWriter returns an empty writer.
@@ -43,17 +54,24 @@ func (w *EventWriter) SetFence(f int64) {
 
 // Append implements conversation.SessionEventWriter.
 func (w *EventWriter) Append(_ context.Context, fence int64, sid uuid.UUID, eventType string, turnID *uuid.UUID, payload any) error {
-	if err := w.Take("Append"); err != nil {
-		return err
-	}
+	taken := w.Take("Append")
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.fence != 0 && w.fence != fence {
-		return session.ErrFenceLost
+	if taken == nil && w.fence != 0 && w.fence != fence {
+		taken = session.ErrFenceLost
+	}
+	if taken == nil && w.FenceOf != nil {
+		if cur := w.FenceOf(sid); cur != 0 && cur != fence {
+			taken = session.ErrFenceLost
+		}
+	}
+	w.attempts = append(w.attempts, WriteAttempt{Method: eventType, Fence: fence, OK: taken == nil})
+	if taken != nil {
+		return taken
 	}
 	w.events = append(w.events, WrittenEvent{Fence: fence, SessionID: sid, Type: eventType, TurnID: turnID, Payload: raw})
 	return nil

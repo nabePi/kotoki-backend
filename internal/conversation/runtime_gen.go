@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nabePi/kotoki-backend/internal/conversation/protocol"
 	"github.com/nabePi/kotoki-backend/internal/conversation/rtstate"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
@@ -63,8 +65,9 @@ func (g *genRun) spokenText(k int) string {
 // startOpening is §7.6.3 step 9 for AI_FIRST: turn 0 (initiator AI, no user text), state
 // PROCESSING and the OPENING generation. USER_FIRST never gets here.
 func (r *Runtime) startOpening() {
-	if r.cs == nil { // the client left during the start: there is nobody to speak to (Task 21 resumes)
-		r.log.Warn("opening skipped: no connection")
+	if r.cs == nil { // the client left during the start: the opening plays when one resumes
+		r.log.Warn("opening postponed: no connection")
+		r.openingPending = true
 		return
 	}
 	now := r.d.Clock.Now()
@@ -209,6 +212,16 @@ func (r *Runtime) interruptGeneration(reason string) int {
 	spoken := 0
 	if r.cs != nil {
 		spoken = r.cs.writer.SentencesWritten(g.number)
+	}
+	return r.interruptGenerationWith(reason, spoken)
+}
+
+// interruptGenerationWith is interruptGeneration with the spoken-sentence count already known: a
+// disconnect reads it from the writer of the connection that is going away.
+func (r *Runtime) interruptGenerationWith(reason string, spoken int) int {
+	g := r.gen
+	if g == nil {
+		return 0
 	}
 	r.flushText(g) // the text the generation produced reaches the client before it is interrupted
 	r.cancelGeneration()
@@ -377,7 +390,7 @@ func (r *Runtime) closeTurn(status session.TurnStatus) {
 	spoken := g.spokenText(r.spokenCount(g))
 	r.flushText(g)
 	fin := r.finalOf(g, status, spoken)
-	r.submit(FinalizeTurn{TurnID: t.id, Final: fin})
+	r.finalize(t.id, fin)
 	r.d.Metrics.Turn(string(status))
 	text, spokenText := g.g.Text(), spoken
 	tc := protocol.TurnCompleted{Status: string(status), AssistantText: &text, AssistantSpokenText: &spokenText}
@@ -475,6 +488,13 @@ func (r *Runtime) pushTurn() {
 		}
 	}
 	r.sync.UpdateTurn(snap)
+}
+
+// finalize closes a turn row. The highest generation issued so far goes with it (§7.9.4: a takeover
+// that cannot read rt continues above the largest session_turns.generation).
+func (r *Runtime) finalize(id uuid.UUID, fin TurnFinal) {
+	fin.Generation = ptrInt(int(r.generation))
+	r.submit(FinalizeTurn{TurnID: id, Final: fin})
 }
 
 // submit queues a persister job. A refusal after a fence loss or a rejection is already being

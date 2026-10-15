@@ -251,6 +251,21 @@ func (s *RedisSync) Update(rt rtstate.RT) {
 	s.rt.put(rt, s.clk.Now())
 }
 
+// Seq keeps the rt snapshot's last_server_seq and last_durable_seq current without waiting for the
+// next full Update: a takeover (§7.10.3 step 8) continues the numbering from them and judges a
+// client's last_server_seq against them (§7.10.4), so they must not lag behind what clients have
+// been sent. It changes nothing before the first Update.
+func (s *RedisSync) Seq(last, durable int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.rt.set || (s.rt.val.LastServerSeq == last && s.rt.val.LastDurableSeq == durable) {
+		return
+	}
+	v := s.rt.val
+	v.LastServerSeq, v.LastDurableSeq = last, durable
+	s.rt.put(v, s.clk.Now())
+}
+
 // UpdateTurn replaces the snapshot of the turn in progress.
 func (s *RedisSync) UpdateTurn(t rtstate.TurnSnap) {
 	s.mu.Lock()

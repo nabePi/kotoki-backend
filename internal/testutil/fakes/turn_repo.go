@@ -21,7 +21,51 @@ type TurnRepo struct {
 	FailInjector
 	mu    sync.Mutex
 	fence int64
-	turns []session.Turn
+	// FenceOf, when set, is the fence of the session in the database (SessionRuntime.Fence): a write
+	// with another fence is session.ErrFenceLost, as the fenced SQL of spec 7.9.3 would answer.
+	FenceOf  func(sid uuid.UUID) int64
+	turns    []session.Turn
+	attempts []WriteAttempt
+	holds    map[string]chan struct{}
+}
+
+// Hold makes every call of method (Insert, UpdateUser, Finalize, FailInProgress) wait, before it is
+// counted as an attempt or checked against the fence, until the returned release is called: a
+// database that is slow, so the persister's queue fills behind the job in flight.
+func (r *TurnRepo) Hold(method string) (release func()) {
+	ch := make(chan struct{})
+	r.mu.Lock()
+	if r.holds == nil {
+		r.holds = map[string]chan struct{}{}
+	}
+	r.holds[method] = ch
+	r.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { close(ch) }) }
+}
+
+// wait blocks while method is held; the caller does not hold r.mu.
+func (r *TurnRepo) wait(method string) {
+	r.mu.Lock()
+	ch := r.holds[method]
+	r.mu.Unlock()
+	if ch != nil {
+		<-ch
+	}
+}
+
+// WriteAttempt is one write call, accepted or not, with the fence it carried.
+type WriteAttempt struct {
+	Method string
+	Fence  int64
+	OK     bool
+}
+
+// Attempts returns every write call so far in order, the refused ones included.
+func (r *TurnRepo) Attempts() []WriteAttempt {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.attempts)
 }
 
 // NewTurnRepo returns an empty repository without a fence guard.
@@ -48,14 +92,27 @@ func (r *TurnRepo) Turns(sid uuid.UUID) []session.Turn {
 	return out
 }
 
-func (r *TurnRepo) guard(method string, fence int64) error {
-	if err := r.Take(method); err != nil {
-		return err
+// guard is the fence check of a write; the caller holds r.mu. sid is the session the write is for.
+func (r *TurnRepo) guard(method string, fence int64, sid uuid.UUID) error {
+	err := r.Take(method)
+	if err == nil && r.fence != 0 && r.fence != fence {
+		err = session.ErrFenceLost
 	}
-	if r.fence != 0 && r.fence != fence {
-		return session.ErrFenceLost
+	if err == nil && r.FenceOf != nil {
+		if cur := r.FenceOf(sid); cur != 0 && cur != fence {
+			err = session.ErrFenceLost
+		}
 	}
-	return nil
+	r.attempts = append(r.attempts, WriteAttempt{Method: method, Fence: fence, OK: err == nil})
+	return err
+}
+
+// sessionOf is the session of turn id (uuid.Nil when unknown); the caller holds r.mu.
+func (r *TurnRepo) sessionOf(id uuid.UUID) uuid.UUID {
+	if t := r.find(id); t != nil {
+		return t.SessionID
+	}
+	return uuid.Nil
 }
 
 func (r *TurnRepo) find(id uuid.UUID) *session.Turn {
@@ -69,9 +126,10 @@ func (r *TurnRepo) find(id uuid.UUID) *session.Turn {
 
 // Insert implements conversation.TurnRepository.
 func (r *TurnRepo) Insert(_ context.Context, fence int64, t conversation.TurnStart) error {
+	r.wait("Insert")
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.guard("Insert", fence); err != nil {
+	if err := r.guard("Insert", fence, t.SessionID); err != nil {
 		return err
 	}
 	if r.find(t.ID) != nil {
@@ -83,9 +141,10 @@ func (r *TurnRepo) Insert(_ context.Context, fence int64, t conversation.TurnSta
 
 // UpdateUser implements conversation.TurnRepository.
 func (r *TurnRepo) UpdateUser(_ context.Context, fence int64, id uuid.UUID, u conversation.TurnUser) error {
+	r.wait("UpdateUser")
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.guard("UpdateUser", fence); err != nil {
+	if err := r.guard("UpdateUser", fence, r.sessionOf(id)); err != nil {
 		return err
 	}
 	t := r.find(id)
@@ -107,13 +166,17 @@ func apply(t *session.Turn, f conversation.TurnFinal) {
 	t.UsedFallback = f.UsedFallback
 	t.TurnEndToFirstAudioMS, t.LLMFirstTokenMS, t.TTSFirstAudioMS = f.TurnEndToFirstAudioMS, f.LLMFirstTokenMS, f.TTSFirstAudioMS
 	t.InputTokens, t.OutputTokens, t.TTSCharacters, t.ErrorCode = f.InputTokens, f.OutputTokens, f.TTSCharacters, f.ErrorCode
+	if f.Generation != nil {
+		t.Generation = *f.Generation
+	}
 }
 
 // Finalize implements conversation.TurnRepository; a turn already final is left as it is.
 func (r *TurnRepo) Finalize(_ context.Context, fence int64, id uuid.UUID, f conversation.TurnFinal) error {
+	r.wait("Finalize")
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.guard("Finalize", fence); err != nil {
+	if err := r.guard("Finalize", fence, r.sessionOf(id)); err != nil {
 		return err
 	}
 	t := r.find(id)
@@ -128,9 +191,10 @@ func (r *TurnRepo) Finalize(_ context.Context, fence int64, id uuid.UUID, f conv
 
 // FailInProgress implements conversation.TurnRepository: every turn without a status becomes FAILED.
 func (r *TurnRepo) FailInProgress(_ context.Context, fence int64, sid uuid.UUID, partial *conversation.TurnFinal) (int, error) {
+	r.wait("FailInProgress")
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.guard("FailInProgress", fence); err != nil {
+	if err := r.guard("FailInProgress", fence, sid); err != nil {
 		return 0, err
 	}
 	n := 0

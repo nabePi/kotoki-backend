@@ -60,7 +60,7 @@ func (r *Runtime) bargeIn(onsetMs int64) {
 		r.completeFailedTurn(false)
 	} else {
 		text, spokenText := g.g.Text(), g.spokenText(spoken)
-		r.submit(FinalizeTurn{TurnID: t.id, Final: r.finalOf(g, session.TurnInterrupted, spokenText)})
+		r.finalize(t.id, r.finalOf(g, session.TurnInterrupted, spokenText))
 		r.d.Metrics.Turn(string(session.TurnInterrupted))
 		tc := protocol.TurnCompleted{Status: string(session.TurnInterrupted), AssistantText: &text, AssistantSpokenText: &spokenText}
 		if t.hasUser {

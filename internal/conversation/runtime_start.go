@@ -48,6 +48,8 @@ type startResult struct {
 	// timedOut: a step ended because a deadline passed (the start deadline or a connect limit); the
 	// loop attributes it with timeoutFailure, the same way it does when it hits the deadline first.
 	timedOut bool
+	// takeover is what the loads of a takeover add (nil for a start).
+	takeover *takeoverResult
 }
 
 // goSafe is g.Go with the panic recovery of every runtime goroutine: a panic fails the start with
@@ -105,7 +107,12 @@ func (r *Runtime) startup(ctx context.Context) startResult {
 		attribute.String("session.id", r.sid.String()), attribute.Int64("fence", r.fence))
 	var err error
 	defer otel.End(span, &err)
-	res := r.runStartup(ctx)
+	var res startResult
+	if r.takeover != nil {
+		res = r.runTakeover(ctx)
+	} else {
+		res = r.runStartup(ctx)
+	}
 	err = res.err
 	result := "ok"
 	if err != nil {
@@ -310,6 +317,10 @@ func (r *Runtime) closeSTT(stt provider.RoutedSTTSession, cancel context.CancelF
 // onStartDone receives the result of the startup goroutine.
 func (r *Runtime) onStartDone(res startResult) {
 	r.handled++
+	if r.takeover != nil {
+		r.onTakeoverDone(res)
+		return
+	}
 	if r.startAborted { // the loop already failed the start at the deadline
 		r.closeSTT(res.stt, res.sttCancel)
 		return
@@ -354,8 +365,9 @@ func (r *Runtime) onStarted(res startResult) {
 	r.dl.startBy = time.Time{}
 	if r.connected {
 		r.moveState(SessionActive)
-	} else { // the client left while the session was starting
+	} else { // the client left while the session was starting: §7.10.1 as for any disconnect
 		r.moveState(SessionDetached)
+		r.enterDetached(r.disconnectedAt)
 	}
 	r.armTimers()
 	r.pushRT()

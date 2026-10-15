@@ -65,6 +65,7 @@ type turnRun struct {
 // recentTurn is one turn of the recentTurns ring (§7.7.5 step 1): what the prompt sees and what
 // the user actually heard (for the memory refresh).
 type recentTurn struct {
+	id     uuid.UUID
 	ctx    TurnContext
 	spoken string
 }
@@ -237,7 +238,7 @@ func (r *Runtime) interruptOpening(onsetMs int64) {
 	t, g := r.turn, r.gen
 	r.interruptGeneration("USER_RESUMED")
 	fin := r.finalOf(g, session.TurnInterrupted, "")
-	r.submit(FinalizeTurn{TurnID: t.id, Final: fin})
+	r.finalize(t.id, fin)
 	r.d.Metrics.Turn(string(session.TurnInterrupted))
 	text, spoken := g.g.Text(), ""
 	r.emit("turn.completed", evMeta{turn: t}, protocol.TurnCompleted{
@@ -277,6 +278,13 @@ func (r *Runtime) onSTTEvent(ev provider.STTEvent) {
 		// there is no other vendor: an STT error ends the session PROVIDER_FAILURE.
 		r.sttFailed(ev)
 	case provider.STTClosed:
+		// The runtime stops reading a stream before it closes it (dropSTT, exit), so a CLOSED that
+		// reaches the loop was nobody's request: the vendor ended the stream and the session has no
+		// STT any more. There is no other vendor to move to (D-017): PROVIDER_FAILURE.
+		if r.status == session.StatusActive && !r.ending {
+			r.sttFailed(ev)
+			return
+		}
 		r.lg().Info("stt closed")
 	}
 }
@@ -402,7 +410,7 @@ func (r *Runtime) sttAudioTotal() int64 {
 // session listens again. There is no generation, no APOLOGY and the failure counter is untouched.
 func (r *Runtime) discardTurn() {
 	t := r.turn
-	r.submit(FinalizeTurn{TurnID: t.id, Final: TurnFinal{CreatedAt: t.createdAt, Status: session.TurnDiscarded, CompletedAt: r.d.Clock.Now()}})
+	r.finalize(t.id, TurnFinal{CreatedAt: t.createdAt, Status: session.TurnDiscarded, CompletedAt: r.d.Clock.Now()})
 	r.d.Metrics.Turn(string(session.TurnDiscarded))
 	r.turnCount-- // turn_count excludes DISCARDED turns (§7.4.5 session.completed)
 	r.emit("turn.completed", evMeta{turn: t}, protocol.TurnCompleted{Status: string(session.TurnDiscarded)})
@@ -448,7 +456,7 @@ func (r *Runtime) postTurn(t *turnRun, status session.TurnStatus, assistant, spo
 		u := t.userText
 		tc.UserText = &u
 	}
-	r.recent = append(r.recent, recentTurn{ctx: tc, spoken: spoken})
+	r.recent = append(r.recent, recentTurn{id: t.id, ctx: tc, spoken: spoken})
 	if len(r.recent) > maxRecentTurns {
 		r.recent = append([]recentTurn(nil), r.recent[len(r.recent)-maxRecentTurns:]...)
 	}

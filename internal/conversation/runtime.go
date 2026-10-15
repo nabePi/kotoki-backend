@@ -75,6 +75,9 @@ type Deps struct {
 	// STTFinalTimeout is PROVIDER_TIMEOUT_STT_FINAL: the turn goes on with the running text when
 	// the FINAL of the TURN_END commit takes longer (§7.6.2). Zero → 1.5 s.
 	STTFinalTimeout time.Duration
+	// PodSubscribeBackoff is the wait before the TAKEOVER subscriber subscribes again (§7.9.4).
+	// Zero → 1 s.
+	PodSubscribeBackoff time.Duration
 }
 
 // withDefaults fills what a partial wiring leaves out; the tuning keeps the spec §7.2 defaults
@@ -100,6 +103,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.STTFinalTimeout <= 0 {
 		d.STTFinalTimeout = defaultSTTFinal
+	}
+	if d.PodSubscribeBackoff <= 0 {
+		d.PodSubscribeBackoff = defaultPodSubscribeBackoff
 	}
 	c := &d.Cfg
 	c.WSHandshakeTimeout = orDur(c.WSHandshakeTimeout, 10*time.Second)
@@ -145,7 +151,18 @@ type ctlFn func(r *Runtime)
 // sttMsg is one STT event on its way to the loop, or the marker of Runtime.Barrier.
 type sttMsg struct {
 	ev     provider.STTEvent
+	epoch  uint64 // the stream the event came from (Runtime.sttEpoch)
 	marker chan struct{}
+}
+
+// sttRecv is the forwarder of one STT stream: its goroutine moves the stream's events to the loop
+// and answers the Barrier markers in order with them. The loop stops it when the stream is closed
+// or replaced (a disconnect, §7.10.1); epoch tells the loop which stream an event belongs to.
+type sttRecv struct {
+	epoch uint64
+	sync  chan chan struct{} // Barrier markers
+	stop  chan struct{}      // closed by the loop
+	dead  chan struct{}      // closed when the goroutine has exited
 }
 
 // deadlines are the points in time Runtime.loop checks on every tick against clock.Now(): there
@@ -154,7 +171,7 @@ type sttMsg struct {
 // checkDeadlines and a handler; the tasks that extend the runtime do exactly that:
 //
 //	Task 19: sttFinal (STT_FINAL_TIMEOUT 1.5 s after the TURN_END commit; armed in endUserTurn)
-//	Task 21: reconnect (RECONNECT_WINDOW 30 s after a disconnect)
+//	Task 21: reconnect (RECONNECT_WINDOW 30 s after a disconnect), takeBy (the budget of a takeover)
 //	Task 22: grace (expires_at + SESSION_EXPIRY_GRACE) and the flush deadline of finish()
 //	Task 23: safepoint (DRAIN_SAFEPOINT_TIMEOUT)
 type deadlines struct {
@@ -165,6 +182,12 @@ type deadlines struct {
 	balance  time.Time // next balance.tick (aligned to elapsed multiples of 10 s)
 	playback time.Time // row 14: estimated end of playback + PLAYBACK_FINISH_GRACE_MS
 	sttFinal time.Time // STT_FINAL_TIMEOUT after the TURN_END commit (rows 3 → 7)
+	// reconnect is RECONNECT_WINDOW after the disconnect was noticed (§7.10.1): the session ends
+	// RECONNECT_TIMEOUT when no connection came back by then.
+	reconnect time.Time
+	// takeBy is the budget of the loads of a takeover (§7.10.3 step 7, 3 s); a takeover that is
+	// not ready by then ends the session SERVER_ERROR.
+	takeBy time.Time
 }
 
 // timedCancel is a context cancellation armed against the runtime clock (see cancelAt).
@@ -194,7 +217,8 @@ type timedCancel struct {
 //   - Turn engine (Task 19): audio pipeline in connState.startAudio, user turns in
 //     runtime_turn.go (rows 1–9), onSTTEvent, post-turn tasks in closeTurn.
 //   - Barge-in and failures (Task 20): onGenFailed branches for REPLY/APOLOGY, bargeIn.
-//   - Disconnect, resume, takeover (Task 21): detachConn, Manager.attachResume/takeover.
+//   - Disconnect, resume, takeover (Task 21): runtime_conn.go (detachConn, attach, takeover start),
+//     Manager.attachResume/takeover, replay.go.
 //   - End (Task 22): endSession/fatal/finish in runtime_end.go (grace, USER_SPEAKING/PROCESSING
 //     handling, expiry), panic recovery for generation goroutines.
 //   - Manager (Task 23): admission/drain around Manager.Attach and Runtime.drain.
@@ -227,8 +251,7 @@ type Runtime struct {
 	frameEvents chan frameEvent        // audio pipeline → loop (cap 64)
 	sttPipe     atomic.Pointer[sttBox] // the STT stream for the audio goroutine; the loop stores it
 	sttEvents   chan sttMsg            // sttReceiver → loop (cap 64)
-	sttSync     chan chan struct{}
-	genEvents   chan GenEvent // generation goroutines → loop (cap 128)
+	genEvents   chan GenEvent          // generation goroutines → loop (cap 128)
 	wg          sync.WaitGroup
 
 	// firstConn is the conn_id of the connection the runtime was created with (the startup goroutine
@@ -267,6 +290,16 @@ type Runtime struct {
 	ending         bool
 	stopped        bool
 	startAborted   bool // the loop gave up on the startup (timeout) before it reported
+	// discCounted: the seconds of the current disconnection are already with the persister
+	// (AddDisconnected is submitted once per episode, §7.10.1).
+	discCounted bool
+	// takeover is the input of a runtime that was created by a takeover (§7.10.3); nil otherwise.
+	// takingOver is true until its loads are done: the session takes no turn and no resume yet.
+	takeover   *takeoverInput
+	takingOver bool
+	// openingPending: an AI_FIRST session started with nobody attached; the opening plays once a
+	// client resumes.
+	openingPending bool
 
 	snap       ConfigSnapshot
 	voice      provider.VoiceSelection // voiceSelection(snapshot character), once per session (D-015)
@@ -278,6 +311,8 @@ type Runtime struct {
 
 	stt       provider.RoutedSTTSession
 	sttCancel context.CancelFunc
+	sttRecv   *sttRecv // the forwarder of stt; nil with no stream (detached)
+	sttEpoch  uint64   // the epoch of the current stream: events of an older one are dropped
 	sttSt     *sttState
 	det       *Detector // the turn detector (§7.6.2): audio time is its frames × 20 ms
 	audioMs   int64     // audio clock of sttSt = det.NowMs()
@@ -319,7 +354,9 @@ type Runtime struct {
 
 // newRuntime builds the Runtime of session sid owned with fence; cs is its first connection.
 // onExit is called once, from the loop goroutine, when the runtime has released everything.
-func newRuntime(parent context.Context, d Deps, rec session.RuntimeRecord, fence int64, cs *connState, seen *EventIDCache, onExit func(*Runtime)) *Runtime {
+func newRuntime(parent context.Context, d Deps, rec session.RuntimeRecord, fence int64, cs *connState, seen *EventIDCache,
+	onExit func(*Runtime), syncOpts ...RedisSyncOption,
+) *Runtime {
 	ctx, cancel := context.WithCancel(parent)
 	r := &Runtime{
 		d: d, sid: rec.ID, uid: rec.UserID, pod: d.Cfg.PodID, fence: fence, rec: rec,
@@ -331,7 +368,6 @@ func newRuntime(parent context.Context, d Deps, rec session.RuntimeRecord, fence
 		fatalCh:     make(chan error, 1),
 		frameEvents: make(chan frameEvent, 64),
 		sttEvents:   make(chan sttMsg, 64),
-		sttSync:     make(chan chan struct{}),
 		genEvents:   make(chan GenEvent, 128),
 		status:      session.StatusStarting,
 		turnState:   StateListening,
@@ -345,10 +381,12 @@ func newRuntime(parent context.Context, d Deps, rec session.RuntimeRecord, fence
 		PersisterClock(d.Clock), PersisterFenceLatch(r.latch),
 		PersisterOnFenceLost(func(err error) { signal(r.fenceLost, err) }),
 		PersisterOnFatal(func(err error) { signal(r.fatalCh, err) }))
-	r.sync = NewRedisSync(d.Store, d.Clock, rec.ID, r.pod, fence, d.Metrics, d.Log,
-		RedisSyncTuning(d.Cfg), RedisSyncSessionDuration(time.Duration(rec.DurationSeconds)*time.Second),
+	syncOpts = append([]RedisSyncOption{
+		RedisSyncTuning(d.Cfg), RedisSyncSessionDuration(time.Duration(rec.DurationSeconds) * time.Second),
 		RedisSyncFenceLatch(r.latch), RedisSyncTicker(d.NewTicker),
-		RedisSyncOnFenceLost(func(err error) { signal(r.fenceLost, err) }))
+		RedisSyncOnFenceLost(func(err error) { signal(r.fenceLost, err) }),
+	}, syncOpts...)
+	r.sync = NewRedisSync(d.Store, d.Clock, rec.ID, r.pod, fence, d.Metrics, d.Log, syncOpts...)
 	r.sttSt = newSTTState(func() int64 { return r.audioMs })
 	r.adoptConn(cs)
 	return r
@@ -505,12 +543,21 @@ func (r *Runtime) checkDeadlines(now time.Time) {
 		r.dl.startBy = time.Time{}
 		r.onStartTimeout()
 	}
+	if r.takingOver && due(r.dl.takeBy) {
+		r.dl.takeBy = time.Time{}
+		r.onTakeoverTimeout()
+	}
 	if r.stopped || r.status != session.StatusActive {
 		return
 	}
 	if due(r.dl.expiry) {
 		r.dl.expiry = time.Time{}
 		r.onExpiry()
+		return
+	}
+	if due(r.dl.reconnect) {
+		r.dl.reconnect = time.Time{}
+		r.onReconnectTimeout(now)
 		return
 	}
 	for len(r.dl.warn) > 0 && due(r.dl.warn[0]) {
@@ -626,6 +673,7 @@ type View struct {
 	Generation  uint32
 	NextTurnSeq int
 	ServerSeq   int64
+	LastDurable int64     // the server_seq of the last durable event (the replay stream's tip)
 	CurrentTurn uuid.UUID // uuid.Nil: no turn in progress
 	PendingEnd  bool
 	// FailedTurns is consecutiveFailedTurns and ContentFilteredTurns the separate S-9 counter
@@ -645,7 +693,7 @@ func (r *Runtime) View(ctx context.Context) (View, error) {
 	var v View
 	err := r.call(ctx, func(r *Runtime) {
 		v = View{Status: r.status, TurnState: r.turnState, Accepting: r.accepting, Connected: r.connected,
-			Generation: r.generation, NextTurnSeq: r.nextTurnSeq, ServerSeq: r.serverSeq, PendingEnd: r.pendingEnd,
+			Generation: r.generation, NextTurnSeq: r.nextTurnSeq, ServerSeq: r.serverSeq, LastDurable: r.lastDurable, PendingEnd: r.pendingEnd,
 			FailedTurns: r.failedTurns, ContentFilteredTurns: r.contentFilteredTurns,
 			Handled: r.handled, OutboundDrained: r.cs == nil || r.cs.out.Drained()}
 		if r.turn != nil {
@@ -662,8 +710,8 @@ func (r *Runtime) View(ctx context.Context) (View, error) {
 // rtharness.H.Sync.
 func (r *Runtime) Barrier(ctx context.Context) error {
 	var cs *connState
-	var haveSTT bool
-	if err := r.call(ctx, func(r *Runtime) { cs, haveSTT = r.cs, r.stt != nil }); err != nil {
+	var recv *sttRecv
+	if err := r.call(ctx, func(r *Runtime) { cs, recv = r.cs, r.sttRecv }); err != nil {
 		return err
 	}
 	if cs != nil {
@@ -684,10 +732,10 @@ func (r *Runtime) Barrier(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
-	if haveSTT {
+	if recv != nil {
 		marker := make(chan struct{})
 		select {
-		case r.sttSync <- marker:
+		case recv.sync <- marker:
 			select {
 			case <-marker:
 			case <-r.doneCh:
@@ -695,6 +743,7 @@ func (r *Runtime) Barrier(ctx context.Context) error {
 			case <-ctx.Done():
 				return ctx.Err()
 			}
+		case <-recv.dead: // the stream was closed meanwhile: nothing to wait for on this path
 		case <-r.doneCh:
 			return errRuntimeStopped
 		case <-ctx.Done():
@@ -779,22 +828,6 @@ func (r *Runtime) protocolViolation(pe *ProtocolError) {
 	}
 }
 
-// detachConn drops the connection cs. Task 21 extends it with §7.10.1 (cancel the generation,
-// fail the turn in progress, close STT, start the reconnect timer); Task 18 only releases the
-// connection and records that the client is gone.
-func (r *Runtime) detachConn(cs *connState, who string) {
-	if r.cs != cs {
-		return
-	}
-	code := exitCloseCode(who)
-	cs.closeNow(code, closeReason(code)) // idempotent: the first close wins (a violation or slow-consumer close is already under way)
-	r.cs, r.cmdCh, r.notices, r.writerAcks, r.connExits = nil, nil, nil, nil, nil
-	r.connected = false
-	r.disconnectedAt = r.d.Clock.Now()
-	r.moveState(SessionDetached)
-	r.pushRT()
-}
-
 // moveState moves this runtime between the labels of sessions_active; "" removes it.
 func (r *Runtime) moveState(to string) {
 	if r.metricState == to {
@@ -844,6 +877,7 @@ func (r *Runtime) emit(typ string, m evMeta, payload any) {
 		r.lastDurable = ev.ServerSeq
 	}
 	r.sync.Event(ev, env)
+	r.sync.Seq(r.serverSeq, r.lastDurable)
 	if r.cs == nil {
 		return
 	}
@@ -941,25 +975,35 @@ func (r *Runtime) onCommand(ev protocol.ClientEvent) {
 	}
 }
 
-// onSTTMsg handles one message of the STT receiver.
+// onSTTMsg handles one message of the STT receiver. An event of a stream that is no longer the
+// current one (closed on a disconnect, replaced on a resume) is dropped.
 func (r *Runtime) onSTTMsg(m sttMsg) {
 	if m.marker != nil { // a Barrier marker is not input: it must not move Handled
 		close(m.marker)
 		return
 	}
 	r.handled++
+	if m.epoch != r.sttEpoch || r.stt == nil {
+		return
+	}
 	r.onSTTEvent(m.ev)
 }
 
 // startSTTReceiver forwards the STT stream to the loop (§7.7.2 sttReceiver). A Barrier request
 // is answered in order with the events: the receiver first moves what the stream already holds.
 func (r *Runtime) startSTTReceiver(stt provider.RoutedSTTSession) {
+	r.sttEpoch++
+	rc := &sttRecv{epoch: r.sttEpoch, sync: make(chan chan struct{}), stop: make(chan struct{}), dead: make(chan struct{})}
+	r.sttRecv = rc
 	r.goSafe("stt receiver", func() {
+		defer close(rc.dead)
 		events := stt.Events()
 		forward := func(ev provider.STTEvent) bool {
 			select {
-			case r.sttEvents <- sttMsg{ev: ev}:
+			case r.sttEvents <- sttMsg{ev: ev, epoch: rc.epoch}:
 				return true
+			case <-rc.stop:
+				return false
 			case <-r.ctx.Done():
 				return false
 			}
@@ -968,15 +1012,17 @@ func (r *Runtime) startSTTReceiver(stt provider.RoutedSTTSession) {
 			select {
 			case <-r.ctx.Done():
 				return
+			case <-rc.stop:
+				return
 			case ev, ok := <-events:
 				if !ok {
-					events = nil // closed: keep answering barrier markers until the runtime ends
+					events = nil // closed: keep answering barrier markers until the loop stops us
 					continue
 				}
 				if !forward(ev) {
 					return
 				}
-			case marker := <-r.sttSync:
+			case marker := <-rc.sync:
 				for moved := true; moved; {
 					select {
 					case ev, ok := <-events:
@@ -994,6 +1040,9 @@ func (r *Runtime) startSTTReceiver(stt provider.RoutedSTTSession) {
 				}
 				select {
 				case r.sttEvents <- sttMsg{marker: marker}:
+				case <-rc.stop:
+					close(marker)
+					return
 				case <-r.ctx.Done():
 					close(marker)
 					return
@@ -1001,6 +1050,22 @@ func (r *Runtime) startSTTReceiver(stt provider.RoutedSTTSession) {
 			}
 		}
 	})
+}
+
+// dropSTT closes the STT stream and its forwarder (§7.10.1: nothing is sent while the client is
+// away). The stream's remaining events are never read: the forwarder stops and the epoch moves.
+func (r *Runtime) dropSTT() {
+	r.sttPipe.Store(nil)
+	if r.sttRecv != nil {
+		close(r.sttRecv.stop)
+		r.sttRecv = nil
+	}
+	r.sttEpoch++
+	stt, cancel := r.stt, r.sttCancel
+	r.stt, r.sttCancel = nil, nil
+	if stt != nil || cancel != nil { // Close may wait for the vendor (500 ms): not on the loop
+		r.goSafe("stt close", func() { r.closeSTT(stt, cancel) })
+	}
 }
 
 // goSafe runs fn on a goroutine the runtime waits for in exit. A panic is recovered and reported to

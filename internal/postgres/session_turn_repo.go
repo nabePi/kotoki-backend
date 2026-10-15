@@ -93,7 +93,7 @@ func (r *turnRepo) Finalize(ctx context.Context, fence int64, turnID uuid.UUID, 
 		TtsVoiceID: textPtr(f.TTSVoiceID), UsedFallback: f.UsedFallback, TurnEndToFirstAudioMs: optInt4(f.TurnEndToFirstAudioMS),
 		LlmFirstTokenMs: optInt4(f.LLMFirstTokenMS), TtsFirstAudioMs: optInt4(f.TTSFirstAudioMS), InputTokens: optInt4(f.InputTokens),
 		OutputTokens: optInt4(f.OutputTokens), TtsCharacters: optInt4(f.TTSCharacters), ErrorCode: textPtr(f.ErrorCode),
-		CompletedAt: tsz(f.CompletedAt), ID: turnID, CreatedAt: tsz(f.CreatedAt), Fence: fence,
+		CompletedAt: tsz(f.CompletedAt), Generation: optInt4(f.Generation), ID: turnID, CreatedAt: tsz(f.CreatedAt), Fence: fence,
 	})
 	return fenced(n, err, "finalize turn")
 }

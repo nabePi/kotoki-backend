@@ -64,6 +64,13 @@ func (s *RuntimeStore) Owner(sid uuid.UUID) (pod string, fence int64, ok bool) {
 	return o.pod, o.fence, ok
 }
 
+// Subscribers is how many subscriptions to the channel of pod are open.
+func (s *RuntimeStore) Subscribers(pod string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.subs[pod])
+}
+
 // PodInfo returns the last PodInfo written for pod, for assertions.
 func (s *RuntimeStore) PodInfo(pod string) (rtstate.PodInfo, bool) {
 	s.mu.Lock()

@@ -7,6 +7,8 @@ import (
 	dto "github.com/prometheus/client_model/go"
 
 	"github.com/nabePi/kotoki-backend/internal/content"
+	"github.com/nabePi/kotoki-backend/internal/conversation/rtstate"
+	"github.com/nabePi/kotoki-backend/internal/learner"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"github.com/nabePi/kotoki-backend/internal/provider"
 	"github.com/nabePi/kotoki-backend/internal/session"
@@ -166,3 +168,26 @@ func (r *Runtime) BargeInBehindTheLoop(ctx context.Context, entered chan<- struc
 	})
 	return unread, err
 }
+
+// FlushPersister waits until every job the runtime submitted is written.
+func (r *Runtime) FlushPersister(ctx context.Context) error { return r.persister.Flush(ctx) }
+
+// AdaptiveForTest is the adaptive difficulty the runtime currently uses.
+func (r *Runtime) AdaptiveForTest(ctx context.Context) (learner.AdaptiveDifficulty, error) {
+	var ad learner.AdaptiveDifficulty
+	err := r.call(ctx, func(r *Runtime) { ad = r.adaptive.Current })
+	return ad, err
+}
+
+// SetEnding makes the runtime look like a session whose end has begun (ENDING, no turns), without
+// ending it: the state a resume must refuse (§7.10.2 step 3). Task 22 reaches it for real while the
+// expiry grace of an AI that is still speaking runs.
+func (r *Runtime) SetEnding(ctx context.Context) error {
+	return r.call(ctx, func(r *Runtime) { r.ending, r.accepting, r.status = true, false, session.StatusEnding })
+}
+
+// HandleTakeover is what the TAKEOVER subscriber does with a message, called synchronously.
+func HandleTakeover(m *Manager, t rtstate.Takeover) { m.onTakeover(t) }
+
+// PersisterPending is how many jobs wait behind the one the persister is writing.
+func (r *Runtime) PersisterPending() int { return r.persister.Pending() }

@@ -41,8 +41,8 @@ const (
 // socket; the Manager imports no WebSocket library.
 //
 // Task 18 holds the skeleton: admission by capacity, the handshake, the start flow. Task 21 adds
-// resume and takeover (the resume seam below, and the TAKEOVER subscriber); Task 23 adds the
-// drain around Attach, podinfo and the draining flag.
+// resume on the pod that holds the runtime, the takeover of a session from another pod and the
+// TAKEOVER subscriber; Task 23 adds the drain around Attach, podinfo and the draining flag.
 type Manager struct {
 	d      Deps
 	ctx    context.Context // podCtx: ends every runtime
@@ -52,11 +52,12 @@ type Manager struct {
 	runtimes map[uuid.UUID]*Runtime
 	pending  int // start flows between the capacity check and the registry
 	rwg      sync.WaitGroup
+	bg       sync.WaitGroup // the TAKEOVER subscriber
 
-	// resume is the entry of the resume flow (§7.10.2) for a session that is ACTIVE: the same pod
-	// takes the connection over, another pod takes the session over. Task 21 implements
-	// attachResume; Task 18 only routes to it (a session.start on an ACTIVE session goes the same
-	// way with last_server_seq 0, §7.3.2).
+	// resume is the entry of the resume flow (§7.10) for a session that is ACTIVE: the pod that holds
+	// the runtime gives it the connection (attachResume), another pod takes the session over
+	// (takeover). A session.start on an ACTIVE session goes the same way with last_server_seq 0
+	// (§7.3.2).
 	resume func(ctx context.Context, h *handshake, rec session.RuntimeRecord, lastServerSeq int64) error
 }
 
@@ -67,6 +68,7 @@ func NewManager(d Deps) *Manager {
 	m := &Manager{d: d, ctx: ctx, cancel: cancel, runtimes: map[uuid.UUID]*Runtime{}}
 	m.resume = m.attachResume
 	d.Metrics.SetSessionCapacity(d.Limits.Max)
+	m.subscribe()
 	return m
 }
 
@@ -91,13 +93,18 @@ func (m *Manager) Runtime(sid uuid.UUID) (*Runtime, bool) {
 func (m *Manager) Close() {
 	m.cancel()
 	m.rwg.Wait()
+	m.bg.Wait()
 }
 
 // reserve takes a slot for a new start; false when the pod is at REALTIME_MAX_SESSIONS (4503).
-func (m *Manager) reserve() bool {
+func (m *Manager) reserve() bool { return m.reserveUpTo(m.d.Limits.Max) }
+
+// reserveUpTo takes a slot unless the pod already holds limit sessions: Max for a new start,
+// HardMax for a takeover (a session that already exists may still be resumed up to there, §7.12.2).
+func (m *Manager) reserveUpTo(limit int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.runtimes)+m.pending >= m.d.Limits.Max {
+	if len(m.runtimes)+m.pending >= limit {
 		return false
 	}
 	m.pending++
@@ -184,6 +191,9 @@ func (m *Manager) Attach(ctx context.Context, conn Conn, t AttachTicket) error {
 	}
 
 	seen := NewEventIDCache()
+	if r, ok := m.Runtime(t.SessionID); ok { // the dedupe of client event_ids outlives the connection (§7.4.2)
+		seen = r.seen
+	}
 	cs := newConnState(ctx, m.d, conn, t.SessionID, seen)
 	cs.start()
 	defer cs.wait()
@@ -320,11 +330,13 @@ func (m *Manager) dispatchFirst(ctx context.Context, h *handshake, rec session.R
 	return h.fail(errs.CodeProtocolViolation)
 }
 
-// attachResume is the seam of the resume flow (§7.10). Task 21 replaces it; until then a
-// connection to an ACTIVE session is told to try later (SERVICE_UNAVAILABLE, 4503).
-func (m *Manager) attachResume(_ context.Context, h *handshake, _ session.RuntimeRecord, _ int64) error {
-	m.d.Metrics.Connection(ConnRejectedUnavailable)
-	return h.fail(errs.CodeServiceUnavailable)
+// attachResume is the resume flow (§7.10) for a session that is ACTIVE: the pod that holds the
+// runtime gives it the new connection, any other pod takes the session over.
+func (m *Manager) attachResume(ctx context.Context, h *handshake, rec session.RuntimeRecord, lastServerSeq int64) error {
+	if r, ok := m.Runtime(rec.ID); ok {
+		return m.resumeSamePod(ctx, h, r, lastServerSeq)
+	}
+	return m.takeover(ctx, h, rec, lastServerSeq)
 }
 
 // startRuntime is §7.6.3 steps 1–2 followed by the hand-over: capacity, ClaimRuntime, MarkStarting,

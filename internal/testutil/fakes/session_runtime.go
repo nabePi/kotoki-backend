@@ -56,6 +56,27 @@ func (r *SessionRuntime) Claims() [][]session.Status {
 	return append([][]session.Status(nil), r.claims...)
 }
 
+// Fence returns runtime_fence of a session (0 when unknown), the number the fenced writes of the
+// other fakes compare against.
+func (r *SessionRuntime) Fence(id uuid.UUID) int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s := r.sessions[id]; s != nil {
+		return s.rec.RuntimeFence
+	}
+	return 0
+}
+
+// Status returns the status of a session, for assertions.
+func (r *SessionRuntime) Status(id uuid.UUID) session.Status {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s := r.sessions[id]; s != nil {
+		return s.rec.Status
+	}
+	return ""
+}
+
 // Disconnected returns disconnected_seconds of a session, for assertions.
 func (r *SessionRuntime) Disconnected(id uuid.UUID) int {
 	r.mu.Lock()
