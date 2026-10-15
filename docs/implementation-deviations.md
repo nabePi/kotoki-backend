@@ -123,3 +123,9 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - Heartbeat menutup koneksi sendiri (`Close(4102, "HEARTBEAT_TIMEOUT")`, best effort, kontrol frame — bukan `Write`) lalu mengembalikan `ErrHeartbeatTimeout`; ping gagal tidak fatal, hanya aturan idle `now − lastActivity > 45 s` (dicek tiap tick 15 s, jadi deteksi 45–60 s).
 - `Conn` in-memory (`pipeConn`) ada di `internal/conversation/conn_test.go` (helper tes, bersama `fakeTimeouts`, `manualTicker`); `testutil/rtharness/pipeconn.go` (Task 18) dibuat terpisah dengan pola yang sama karena rtharness mengimpor `conversation`.
 - Komentar paket di `ports.go` diperbarui: `conversation` kini mengimpor `conversation/audio` (cgo) dan hanya berada di graf realtime.
+
+## M5-T11 — Pacer downstream
+- Spec §7.5.4 memakai `sleepCtx(min(20ms, lead−MAX+1))`; bila penyebab tunggu hanya backpressure (`lead < MAX` tetapi `AudioLen() >= 25`) nilai itu ≤ 0 dan menjadi busy-loop, jadi pacer tidur 20 ms (satu frame) pada kasus itu.
+- Penanda akhir `EnqueueAudioEnd` (tidak ada di spec §7.5.4; kebutuhan ack `AUDIO_WRITTEN_ALL` §7.7.4) hanya untuk akhir normal dengan ≥ 1 frame; generation tanpa audio tidak di-ack (tidak ada yang ditulis) dan yang dibatalkan ctx tidak pernah ditandai.
+- `OnSentenceStart` dipanggil setelah `EnqueueAudio` (dan setelah `OnFirst` untuk frame pertama), bukan sebelum.
+- Setelah `sleep` kembali, pacer memeriksa ulang `ctx.Err()` agar `sleep` yang mengabaikan ctx tetap membatalkan Run.
