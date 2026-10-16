@@ -252,3 +252,18 @@ func TestOpenAISTTSpanOnError(t *testing.T) {
 	require.Equal(t, "error", attrs["provider.outcome"])
 	require.Equal(t, "UNAVAILABLE", attrs["provider.error_kind"])
 }
+
+// Regression (M9-T13, found driving the adapter through rotatingSTT): after the VENDOR ended the
+// session, SendAudio and Finalize do not fail with ErrSessionClosed, which the port reserves for
+// after Close. The ERROR and CLOSED events carry the failure; refusing audio in the gap before
+// the router has read ERROR would surface a rotation (spec 8.5.8) to the runtime as a failure.
+func TestOpenAISTTAfterVendorErrorSendAndFinalizeAreDropped(t *testing.T) {
+	srv := replay.NewWSServer(t, recording(t, "stt_session_limit"))
+	sess := openSession(t, srv, nil)
+	_ = expectErrorThenClosed(t, sess)
+	require.NoError(t, sess.SendAudio(make([]byte, 640)))
+	require.NoError(t, sess.Finalize())
+	require.NoError(t, sess.Close())
+	require.ErrorIs(t, sess.SendAudio(make([]byte, 640)), provider.ErrSessionClosed)
+	require.ErrorIs(t, sess.Finalize(), provider.ErrSessionClosed)
+}

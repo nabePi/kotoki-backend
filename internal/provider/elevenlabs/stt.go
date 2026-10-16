@@ -114,10 +114,12 @@ type sttSession struct {
 	mu           sync.Mutex
 	closed       bool
 	userClosed   bool
+	failed       bool // finish emitted an ERROR: the vendor (or the wire) ended the session
 	abortErr     *provider.Error
 	ops          []sttOp
 	queuedBytes  int
-	audioSent    int64 // bytes of real audio written to the socket (silence excluded)
+	audioSent    int64 // bytes of real audio written to the socket (silence excluded); drives segment spans
+	accepted     int64 // bytes of real audio accepted by SendAudio; reported as Stats().AudioMsSent
 	segStartMs   int64
 	commits      []*commitState // one per commit, in send order
 	synthOwed    int            // synthetic FINALs whose real committed_transcript is still to come
@@ -277,7 +279,7 @@ func (se *sttSession) Events() <-chan provider.STTEvent { return se.q.out }
 func (se *sttSession) Stats() provider.STTStats {
 	se.mu.Lock()
 	defer se.mu.Unlock()
-	return provider.STTStats{AudioMsSent: se.audioSent / sttBytesPerMs, OpenedAt: se.openedAt, FirstEventAt: se.firstEventAt}
+	return provider.STTStats{AudioMsSent: se.accepted / sttBytesPerMs, OpenedAt: se.openedAt, FirstEventAt: se.firstEventAt}
 }
 
 // SendAudio queues PCM16LE mono 16 kHz; it never blocks and refuses more than 2 s of backlog.
@@ -287,7 +289,11 @@ func (se *sttSession) SendAudio(pcm []byte) error {
 	}
 	se.mu.Lock()
 	if se.closed {
+		gone := se.failed && !se.userClosed
 		se.mu.Unlock()
+		if gone { // the vendor ended the session: ERROR/CLOSED carry it; audio and Finalize are dropped
+			return nil
+		}
 		return provider.ErrSessionClosed
 	}
 	if len(pcm) == 0 {
@@ -306,6 +312,7 @@ func (se *sttSession) SendAudio(pcm []byte) error {
 		se.ops = append(se.ops, sttOp{pcm: append([]byte(nil), pcm...)})
 	}
 	se.queuedBytes += len(pcm)
+	se.accepted += int64(len(pcm))
 	se.mu.Unlock()
 	se.signal()
 	return nil
@@ -322,7 +329,11 @@ func (se *sttSession) signal() {
 func (se *sttSession) Finalize() error {
 	se.mu.Lock()
 	if se.closed {
+		gone := se.failed && !se.userClosed
 		se.mu.Unlock()
+		if gone { // the vendor ended the session: ERROR/CLOSED carry it; audio and Finalize are dropped
+			return nil
+		}
 		return provider.ErrSessionClosed
 	}
 	se.ops = append(se.ops, sttOp{finalize: true})
@@ -592,6 +603,7 @@ func (se *sttSession) finish(err *provider.Error) {
 		if se.abortErr != nil {
 			err = se.abortErr
 		}
+		se.failed = err != nil
 		user := se.userClosed
 		for _, t := range se.timers {
 			t.Stop()

@@ -385,6 +385,14 @@ func TestOpenAISTTUsageAudioMsSent(t *testing.T) {
 	require.False(t, st.FirstEventAt.IsZero())
 }
 
+// Regression (M9-T13, found by STTSuite): AudioMsSent counts the audio SendAudio accepted, not what
+// the writer goroutine has put on the socket yet.
+func TestOpenAISTTStatsCountAcceptedAudioAtOnce(t *testing.T) {
+	sess := openSession(t, replay.NewWSServer(t, recording(t, "stt_basic")), nil)
+	require.NoError(t, sess.SendAudio(make([]byte, 32000)))
+	require.EqualValues(t, 1000, sess.Stats().AudioMsSent)
+}
+
 func TestOpenAISTTTapSeesFrames(t *testing.T) {
 	srv := replay.NewWSServer(t, recording(t, "stt_basic"))
 	var dirs []string

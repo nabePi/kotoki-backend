@@ -48,6 +48,8 @@ linters:
             - "!**/internal/provider/openai/**"
             - "!**/internal/provider/elevenlabs/**"
             - "!**/internal/provider/cartesia/**"
+            - "!**/internal/provider/deepseek/**"
+            - "!**/internal/provider/adapters*_test.go"   # conformance/hygiene tests build the real adapters (M9-T13)
             - "!**/internal/provider/gemini/**"
             - "!**/internal/provider/azure/**"
             - "**/internal/evaluation/**"
@@ -74,6 +76,7 @@ linters:
             - {pkg: "github.com/nabePi/kotoki-backend/internal/jobs", desc: "D-005: job memanggil Service fitur, bukan sebaliknya"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/elevenlabs", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/cartesia", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/deepseek", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/deepgram", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/openai", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/gemini", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}

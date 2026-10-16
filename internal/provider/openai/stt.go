@@ -110,6 +110,7 @@ type sttSession struct {
 	mu             sync.Mutex
 	closed         bool
 	userClosed     bool
+	failed         bool // finish emitted an ERROR: the vendor (or the wire) ended the session
 	abortErr       *provider.Error
 	ops            []sttOp
 	queuedBytes    int
@@ -311,11 +312,12 @@ func (se *sttSession) run() {
 // Events is buffered; see eventQueue.
 func (se *sttSession) Events() <-chan provider.STTEvent { return se.q.out }
 
-// Stats reports the audio sent (16 kHz sample basis) and timestamps.
+// Stats reports the audio accepted by SendAudio (16 kHz sample basis; the writer may still hold
+// it in a batch) and timestamps.
 func (se *sttSession) Stats() provider.STTStats {
 	se.mu.Lock()
 	defer se.mu.Unlock()
-	return provider.STTStats{AudioMsSent: se.audioSent / sttBytesPerMs, OpenedAt: se.openedAt, FirstEventAt: se.firstEventAt}
+	return provider.STTStats{AudioMsSent: se.acceptedBytes / sttBytesPerMs, OpenedAt: se.openedAt, FirstEventAt: se.firstEventAt}
 }
 
 // SendAudio queues PCM16LE mono 16 kHz; it never blocks and refuses more than 2 s of backlog.
@@ -325,7 +327,11 @@ func (se *sttSession) SendAudio(pcm []byte) error {
 	}
 	se.mu.Lock()
 	if se.closed {
+		gone := se.failed && !se.userClosed
 		se.mu.Unlock()
+		if gone { // the vendor ended the session: ERROR/CLOSED carry it; audio and Finalize are dropped
+			return nil
+		}
 		return provider.ErrSessionClosed
 	}
 	if len(pcm) == 0 {
@@ -361,7 +367,11 @@ func (se *sttSession) signal() {
 func (se *sttSession) Finalize() error {
 	se.mu.Lock()
 	if se.closed {
+		gone := se.failed && !se.userClosed
 		se.mu.Unlock()
+		if gone { // the vendor ended the session: ERROR/CLOSED carry it; audio and Finalize are dropped
+			return nil
+		}
 		return provider.ErrSessionClosed
 	}
 	if se.acceptedBytes == se.committedBytes { // nothing since the last commit: the vendor would reject it
@@ -664,6 +674,7 @@ func (se *sttSession) finish(err *provider.Error) {
 		if se.abortErr != nil {
 			err = se.abortErr
 		}
+		se.failed = err != nil
 		user := se.userClosed
 		for _, t := range se.timers {
 			t.Stop()

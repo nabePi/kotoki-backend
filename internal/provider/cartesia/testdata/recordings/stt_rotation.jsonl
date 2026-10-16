@@ -1,0 +1,5 @@
+{"meta":{"vendor":"CARTESIA","capability":"STT","source":"GUESS: the Cartesia STT docs state no session duration limit and no error_code for one; one-shot error with error_code __CODE__ (placeholder filled by TestAdapterRotationSignalMatchesRouter), then a normal session; invented for the fixture, unverified","verified":false}}
+{"ws_upgrade":{"path":"/stt/websocket","headers":{"X-API-Key":"ct-test-key"}}}
+{"ws":{"dir":"on","match":{"binary":true},"times":1,"send":[{"at_ms":0,"text":"{\"type\": \"error\", \"status_code\": 408, \"title\": \"Request Timeout\", \"message\": \"Maximum session duration reached\", \"error_code\": \"__CODE__\", \"request_id\": \"req_fixture\"}"}]}}
+{"ws":{"dir":"on","match":{"binary":true}}}
+{"ws":{"dir":"on","match":{"raw_text":"finalize"},"send":[{"at_ms":0,"text":"{\"type\": \"transcript\", \"is_final\": true, \"request_id\": \"req_fixture\", \"text\": \"日本語の勉強\", \"duration\": 0.2}"},{"at_ms":0,"text":"{\"type\": \"flush_done\", \"request_id\": \"req_fixture\"}"}]}}

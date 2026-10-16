@@ -119,6 +119,7 @@ type sttSession struct {
 	mu           sync.Mutex
 	closed       bool
 	userClosed   bool
+	failed       bool // finish emitted an ERROR: the vendor (or the wire) ended the session
 	abortErr     *provider.Error
 	ops          []sttOp
 	queuedBytes  int
@@ -292,7 +293,11 @@ func (se *sttSession) SendAudio(pcm []byte) error {
 	}
 	se.mu.Lock()
 	if se.closed {
+		gone := se.failed && !se.userClosed
 		se.mu.Unlock()
+		if gone { // the vendor ended the session: ERROR/CLOSED carry it; audio and Finalize are dropped
+			return nil
+		}
 		return provider.ErrSessionClosed
 	}
 	if len(pcm) == 0 {
@@ -329,7 +334,11 @@ func (se *sttSession) signal() {
 func (se *sttSession) Finalize() error {
 	se.mu.Lock()
 	if se.closed {
+		gone := se.failed && !se.userClosed
 		se.mu.Unlock()
+		if gone { // the vendor ended the session: ERROR/CLOSED carry it; audio and Finalize are dropped
+			return nil
+		}
 		return provider.ErrSessionClosed
 	}
 	now := se.audioSent / sttBytesPerMs
@@ -628,6 +637,7 @@ func (se *sttSession) finish(err *provider.Error) {
 		if se.abortErr != nil {
 			err = se.abortErr
 		}
+		se.failed = err != nil
 		user := se.userClosed
 		for _, t := range se.timers {
 			t.Stop()
