@@ -622,3 +622,6 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Span lewat `platform/otel.Start/End`** (bukan `otel.Tracer` langsung), sehingga hanya error internal yang berstatus Error.
 - **Latensi** = `Clock.Now() − ended_at` saat tx final berhasil (jam yang sama dengan `completed_at`).
 - **Tes Classify** (plan: "klasifikasi Bab 9") tinggal di `internal/m7evaluation_test.go` (paket `internal_test`, bersama `m7preflight_test.go`), bukan di paket `evaluation`: depguard `feature-no-infra` melarang `internal/amqp` dari paket fitur, termasuk tes-nya; lihat M7-T14.
+
+## M7-T14 — `evaluation.Consumer`
+- **Pemeriksaan struktural `amqp.Handler` dan klasifikasi hidup di `internal/m7evaluation_test.go`**, bukan di `internal/evaluation`: depguard melarang `internal/amqp` dari paket fitur (juga file tes). Tes memakai `Consumer` dan `Service` nyata dengan fake store/provider, sehingga `amqp.Classify` menilai error sungguhan dari `Handle`. Skenario `SESSION_NOT_ENDED`/dll tidak berlaku di sini; kerja DLQ/retry nyata ada di integration Task 15.
