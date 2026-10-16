@@ -681,3 +681,10 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`AdaptiveInput.Trends` bertipe `map[Skill]string`** (spec §12.8.2 persis); tipe `Trend` baru ada di Task 3, dan `FocusInput.Trends` (Task 4) memakai `map[Skill]Trend`. Pemanggil mengonversi.
 - **`AdaptiveDifficulty.MarshalJSON` (value receiver) ditambahkan** agar `focus_skills` nil menjadi `[]` (diizinkan plan; perubahan aditif, field tidak berubah). `UnmarshalJSON` tidak diubah.
 - Tipe `memory` M5 sudah sesuai §11.7.1 (tes karakterisasi langsung hijau); tidak ada perbaikan tag JSON.
+
+## M8-T2 — Proficiency murni
+- **Tipe `Trend`, `TrendPoint`, konstanta `Trend*` dan stub `computeTrend` didefinisikan di `proficiency.go`** (plan: Task 3 di `trend.go`), karena tes golden Task 2 sudah memakai `learner.TrendInsufficient`/`TrendPoint`. Task 3 memindahkannya ke `trend.go` dan mengganti stub.
+- **Assertion `TrendImproving` pada sesi 3 golden dipisah** ke `TestProficiencyGolden_GrammarTrendImproving` yang `t.Skip("task 3")` (Go tidak dapat melewati satu baris); seluruh asersi lain golden aktif. Task 3 mengisinya dan melepas skip.
+- **`EvidenceLevel(skill, ...)` mengabaikan `skill`** (`_ Skill`): §12.5.1 langkah 1 identik untuk semua skill; signature plan dipertahankan.
+- **`L_obs` dibulatkan 2 desimal dan `c_obs` 3 desimal sebelum dipakai** (keputusan plan; menyamakan jalur normal dengan replay dari kolom `NUMERIC(3,2)/(4,3)`). Angka golden spec tidak berubah (`c_obs` sesi 2 = 0,638 bukan 0,6375; hasil `Level 2.27`, `c 0.389` tetap cocok). Hari decay dihitung pecahan (`jam/24`), tidak dibulatkan; tidak negatif.
+- **Konstanta tambahan** `AlgorithmVersion = 1` dan `MinEvidenceConfidence = 0.05` di `params.go` (angka 0,05 ada di spec langkah 2 tetapi tidak di tabel konstanta).
