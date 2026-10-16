@@ -1010,3 +1010,10 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Endpoint** vendor di test live memakai default sama dengan `internal/provider/config.go` dan boleh di-override env `*_BASE_URL`/`*_WS_BASE_URL` (tidak ada literal model).
 - **`TestLiveOpenAISTTSessionLimit` tidak dibuat** (lihat log): batas sesi OpenAI belum terdokumentasi.
 - **Pencatatan kriteria baru yang diperketat sedikit:** LLM live juga mengharuskan `DONE STOP` dan teks mengandung aksara Jepang; tidak ada assertion yang dilonggarkan.
+
+## M9-T17 — Sesi e2e real (kode saja)
+- **Keluaran per karakter di subdirektori** `$OUT_DIR/<kode huruf kecil>/` (mis. `out/e2e-real/haruka/turn-001-gen-1.wav`), bukan langsung di `out/e2e-real/`: plan meminta sesi untuk satu karakter ELEVENLABS dan satu CARTESIA dalam satu run, dan dua sesi akan saling menimpa `summary.json`/`turn-*.wav` di satu direktori. Tes membaca semua `*/summary.json`. Perintah verifikasi manual plan disesuaikan (`out/e2e-real/*/...`).
+- **`summary.json`:** field nyata CLI adalah `turn_latency_ms` sebagai larik per giliran (flat), bukan `turns[].turn_latency_ms` seperti contoh tes plan; tes memakai bentuk nyata.
+- **Pengaman tambahan:** `run.sh` menolak berjalan (exit 3) bila stack compose lokal sedang berjalan kecuali `E2E_ALLOW_RESET=1`, karena `docker compose down -v` (diminta plan) menghapus volume data lokal; `E2E_KEEP=1` melewati `down -v`. Port proses 18080/18081 (bukan 8080/8081) agar tidak bentrok dengan `make run-api`/`run-realtime`.
+- **`seed/env/local/0900_voice_ids.sql`:** dijalankan lewat `make seed` (`KOTOKI_ENV=local`), bukan langkah terpisah; `run.sh` menolak mulai (exit 2) bila berkas tidak ada karena mode real akan menolak voice ID `PLACEHOLDER_`. Direktori `seed/env/local/` ditambahkan ke `.gitignore`.
+- **Cek tambahan di `run.sh`:** pemeriksaan bahwa nilai kunci tidak muncul di log api/realtime/CLI (plan hanya meminta `NotContains` di keluaran tes; tes tetap melakukannya).

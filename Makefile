@@ -22,7 +22,7 @@ N               ?= 1
 
 .PHONY: env up up-obs down reset migrate-up migrate-down migrate-create seed promote-admin \
         sqlc sqlc-check tidy-check migrations-check modelname-check arch-check assets-apology fixtures fixtures16k \
-        test test-cover test-cover-integration test-integration test-e2e test-live lint vuln \
+        test test-cover test-cover-integration test-integration test-e2e test-live e2e-real lint vuln \
         run-api run-realtime run-worker build cli docker-build load
 
 env:            ## salin .env.example → .env (tidak menimpa)
@@ -112,6 +112,9 @@ test-e2e:
 
 test-live:      ## butuh kunci provider di .env
 	$(GO) test -race -count=1 -tags=live -timeout 10m ./internal/provider/...
+
+e2e-real:       ## MANUAL GATE: sesi e2e PROVIDER_MODE=real skala kecil (kunci vendor + voice ID nyata, lihat test/e2e/real/run.sh); tanpa kunci exit 2
+	test/e2e/real/run.sh
 
 lint:           ## golangci-lint $(GOLANGCI_LINT_VERSION); pasang: GOBIN=$$PWD/bin/tools go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	PATH="$(CURDIR)/bin/tools:$$PATH" golangci-lint run ./...
