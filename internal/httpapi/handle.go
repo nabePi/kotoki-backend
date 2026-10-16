@@ -191,7 +191,10 @@ func classifyDecodeError(err error) error {
 	var tooBig *http.MaxBytesError
 	var typeErr *json.UnmarshalTypeError
 	var syntaxErr *json.SyntaxError
+	var appErr *errs.Error
 	switch {
+	case errors.As(err, &appErr): // a DTO with its own unmarshaler already named the field
+		return err
 	case errors.As(err, &tooBig):
 		return errs.New(errs.CodePayloadTooLarge, "request body too large")
 	case errors.As(err, &typeErr):

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 
 	"github.com/nabePi/kotoki-backend/internal/memory"
@@ -25,6 +26,7 @@ type retrievalRig struct {
 	bump  *redisstore.MemVerBumper
 	cache *redisstore.MemCtxStore
 	store memory.Store
+	rdb   *redis.Client
 }
 
 func newRetrievalRigPG(t *testing.T) (*retrievalRig, *memRig) {
@@ -32,7 +34,7 @@ func newRetrievalRigPG(t *testing.T) (*retrievalRig, *memRig) {
 	r := newMemRig(t)
 	rdb := testutil.NewRedis(t)
 	pgStore := postgres.NewStore(r.pool)
-	rr := &retrievalRig{t: t, rig: r, store: pgStore.MemoryStore(), cache: redisstore.NewMemCtxStore(rdb), bump: redisstore.NewMemVerBumper(rdb)}
+	rr := &retrievalRig{t: t, rig: r, store: pgStore.MemoryStore(), rdb: rdb, cache: redisstore.NewMemCtxStore(rdb), bump: redisstore.NewMemVerBumper(rdb)}
 	rr.ret = memory.NewRetriever(memory.RetrieverDeps{
 		Reader: pgStore.MemoryStore().Reader(), Settings: postgres.NewMemoryProfileSettings(r.pool, idgen.NewV7(), clock.System{}),
 		Embedder: r.prov, Cache: rr.cache, Clock: clock.System{},

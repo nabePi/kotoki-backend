@@ -14,6 +14,8 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/content"
 	"github.com/nabePi/kotoki-backend/internal/evaluation"
+	"github.com/nabePi/kotoki-backend/internal/learner"
+	"github.com/nabePi/kotoki-backend/internal/memory"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/metrics"
 	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
@@ -52,6 +54,8 @@ type userService interface {
 	UpdateConsents(context.Context, auth.ConsentsInput) (auth.User, error)
 	DeleteAccount(ctx context.Context, userID uuid.UUID, password string) error
 	CurrentTermsVersion() string
+	// RequireActive is the ACTIVE check of the write endpoints (ACCOUNT_SUSPENDED otherwise).
+	RequireActive(ctx context.Context, userID uuid.UUID) (auth.User, error)
 }
 
 // balanceService is what the user balance handlers need; *balance.Service satisfies it.
@@ -136,6 +140,22 @@ type ticketService interface {
 	Issue(ctx context.Context, userID, sessionID uuid.UUID) (auth.TicketResult, error)
 }
 
+// profileService is the profile and skills side; *learner.Service satisfies it.
+type profileService interface {
+	GetProfile(ctx context.Context, userID uuid.UUID) (learner.ProfileView, error)
+	PatchProfile(ctx context.Context, userID uuid.UUID, in learner.PatchInput) (learner.ProfileView, error)
+	Skills(ctx context.Context, userID uuid.UUID) (learner.SkillsView, error)
+	History(ctx context.Context, userID uuid.UUID, skill learner.Skill, after *learner.HistoryCursor, limit int) ([]learner.EstimateRow, *learner.HistoryCursor, error)
+	ResetSkills(ctx context.Context, userID uuid.UUID) error
+}
+
+// memoryService is the memory side; *memory.Service satisfies it.
+type memoryService interface {
+	List(ctx context.Context, userID uuid.UUID, cat *memory.Category, after *memory.ListCursor, limit int) (memory.ListResult, error)
+	Delete(ctx context.Context, userID, id uuid.UUID) error
+	DeleteAll(ctx context.Context, userID uuid.UUID) error
+}
+
 // Deps are the collaborators of NewRouter, wired by hand in cmd/api.
 type Deps struct {
 	Log       *slog.Logger
@@ -159,6 +179,11 @@ type Deps struct {
 
 	// Evaluation serves GET /sessions/{id}/evaluation; the route is registered only when it is set.
 	Evaluation evaluationQuery
+
+	// Profile serves /profile, /profile/skills and its history; Memories serves /profile/memories.
+	// Each group of routes is registered only when its service is set.
+	Profile  profileService
+	Memories memoryService
 
 	AdminSessions adminSessionService
 	AdminAudit    transcriptAuditor

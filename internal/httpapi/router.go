@@ -36,6 +36,12 @@ func NewRouter(d Deps) http.Handler {
 		if d.Evaluation != nil {
 			registerEvaluationRoutes(user, &evaluationHandler{sessions: d.SessionQuery, query: d.Evaluation, limiter: d.Limiter, log: d.Log})
 		}
+		if d.Profile != nil {
+			registerProfileRoutes(user, &profileHandler{svc: d.Profile, users: d.Users, limiter: d.Limiter, log: d.Log})
+		}
+		if d.Memories != nil {
+			registerMemoryRoutes(user, &memoryHandler{svc: d.Memories, users: d.Users, limiter: d.Limiter, log: d.Log})
+		}
 		adminGroup := user.With(
 			RateLimit(d.Limiter, ratelimit.Get("admin_user"), UserSubject, d.Log),
 			RequireAdmin(d.AdminGate, d.Log))
