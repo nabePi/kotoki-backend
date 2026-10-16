@@ -1,0 +1,7 @@
+{"id":"n1","set":"STT-native","audio_uri":"s3://kotoki-benchmark/v1/native/n1.wav","reference_text":"はい","speaker":"native","duration_ms":900,"tags":["short"]}
+
+{"id":"l1","set":"STT-learner","audio_uri":"file:///data/l1.wav","reference_text":"えっと、日本語の勉強です。","speaker":"learner","duration_ms":3000}
+{"id":"z1","set":"STT-noise","audio_uri":"x/z1.wav","reference_text":"こんにちは","speaker":"native"}
+{"id":"c1","set":"LLM-context","messages":[{"Role":"system","Content":"あなたは友達です。"},{"Role":"user","Content":"こんにちは"}]}
+{"id":"j1","set":"LLM-json","tags":["task:EVALUATION","schema:kotoki_evaluation_rubric_v1"],"messages":[{"Role":"user","Content":"transkrip"}]}
+{"id":"t1","set":"TTS-sentences","reference_text":"今日はいい天気ですね。"}
