@@ -154,7 +154,7 @@ func (t *TTS) post(ctx context.Context, voiceID string, body ttsBody) (*http.Res
 	if resp.StatusCode/100 != 2 {
 		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		e := classify(resp, b)
+		e := classify(provider.CapTTS, resp, b)
 		e.Message = t.scrub(e.Message)
 		e.VendorCode = t.scrub(e.VendorCode)
 		return nil, e
@@ -185,8 +185,8 @@ func detailStatus(body []byte) (status, message string) {
 
 // classify maps a non-2xx response: httpx.ClassifyHTTP plus detail.status as VendorCode;
 // quota_exceeded is not retryable (spec 8.4.5).
-func classify(resp *http.Response, body []byte) *provider.Error {
-	e := httpx.ClassifyHTTP(provider.ElevenLabs, provider.CapTTS, resp, body)
+func classify(c provider.Capability, resp *http.Response, body []byte) *provider.Error {
+	e := httpx.ClassifyHTTP(provider.ElevenLabs, c, resp, body)
 	if status, msg := detailStatus(body); status != "" {
 		e.VendorCode = httpx.Redact(status)
 		if msg != "" {

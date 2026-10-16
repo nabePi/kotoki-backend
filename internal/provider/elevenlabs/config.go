@@ -24,6 +24,9 @@ type Config struct {
 	BaseURL   string // e.g. https://api.elevenlabs.io (ELEVENLABS_BASE_URL or an httptest server)
 	WSBaseURL string // e.g. wss://api.elevenlabs.io (ELEVENLABS_WS_BASE_URL); used by STT
 
+	// STTModel is the realtime transcription model (ELEVENLABS_STT_MODEL); required by NewSTT.
+	STTModel string
+
 	// Tap, when set, sees every WebSocket frame (dir "send"/"recv"); used by the recorder (STT).
 	Tap func(dir string, text bool, data []byte)
 

@@ -7381,6 +7381,15 @@ Item **verifikasi di task adapter** (URL di atas):
 - Apakah pengiriman backlog lebih cepat dari realtime (replay 8.5.8) diterima tanpa `queue_overflow`/`chunk_size_exceeded`; ukuran chunk maksimum.
 - Apakah commit dengan audio 20 ms silence menghasilkan `committed_transcript` walau teks kosong. Jika vendor tidak mengirim apa pun untuk commit kosong, adapter MUST menghasilkan `FINAL{Text:"", FromFinalize:true}` sintetis setelah 400 ms tanpa pesan baru.
 
+Hasil verifikasi M9-T8 (dok realtime STT + cookbook commit strategies, dibaca 2026-10-16; tanpa akses nyata):
+- `language_code`: dok menyatakan "ISO 639-1 or ISO 639-3", jadi `ja` valid (tidak perlu `jpn`); dukungan Jepang khusus model realtime tetap belum eksplisit → benchmark.
+- `partial_transcript`: dok hanya menyebut "interim results"; bentuk teks-penuh-segmen adalah inferensi (keepalive server dijelaskan sebagai "repeat of the latest partial text"). Adapter tetap memperlakukannya sebagai teks penuh. TERBUKA sampai rekaman nyata.
+- Commit audio kosong/silence: dok TIDAK menyatakan apakah `committed_transcript` dikirim → FINAL sintetis 400 ms tetap berlaku.
+- Ukuran chunk: dok menyarankan 0,1-1 s per chunk dan tidak menyebut batas maksimum atau penerimaan backlog lebih cepat dari realtime; adapter mengirim 40 ms (keputusan spec); risiko `queue_overflow`/`chunk_size_exceeded` pada replay rotasi TERBUKA (bila terjadi, perlu `PROVIDER_ROTATION_REPLAY_SPEED`).
+- `keepalive_interval_ms` (500-10000): dok menyatakan keepalive mengulang partial terakhir dan "the server closes the connection after 15 seconds without any client messages" (tidak dapat dikonfigurasi) → parameter ini TIDAK menggantikan silence keep-alive klien; adapter tidak mengirimnya.
+- Auto-commit: dok menyebut commit otomatis setelah ±36 s audio pada mode manual (sesuai spec); "Committing manually several times in a short sequence can degrade model performance" dicatat sebagai risiko kualitas untuk Finalize beruntun.
+- Bentuk pesan server: setiap pesan membawa `message_type`; pesan error membawa `error` (string); `warning` membawa `warning`.
+
 #### 8.4.2 OpenAI — STT (Realtime transcription)
 
 Pilihan STT default (`OPENAI_STT_ENABLED=true`, D-017). Memakai **Realtime API sesi transkripsi** (WebSocket), bukan endpoint `POST /v1/audio/transcriptions` (batch, tidak streaming). Bagian yang **terverifikasi** dari panduan resmi per 2026-10-14 (https://developers.openai.com/api/docs/guides/realtime-transcription, https://developers.openai.com/api/docs/guides/realtime-websocket); sisanya **verifikasi di task adapter** — halaman panduan tidak memuat URL/handshake sesi transkripsi, sehingga builder MUST membaca Realtime API reference (https://developers.openai.com/api/reference) sebelum menulis adapter.
