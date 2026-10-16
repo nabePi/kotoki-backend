@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -116,4 +117,14 @@ func (r *RetentionRepo) DeleteOutboxFailed(ctx context.Context, before time.Time
 // DeleteProcessedEvents deletes up to batch processed_events rows with processed_at < before.
 func (r *RetentionRepo) DeleteProcessedEvents(ctx context.Context, before time.Time, batch int) (int, error) {
 	return r.deleteByCtid(ctx, "delete processed events", "processed_events", "processed_at < $1", before, batch)
+}
+
+// DeleteExpiredMemories hard-deletes up to limit memories with expires_at < now(), oldest first,
+// whatever their status (spec 11.8.3), and returns the user_id of each deleted row (one per row).
+func (r *RetentionRepo) DeleteExpiredMemories(ctx context.Context, limit int) ([]uuid.UUID, error) {
+	ids, err := sqlcgen.New(r.pool).SysDeleteExpiredMemories(ctx, int32(limit)) //nolint:gosec // G115: limit is a small constant
+	if err != nil {
+		return nil, internalErr(err, "delete expired memories failed")
+	}
+	return ids, nil
 }

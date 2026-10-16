@@ -47,3 +47,9 @@ DELETE FROM refresh_tokens WHERE family_id IN (
 -- Langkah 5b.
 DELETE FROM password_reset_tokens WHERE id IN (
   SELECT p.id FROM password_reset_tokens p WHERE p.created_at < sqlc.arg(cutoff)::timestamptz LIMIT sqlc.arg(batch)::int);
+
+-- name: SysDeleteExpiredMemories :many
+-- Memory cleanup (spec 11.8.3): satu query seragam untuk ACTIVE kedaluwarsa, SUPERSEDED, dan tombstone; hard delete.
+DELETE FROM memories
+WHERE id IN (SELECT m.id FROM memories m WHERE m.expires_at < now() ORDER BY m.expires_at LIMIT sqlc.arg(batch)::int)
+RETURNING user_id;

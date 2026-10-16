@@ -8,6 +8,7 @@ package sqlcgen
 import (
 	"context"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -143,4 +144,31 @@ func (q *Queries) PurgeSessionSummaries(ctx context.Context, arg PurgeSessionSum
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const sysDeleteExpiredMemories = `-- name: SysDeleteExpiredMemories :many
+DELETE FROM memories
+WHERE id IN (SELECT m.id FROM memories m WHERE m.expires_at < now() ORDER BY m.expires_at LIMIT $1::int)
+RETURNING user_id
+`
+
+// Memory cleanup (spec 11.8.3): satu query seragam untuk ACTIVE kedaluwarsa, SUPERSEDED, dan tombstone; hard delete.
+func (q *Queries) SysDeleteExpiredMemories(ctx context.Context, batch int32) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, sysDeleteExpiredMemories, batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -504,3 +504,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Loop drain dipakai bersama T17:** `runRetentionSteps`/`drainStep` di `transcript_retention.go` (diekstrak dari method `drain`), sehingga perilaku identik: langkah gagal tidak diulang ketat, langkah berikut tetap jalan, error digabung `errors.Join`.
 - **Cutoff sebagai parameter** (`before time.Time`), bukan `now() - interval` di SQL, sama seperti T17 (deterministik dengan jam palsu). Kondisi `status = 'PUBLISHED'` pada langkah published secara logika redundan dengan CHECK `published_at`, tetapi dipertahankan untuk index parsial `idx_event_outbox_published_at`.
 - Langkah memakai pgx mentah (`ctid` tak dikenal sqlc), sesuai plan; nama tabel/kondisi adalah konstanta file, bukan input.
+
+## M6-T20 — Job `memory_cleanup`
+- **Bump tetap dijalankan bila batch berikutnya gagal atau konteks dibatalkan:** baris yang sudah terhapus (committed) membuat memver user lama basi, jadi `Bump` memakai `context.WithoutCancel` dan jalan untuk user yang sudah terkumpul; error store dan error bump digabung `errors.Join`. Plan hanya menyebut `BumpErrorReturned`.
+- **`LIMIT` sebagai parameter** (`sqlc.arg(batch)`) alih-alih literal 1000 di SQL §11.8.3, supaya port `DeleteExpiredMemories(ctx, limit)` bisa dites; selebihnya SQL identik (`expires_at < now()` memakai jam DB, tanpa parameter waktu sesuai plan). Subquery memakai alias `m` agar sqlc tidak ambigu.
+- `Bump` memakai `EXPIRE` pada setiap bump (TTL disegarkan), bukan hanya saat key baru; INCR+EXPIRE satu pipeline non-transaksional (cukup: key hanya cache-buster).
