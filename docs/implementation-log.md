@@ -1291,3 +1291,7 @@ Dijalankan 2026-10-16 pada `feat/m6-async-jobs` (Docker OrbStack, `TESTCONTAINER
 **Perbaikan tes lama (M5).** `TestContentRepoUpdateCharacterLockAndMerge` flaky: `created_at` karakter diisi `now()` oleh Postgres di container, sedangkan `updated_at` diisi `time.Now()` host; bila jam VM container mendahului host, `updated_at` < `created_at` dan asersi `UpdatedAt >= CreatedAt` gagal (gagal dua kali berturut-turut pada `make test-cover-integration`, lulus pada 40 pengulangan terpisah). Kini timestamp update diambil dari jam database (`SELECT clock_timestamp()` dalam transaksi yang sama); asersinya tidak diubah.
 
 **Bug nyata yang ditemukan di M6 gerbang:** tidak ada (Task 23/24 hijau tanpa perubahan kode produksi).
+
+## M7-T1 — Preflight kontrak M3/M4/M6 + kode error evaluasi
+- **Baru:** `internal/m7preflight_test.go` (pemeriksaan kompilasi simbol `prompt`, `provider`, `content`, `events`, `amqp` yang dipakai M7), `internal/platform/errs/m7codes_test.go`. Tidak ada kode produksi: kedua kode error sudah ada.
+- **Verifikasi:** `go test -race` errs/httpapi/internal `-run TestM7` hijau; `go build ./...`; `go test -race ./internal/... ./cmd/...` hijau (2212); `make arch-check`; `make lint` 0 isu. Mutasi status `SESSION_NOT_ENDED` 409 → 400 merah.
