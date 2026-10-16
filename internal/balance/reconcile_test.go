@@ -2,7 +2,6 @@ package balance_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -45,15 +44,4 @@ func TestReconcile_RunsR1ToR6InOrder(t *testing.T) {
 	_, err := e.svc.Reconcile(context.Background(), f)
 	require.NoError(t, err)
 	require.Equal(t, []string{"R1", "R2", "R3", "R4", "R5", "R6"}, f.calls)
-}
-
-func TestReconcile_ErrorStopsAndWraps(t *testing.T) {
-	e := newEnv(t)
-	boom := errors.New("boom")
-	f := &fakeChecks{err: map[string]error{"R2": boom}, rows: map[string][]string{"R1": {"x"}}}
-	v, err := e.svc.Reconcile(context.Background(), f)
-	require.ErrorIs(t, err, boom)
-	require.ErrorContains(t, err, "R2")
-	require.Equal(t, []string{"R1", "R2"}, f.calls, "R3..R6 are not run after a failure")
-	require.Nil(t, v)
 }

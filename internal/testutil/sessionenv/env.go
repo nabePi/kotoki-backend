@@ -64,14 +64,30 @@ type ActiveOpts struct {
 	Beat bool
 }
 
-// New builds the harness. The books are checked with AssertReconciled when the test ends.
-func New(t testing.TB) *Env {
+// Option changes how New builds the harness.
+type Option func(*options)
+
+type options struct{ skipReconcile bool }
+
+// SkipFinalReconcile leaves out the AssertReconciled check at the end of the test, for tests that
+// break the books on purpose.
+func SkipFinalReconcile() Option { return func(o *options) { o.skipReconcile = true } }
+
+// New builds the harness. The books are checked with AssertReconciled when the test ends unless
+// SkipFinalReconcile is given.
+func New(t testing.TB, opts ...Option) *Env {
 	t.Helper()
+	var o options
+	for _, f := range opts {
+		f(&o)
+	}
 	clk := clock.NewFake(Start)
 	pool := testutil.NewPostgres(t)
 	ids := idgen.NewV7()
 	store := postgres.NewStore(pool, postgres.WithIDs(ids), postgres.WithClock(clk))
-	t.Cleanup(func() { testutil.AssertReconciled(t, pool) })
+	if !o.skipReconcile {
+		t.Cleanup(func() { testutil.AssertReconciled(t, pool) })
+	}
 
 	rdb := testutil.NewRedis(t)
 	bal := balance.NewService(store.BalanceStore(), clk, ids)
