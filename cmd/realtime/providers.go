@@ -4,21 +4,22 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/nabePi/kotoki-backend/cmd/internal/providerwire"
+	"github.com/nabePi/kotoki-backend/internal/content"
 	"github.com/nabePi/kotoki-backend/internal/learner"
 	"github.com/nabePi/kotoki-backend/internal/memory"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
-	"github.com/nabePi/kotoki-backend/internal/prompt"
+	"github.com/nabePi/kotoki-backend/internal/platform/idgen"
+	"github.com/nabePi/kotoki-backend/internal/postgres"
 	"github.com/nabePi/kotoki-backend/internal/provider"
 	"github.com/nabePi/kotoki-backend/internal/redisstore"
 )
 
 // realtimeCaps are the capabilities the realtime router is wired with. EMBEDDING is the async
-// capability of the router (fake.NewEmbedding), so that M8 only swaps the memory and learner ports
-// for the real ones without touching the provider wiring.
+// capability of the router (fake.NewEmbedding) that the memory retriever embeds its query with.
 var realtimeCaps = []provider.Capability{provider.CapSTT, provider.CapLLM, provider.CapTTS, provider.CapEmbedding}
 
 // faultRunner polls the fake-provider fault document until its context ends.
@@ -46,31 +47,25 @@ func buildRouter(rdb redis.UniversalClient, clk clock.Clock, logger *slog.Logger
 	return router, rc, faults, nil
 }
 
-// noopMemory is the memory port of M5: no memory yet (M8 swaps in memory.Retriever). It never
-// fails and reports nothing degraded, so a session runs with an empty memory block.
-type noopMemory struct{}
-
-var _ memory.RetrievalService = noopMemory{}
-
-func (noopMemory) BuildSessionContext(_ context.Context, in memory.SessionContextInput) (memory.MemoryContext, error) {
-	return memory.MemoryContext{SessionID: in.SessionID}, nil
+// memoryLearner are the M8 ports of the runtime: the memory retriever and the learner service.
+type memoryLearner struct {
+	memory  *memory.Retriever
+	learner *learner.Service
 }
 
-func (noopMemory) RefreshEpisodic(context.Context, uuid.UUID, uuid.UUID, []memory.TurnText) ([]memory.ContextItem, error) {
-	return nil, nil
-}
-
-func (noopMemory) ReloadCoreIfChanged(context.Context, *memory.MemoryContext) (bool, error) {
-	return false, nil
-}
-
-// staticLearner is the learner port of M5: an empty LearnerContext (M8 swaps in the real one).
-type staticLearner struct{}
-
-func (staticLearner) PromptContext(context.Context, uuid.UUID, learner.AdaptiveDifficulty) (prompt.LearnerContext, error) {
-	return prompt.LearnerContext{}, nil
-}
-
-func (staticLearner) Rerender(prev prompt.LearnerContext, _ learner.AdaptiveDifficulty) prompt.LearnerContext {
-	return prev
+// buildMemoryLearner wires the M8 ports of the runtime. The retriever reads memories through the
+// plain Postgres reader, keeps the per-session context in Redis (memctx, invalidated by memver) and
+// embeds the query through the router (Embedder). The learner service renders the learner block of
+// the prompt (PromptContext, Rerender); its content loader is only used by the API's adaptive path.
+func buildMemoryLearner(store *postgres.Store, pool *pgxpool.Pool, rdb redis.UniversalClient, embedder memory.Embedder,
+	contentRepo content.Repository, clk clock.Clock, ids idgen.Generator, logger *slog.Logger, mm *memory.Metrics) memoryLearner {
+	return memoryLearner{
+		memory: memory.NewRetriever(memory.RetrieverDeps{
+			Reader: postgres.NewMemoryReader(pool), Settings: postgres.NewMemoryProfileSettings(pool, ids, clk),
+			Embedder: embedder, Cache: redisstore.NewMemCtxStore(rdb), Clock: clk, Log: logger, Metrics: mm,
+		}),
+		learner: learner.NewService(learner.Deps{
+			Store: store.LearnerStore(), Content: content.NewSessionConfigLoader(contentRepo), Clock: clk, IDs: ids, Log: logger,
+		}),
+	}
 }
