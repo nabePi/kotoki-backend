@@ -699,3 +699,10 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Level onboarding tak dikenal diperlakukan seperti `NULL`** (validasi nilai ada di lapisan service/HTTP).
 - **`EffectiveConfidence` menjepit hari negatif ke 0** (jam mundur tidak menaikkan confidence).
 - **`export_test.go` baru** mengekspos `priority` (helper P_k) hanya untuk tes, sesuai plan ("helper `priority`").
+
+## M8-T5 — Adaptive difficulty
+- **`AdaptiveInput.Focus` dan `FindingStats`** sudah ditambahkan di Task 1 (spec §12.8.2 tidak memuat `Focus`; §12.8.3 membutuhkannya). `ComputeAdaptiveDifficulty` menyalin `Focus` ke `FocusSkills` tanpa menghitung ulang; `Trends`, `Confidences`, `FindingStats`, `EvaluationsConsidered`, `ScenarioFocus` tidak dipakai di fungsi ini (dipakai `FocusSkills` oleh pemanggil).
+- **Epsilon `1e-9` pada pembulatan `R(x)` dan ambang `>=`/`<`** (scaffolding gap, KEIGO_LIGHT L(GRAMMAR) < 2,5, `Ld`), karena level 2 desimal bisa menghasilkan 2,4999999999999996 di float64 untuk nilai yang secara desimal tepat 2,50.
+- **Preferensi di luar enum** (`PrefSpeechSpeed`, `PrefFormality`, `DialectPreference` selain nilai spec) diperlakukan sebagai `NORMAL`/`AUTO`; hanya `STANDARD_ONLY` memadamkan dialek. Validasi enum ada di lapisan service/HTTP.
+- **`MaxFollowUps` untuk depth di luar 1..5** dijepit ke 0..3.
+- Konstanta `Formality*`/`Dialect*` baru di paket `learner` (belum ada di M5; tipe string sudah ada).
