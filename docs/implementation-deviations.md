@@ -706,3 +706,11 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Preferensi di luar enum** (`PrefSpeechSpeed`, `PrefFormality`, `DialectPreference` selain nilai spec) diperlakukan sebagai `NORMAL`/`AUTO`; hanya `STANDARD_ONLY` memadamkan dialek. Validasi enum ada di lapisan service/HTTP.
 - **`MaxFollowUps` untuk depth di luar 1..5** dijepit ke 0..3.
 - Konstanta `Formality*`/`Dialect*` baru di paket `learner` (belum ada di M5; tipe string sudah ada).
+
+## M8-T6 — Descriptor prompt, RenderAdaptation, NewPromptContext
+- **Asersi anggaran token memakai batas ketat spec (`EstimateTokens(Adaptation+DisplayName) ≤ 700`), bukan batas longgar plan** (`700 + EstimateTokens(blok 学習のねらい)`). Plan memperkirakan estimator memberi ≈ 720 token; terukur kasus terburuk (descriptor terpanjang tiap dimensi, 2 focus terpanjang, goal terpanjang, nickname 30 rune) = 650 rune, 659 token, sehingga muat utuh dan tidak perlu relaksasi. Teks descriptor tidak diubah. Klaim spec "±654 rune ≈ 630 token" meleset tipis (estimator 1,1/rune CJK menghasilkan 659) tetapi tetap ≤ 700 dan ≤ 800 rune.
+- **`GoalLine` menyimpan descriptor goal tanpa awalan/akhiran** (`日本での就職面接に向けた練習`), sesuai plan; spec §12.8.4 menggambarkan `GoalLine` sebagai `学習者の目標: …。`. Awalan `学習者の目標: ` dan `。` ditambahkan `RenderAdaptation`.
+- **`DimensionDescriptor` menjepit level di luar 1..5 dan `ScaffoldingDescriptor` di luar 0..3**; dimensi/formality/dialect/focus tak dikenal mengembalikan `""` dan barisnya dilewati `RenderAdaptation` (tanpa baris `- ` kosong). Spec tidak mengatur nilai di luar rentang.
+- **`prompt.DimensionDescriptors`** (daftar kunci dimensi berurutan) diekspor agar urutan render milik tabel `prompt`; tidak ada di plan.
+- **`FocusSkills` kosong menjadi `[]string{}`** (bukan nil) pada `NewPromptContext`/`Rerender`.
+- Tes descriptor memakai teks yang diekstrak dengan skrip dari tabel §12.8.4 (bukan diketik ulang) sebagai golden.
