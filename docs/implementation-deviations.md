@@ -375,3 +375,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - Ukuran fixture sintetis > 8 MB (≤ 10 MB) dan rekaman penutur asli ditunda ke M9 (§ M5-T7).
 - `session end` pada `kotoki-cli` dilayani lewat WS singkat resume+end (§ M5-T28).
 - E8 (pipeline async) dan E9 (hapus akun) ditunda ke M6–M8; bagian TTS-fallback E7 ditunda (tak ada karakter seed dengan `voice.fallback`).
+
+## M6-T1 — Grup konfigurasi worker (RabbitMQ, outbox, job)
+- **`RABBITMQ_URL` punya default `amqp://guest:guest@localhost:5672/`** (spec §9.11) alih-alih wajib (kolom "Wajib: Ya" §13.2): `testutil.MinimalEnv` dan semua tes worker M1 tidak mengisinya. Kosong tetap ditolak; skema harus `amqp://`/`amqps://`; `staging`/`prod` mewajibkan `amqps://` (§13.2.13). `dev` mengikuti `local`.
+- **`RETENTION_TRANSCRIPT_DAYS` ada di dua grup** (`Content` milik API, `Jobs` milik worker) dengan nama env sama; validasi worker 1–3650 seperti `Content`. Semua `RETENTION_*_DAYS` divalidasi 1–3650 (spec hanya menyebut durasi ≤ 0).
+- **Masalah terbuka (di luar M6):** `config.Secret` tidak punya `GoString`, jadi `fmt.Sprintf("%#v", cfg)` membocorkan nilai (berlaku juga untuk `DB_URL`/`REDIS_URL` M1). Tes `RABBITMQ_URL` hanya menegaskan `%v`/`%+v` sesuai plan.
