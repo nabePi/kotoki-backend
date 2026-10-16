@@ -85,6 +85,7 @@ func TestMemoryCleanup_LoopsUntilUnder1000_BumpsUniqueUsersOnce(t *testing.T) {
 	assert.ElementsMatch(t, users, b.calls[0], "3 unique users, no duplicates")
 	assert.Len(t, b.calls[0], 3)
 	assert.Equal(t, 1040.0, promtest.ToFloat64(m.JobItems.WithLabelValues("memory_cleanup", "memories_deleted")))
+	assert.Equal(t, 1040.0, promtest.ToFloat64(m.MemoryCleanupDeleted), "kotoki_memory_cleanup_deleted_total (spec 13.7)")
 }
 
 func TestMemoryCleanup_ExactMultipleOfBatchNeedsOneMoreCall(t *testing.T) {

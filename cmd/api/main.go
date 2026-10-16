@@ -26,7 +26,9 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/content"
 	"github.com/nabePi/kotoki-backend/internal/evaluation"
 	"github.com/nabePi/kotoki-backend/internal/httpapi"
+	"github.com/nabePi/kotoki-backend/internal/learner"
 	"github.com/nabePi/kotoki-backend/internal/mailer"
+	"github.com/nabePi/kotoki-backend/internal/memory"
 	"github.com/nabePi/kotoki-backend/internal/platform/buildinfo"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/config"
@@ -226,9 +228,10 @@ func buildAPI(ctx context.Context, cfg config.API, logger *slog.Logger, pool *pg
 	if err != nil {
 		return nil, nil, err
 	}
+	profiles := buildProfileServices(store, pool, rdb, content.NewSessionConfigLoader(contentSvcs.cached), clk, ids, logger)
 	sessionSvc := session.NewService(session.Deps{
 		Store: store.SessionStore(), Reader: postgres.NewSessionRepo(pool), Balance: balanceSvc, Resolver: contentSvcs.resolver,
-		Adaptive: session.NeutralAdaptiveProvider{}, Users: userGate{users: userSvc}, OpeningPrompts: openingPromptSource{repo: contentSvcs.cached},
+		Adaptive: profiles.adaptive, Users: userGate{users: userSvc}, OpeningPrompts: openingPromptSource{repo: contentSvcs.cached},
 		Control: redisstore.NewSessionControl(rdb), Clock: clk, IDs: ids, Log: logger, TermsVersion: userSvc.CurrentTermsVersion(),
 		Metrics: metrics.NewSession(reg), ServiceName: "api",
 	})
@@ -249,21 +252,46 @@ func buildAPI(ctx context.Context, cfg config.API, logger *slog.Logger, pool *pg
 		Auth: authSvc, Users: userSvc, Balance: balanceSvc, Admin: adminSvc, AdminGate: adminSvc,
 		Content: contentSvcs.catalog, ContentAdmin: contentSvcs.admin,
 		Session: sessionSvc, SessionQuery: sessionQuery, Tickets: tickets,
-		Evaluation:    evaluation.NewQueryService(postgres.NewEvaluationReader(pool)),
+		Evaluation: evaluation.NewQueryService(postgres.NewEvaluationReader(pool)),
+		Profile:    profiles.learner, Memories: profiles.memory,
 		AdminSessions: adminSessions, AdminAudit: adminSvc,
 	})
 	return router, dispatcher, nil
 }
 
+// profileServices are the M8 services of the api: the learner (profile, skills and the adaptive
+// difficulty of a new session) and the memory service (list and delete).
+type profileServices struct {
+	learner  *learner.Service
+	memory   *memory.Service
+	adaptive session.AdaptiveProvider
+}
+
+// buildProfileServices wires the learner and memory services. The adaptive provider of
+// session.Service is the learner-backed adapter, so a new session stores the difficulty computed
+// from the skill state of its user (spec 12.8); there is no neutral fallback: a learner failure
+// reaches the caller as 503 SERVICE_UNAVAILABLE. Deleting memories bumps memver in Redis so that the
+// sessions in flight drop them.
+func buildProfileServices(store *postgres.Store, pool *pgxpool.Pool, rdb redis.UniversalClient, loader content.SessionConfigLoader,
+	clk clock.Clock, ids idgen.Generator, logger *slog.Logger) profileServices {
+	ln := learner.NewService(learner.Deps{Store: store.LearnerStore(), Content: loader, Clock: clk, IDs: ids, Log: logger})
+	return profileServices{
+		learner:  ln,
+		memory:   memory.NewService(store.MemoryStore(), redisstore.NewMemVerBumper(rdb), postgres.NewMemoryProfileSettings(pool, ids, clk), clk, logger),
+		adaptive: &adaptiveAdapter{svc: ln},
+	}
+}
+
 var fixturesOnce sync.Once
 
-// registerPromptFixtures gives the prompt keys owned by M7 their render fixtures (spec 6.10.1), which
-// the catalog validation needs to render the seeded EVALUATION and SUMMARY versions. RegisterFixtures
-// panics on a second call for a key, so it runs once per process. M8 adds MEMORY_EXTRACTION here.
+// registerPromptFixtures gives the prompt keys owned by M7 and M8 their render fixtures (spec 6.10.1),
+// which the catalog validation needs to render the seeded EVALUATION, SUMMARY and MEMORY_EXTRACTION versions. RegisterFixtures
+// panics on a second call for a key, so it runs once per process.
 func registerPromptFixtures() {
 	fixturesOnce.Do(func() {
 		prompt.RegisterFixtures("EVALUATION", evaluation.PromptFixtures)
 		prompt.RegisterFixtures("SUMMARY", summary.PromptFixtures)
+		prompt.RegisterFixtures("MEMORY_EXTRACTION", memory.PromptFixtures)
 	})
 }
 

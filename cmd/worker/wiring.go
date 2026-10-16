@@ -23,6 +23,8 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/evaluation"
 	"github.com/nabePi/kotoki-backend/internal/jobs"
+	"github.com/nabePi/kotoki-backend/internal/learner"
+	"github.com/nabePi/kotoki-backend/internal/memory"
 	"github.com/nabePi/kotoki-backend/internal/platform/buildinfo"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/config"
@@ -37,13 +39,11 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/summary"
 )
 
-// errHandlerNotImplemented is what buildConsumers returns for a feature handler whose consumer does
-// not exist yet (memory and learner until M8); the process refuses to start rather than leave the
-// queue unconsumed.
-var errHandlerNotImplemented = errors.New("worker handler not implemented yet")
-
 // consumerFlags are the --handlers values that run a queue consumer (spec 9.8).
 var consumerFlags = []string{"evaluation", "memory", "learner", "summary"}
+
+// coreFlags are the --handlers values without a consumer: the publisher and the job groups.
+var coreFlags = []string{"outbox", "sweeper", "cleanup"}
 
 // HandlerSet is what a --handlers list turns on (spec 9.8): the outbox publisher and the scheduled
 // jobs belong to the core flags, the other four flags are queue consumers.
@@ -72,8 +72,7 @@ func handlerSet(flags []string) HandlerSet {
 	return h
 }
 
-// consumerDeps are the collaborators a consumer is built from (spec 9.7). M8 adds the ports of
-// memory and learner here.
+// consumerDeps are the collaborators a consumer is built from (spec 9.7).
 type consumerDeps struct {
 	Conn      *amqp.Conn
 	Pub       amqp.Publisher
@@ -88,8 +87,12 @@ type consumerDeps struct {
 	Clock clock.Clock
 	// Reg receives the feature metrics of the handlers (each is registered once per process).
 	Reg prometheus.Registerer
-	// Router is the provider router of the worker; evaluation and summary require it.
+	// Router is the provider router of the worker; evaluation, summary and memory require it
+	// (memory extracts through its evaluation vendor and embeds through its embedding adapter).
 	Router provider.AsyncRouter
+	// MemVer moves the memory version of a user after an extraction committed; nil means the Redis
+	// bumper over Redis.
+	MemVer memory.MemVer
 	// EvalCfg and SummaryCfg are config.Worker.Evaluation/Summary mapped by evaluationConfig/summaryConfig.
 	EvalCfg    evaluation.Config
 	SummaryCfg summary.Config
@@ -98,6 +101,11 @@ type consumerDeps struct {
 // buildConsumers builds the consumer of every feature flag in flags. Flags that are not consumers
 // (outbox, sweeper, cleanup) are ignored.
 func buildConsumers(flags []string, d consumerDeps) ([]*amqp.Consumer, error) {
+	for _, f := range flags {
+		if !slices.Contains(consumerFlags, f) && !slices.Contains(coreFlags, f) {
+			return nil, fmt.Errorf("unknown worker handler %q", f)
+		}
+	}
 	var out []*amqp.Consumer
 	for _, f := range handlerSet(flags).Consumers {
 		h, err := newHandler(f, d)
@@ -109,17 +117,19 @@ func buildConsumers(flags []string, d consumerDeps) ([]*amqp.Consumer, error) {
 	return out, nil
 }
 
-// handlerBuilders maps a feature flag to the constructor of its queue handler. M8 adds memory and
-// learner; a flag without an entry is refused at startup.
+// handlerBuilders maps a feature flag to the constructor of its queue handler; a flag without an
+// entry is refused at startup rather than leave its queue unconsumed.
 var handlerBuilders = map[string]func(consumerDeps) (amqp.Handler, error){
 	"evaluation": newEvaluationHandler,
+	"memory":     newMemoryHandler,
+	"learner":    newLearnerHandler,
 	"summary":    newSummaryHandler,
 }
 
 func newHandler(name string, d consumerDeps) (amqp.Handler, error) {
 	build, ok := handlerBuilders[name]
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", errHandlerNotImplemented, name)
+		return nil, fmt.Errorf("unknown worker handler %q", name)
 	}
 	return build(d)
 }
@@ -165,6 +175,44 @@ func newSummaryHandler(d consumerDeps) (amqp.Handler, error) {
 		Metrics: summary.NewMetrics(d.Reg), Log: d.Log,
 	})
 	return summary.NewConsumer(svc), nil
+}
+
+// routerMemoryProvider adapts the worker router to memory.Provider: the extraction call is one
+// attempt on the active evaluation vendor (Evaluation(), never the retrying GenerateJSON: the repair
+// call is the only second attempt, D-017); embeddings go through the router's embedding adapter.
+type routerMemoryProvider struct{ r provider.AsyncRouter }
+
+func (p routerMemoryProvider) GenerateJSON(ctx context.Context, req provider.StructuredRequest) (provider.StructuredResult, error) {
+	return p.r.Evaluation().GenerateJSON(ctx, req)
+}
+
+func (p routerMemoryProvider) Embed(ctx context.Context, req provider.EmbeddingRequest) (provider.EmbeddingResult, error) {
+	return p.r.Embed(ctx, req)
+}
+
+// newMemoryHandler wires the memory extraction consumer by hand (D-004): Postgres store, source,
+// profile switch and prompt, the router as provider, the Redis memver bumper.
+func newMemoryHandler(d consumerDeps) (amqp.Handler, error) {
+	if d.Router == nil {
+		return nil, fmt.Errorf("%w: memory", errRouterRequired)
+	}
+	ids := idgen.NewV7()
+	mv := d.MemVer
+	if mv == nil {
+		mv = redisstore.NewMemVerBumper(d.Redis)
+	}
+	m := memory.NewMetrics(d.Reg)
+	return memory.NewConsumer(memory.ConsumerDeps{
+		Store: d.Store.MemoryStore(), Source: postgres.NewMemorySource(d.Pool, d.Clock),
+		Settings: postgres.NewMemoryProfileSettings(d.Pool, ids, d.Clock), Prompts: postgres.NewMemoryPromptSource(d.Pool),
+		Provider: routerMemoryProvider{r: d.Router}, MemVer: mv, Applier: memory.NewApplier(ids, d.Clock, m),
+		Clock: d.Clock, IDs: ids, Log: d.Log, Metrics: m,
+	}), nil
+}
+
+// newLearnerHandler wires the learner consumer: no provider, only Postgres.
+func newLearnerHandler(d consumerDeps) (amqp.Handler, error) {
+	return learner.NewConsumer(d.Store.LearnerStore(), postgres.NewLearnerUserGate(d.Pool), d.Clock, idgen.NewV7(), d.Log, learner.NewMetrics(d.Reg)), nil
 }
 
 // jobDeps are the collaborators of the scheduled jobs.

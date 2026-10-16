@@ -21,7 +21,9 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/content"
 	"github.com/nabePi/kotoki-backend/internal/evaluation"
 	"github.com/nabePi/kotoki-backend/internal/httpapi"
+	"github.com/nabePi/kotoki-backend/internal/learner"
 	"github.com/nabePi/kotoki-backend/internal/mailer"
+	"github.com/nabePi/kotoki-backend/internal/memory"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/idgen"
 	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
@@ -92,6 +94,19 @@ type apiEnv struct {
 	gate          *fakes.UserGate
 	sessionSvc    *session.Service
 	adminStore    *fakes.AdminStore
+
+	learnerStore *fakes.LearnerStore
+	memStore     *fakes.MemoryStore
+	memVer       *fakes.MemVerRecorder
+}
+
+// memorySwitch reads memory_enabled from the profile of the learner service, as the Postgres
+// memory.ProfileSettings does.
+type memorySwitch struct{ svc *learner.Service }
+
+func (m memorySwitch) EnsureMemoryEnabled(ctx context.Context, userID uuid.UUID) (bool, error) {
+	p, err := m.svc.GetProfile(ctx, userID)
+	return p.MemoryEnabled, err
 }
 
 const apiTerms = "2026-10-01"
@@ -138,7 +153,13 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 	ticketTargets := fakes.NewTicketSessionReader()
 	ticketSvc := auth.NewTicketService(store, ticketTargets, fakes.NewTicketStore(), clk, auth.TicketConfig{TTL: 30 * time.Second, RealtimeURL: "https://realtime.example"})
 
+	learnerStore := fakes.NewLearnerStore(fakes.WithLearnerClock(clk))
+	learnerSvc := learner.NewService(learner.Deps{Store: learnerStore, Clock: clk, IDs: ids})
+	memStore := fakes.NewMemoryStore(fakes.WithMemoryClock(clk))
+	memVer := fakes.NewMemVerRecorder()
+
 	deps := httpapi.Deps{
+		Profile: learnerSvc, Memories: memory.NewService(memStore, memVer, memorySwitch{learnerSvc}, clk, log),
 		Session: sessSvc, SessionQuery: session.NewQueryService(fakes.NewSessionViews(sessStore, contentRepo), sessStore.TurnReader(), clk, 180), Tickets: ticketSvc,
 		Evaluation: evaluation.NewQueryService(fakes.NewEvaluationStore()),
 		Content:    catalog, ContentAdmin: contentAdmin,
@@ -154,7 +175,8 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 	}
 	return &apiEnv{handler: httpapi.NewRouter(deps), limiter: limiter, clk: clk, store: store, bal: bal, mail: fm, deleter: deleter,
 		tokens: tokens, logs: logs, svc: svc, users: users, deps: deps, content: contentRepo, contentStore: contentStore,
-		sessions: sessStore, ticketTargets: ticketTargets, gate: gate, sessionSvc: sessSvc, adminStore: adminStore}
+		sessions: sessStore, ticketTargets: ticketTargets, gate: gate, sessionSvc: sessSvc, adminStore: adminStore,
+		learnerStore: learnerStore, memStore: memStore, memVer: memVer}
 }
 
 type allowAdmin struct{}

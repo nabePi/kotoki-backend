@@ -179,6 +179,11 @@ func (e *env) startRealtime(tb testing.TB, podID string) *proc {
 // test would sweep the sessions other scenarios leave ACTIVE on purpose. The sweeper tick is 2 s
 // so a scenario does not wait for the 10 s production interval. The caller stops it with p.stop.
 func (e *env) startWorker(tb testing.TB, rabbitURL, handlers string) *proc {
+	return e.startWorkerWith(tb, rabbitURL, handlers, nil)
+}
+
+// startWorkerWith is startWorker with extra environment for the worker (e.g. FAKE_EVAL_FIXTURE_DIR).
+func (e *env) startWorkerWith(tb testing.TB, rabbitURL, handlers string, extra map[string]string) *proc {
 	e.workerMu.Lock()
 	if e.workerBin == "" {
 		e.workerBin = e.build(tb, "worker")
@@ -186,10 +191,14 @@ func (e *env) startWorker(tb testing.TB, rabbitURL, handlers string) *proc {
 	bin := e.workerBin
 	e.workerMu.Unlock()
 	p := &proc{name: "worker-" + strings.ReplaceAll(handlers, ",", "-"), opsAddr: testutil.FreeAddr(tb)}
-	p = e.launch(tb, p, bin, e.baseEnv(tb, map[string]string{
+	env := map[string]string{
 		"WORKER_HTTP_ADDR": p.opsAddr, "WORKER_HANDLERS": handlers, "RABBITMQ_URL": rabbitURL,
 		"SWEEPER_INTERVAL": "2s", "WORKER_SHUTDOWN_GRACE": "5s",
-	}))
+	}
+	for k, v := range extra {
+		env[k] = v
+	}
+	p = e.launch(tb, p, bin, e.baseEnv(tb, env))
 	p.waitReady(tb)
 	return p
 }

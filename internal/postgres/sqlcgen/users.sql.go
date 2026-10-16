@@ -66,6 +66,17 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 	return i, err
 }
 
+const getUserStatus = `-- name: GetUserStatus :one
+SELECT status FROM users WHERE id = $1
+`
+
+func (q *Queries) GetUserStatus(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, getUserStatus, id)
+	var status string
+	err := row.Scan(&status)
+	return status, err
+}
+
 const insertUser = `-- name: InsertUser :exec
 INSERT INTO users (id, email, phone_number, full_name, password_hash, role, status, password_changed_at,
                    last_login_at, terms_version, terms_accepted_at, created_at, updated_at, deleted_at, purged_at)

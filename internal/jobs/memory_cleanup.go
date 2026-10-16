@@ -59,6 +59,7 @@ func (j *MemoryCleanupJob) Run(ctx context.Context) error {
 		ids, err := j.s.DeleteExpiredMemories(ctx, memoryCleanupBatch)
 		if len(ids) > 0 {
 			j.m.JobItems.WithLabelValues(memoryCleanupName, "memories_deleted").Add(float64(len(ids)))
+			j.m.MemoryCleanupDeleted.Add(float64(len(ids)))
 		}
 		for _, id := range ids {
 			if _, ok := seen[id]; !ok {

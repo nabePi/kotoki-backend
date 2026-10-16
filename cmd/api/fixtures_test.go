@@ -9,7 +9,7 @@ import (
 )
 
 // RegisterFixtures panics on a second registration of a key, and run/buildAPI can be entered more
-// than once per process (tests), so the wiring must be idempotent and complete for M7's keys.
+// than once per process (tests), so the wiring must be idempotent and complete for the keys of M7 and M8.
 func TestRegisterPromptFixtures_IdempotentAndComplete(t *testing.T) {
 	assert.NotPanics(t, func() {
 		registerPromptFixtures()
@@ -17,4 +17,5 @@ func TestRegisterPromptFixtures_IdempotentAndComplete(t *testing.T) {
 	})
 	assert.NotEmpty(t, prompt.Fixtures("EVALUATION"))
 	assert.NotEmpty(t, prompt.Fixtures("SUMMARY"))
+	assert.NotEmpty(t, prompt.Fixtures("MEMORY_EXTRACTION"), "M8 key")
 }

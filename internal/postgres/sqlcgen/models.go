@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/pgvector/pgvector-go"
+	pgvector "github.com/pgvector/pgvector-go"
 )
 
 type AdminAuditLog struct {
@@ -219,7 +219,7 @@ type Memory struct {
 	SourceSessionID           uuid.NullUUID
 	SourceTurnIds             []uuid.UUID
 	ExtractionPromptVersionID uuid.NullUUID
-	Embedding                 pgvector.Vector
+	Embedding                 *pgvector.Vector
 	EmbeddingModel            pgtype.Text
 	Status                    string
 	SupersededBy              uuid.NullUUID

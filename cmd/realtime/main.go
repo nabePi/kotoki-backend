@@ -23,6 +23,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/content"
 	"github.com/nabePi/kotoki-backend/internal/conversation"
+	"github.com/nabePi/kotoki-backend/internal/memory"
 	"github.com/nabePi/kotoki-backend/internal/platform/buildinfo"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/config"
@@ -198,13 +199,38 @@ type realtimeApp struct {
 // starts the Manager's background parts (TAKEOVER subscriber, podinfo loop, fault poller) on podCtx.
 func buildRealtime(podCtx context.Context, cfg config.Realtime, logger *slog.Logger, pool *pgxpool.Pool, rdb redis.UniversalClient, reg *prometheus.Registry) (*realtimeApp, error) {
 	ids, clk := idgen.NewV7(), clock.System{}
-	store := postgres.NewStore(pool, postgres.WithIDs(ids), postgres.WithClock(clk),
-		postgres.WithTimeouts(cfg.LockTimeout, cfg.StatementTimeout))
-
 	router, rc, faults, err := buildRouter(rdb, clk, logger, provider.NewMetrics(reg))
 	if err != nil {
 		return nil, fmt.Errorf("provider: %w", err)
 	}
+	deps := buildConversationDeps(cfg, logger, pool, rdb, reg, router, rc)
+	mgr := conversation.NewManager(deps)
+	mgr.StartSubscriber(podCtx)
+	go mgr.PodInfoLoop(podCtx)
+	go faults.Run(podCtx)
+
+	gateway := &wsgateway.Handler{
+		Tuning: cfg.RealtimeTuning, Origins: cfg.WSAllowedOrigins, AllowEmptyOrigin: cfg.WSAllowEmptyOrigin,
+		TrustedProxies: cfg.TrustedProxyPrefixes(),
+		Limiter:        redisstore.NewRateLimiter(rdb, ratelimit.NewLocal(clk, 100000), clk, logger, metrics.NewRateLimit(reg)),
+		Tickets:        redisstore.NewTicketStore(rdb, clk),
+		Mgr:            mgr, Log: logger, Metrics: deps.Metrics, IDs: ids, Clock: clk,
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/realtime", gateway)
+	return &realtimeApp{handler: mux, mgr: mgr}, nil
+}
+
+// buildConversationDeps wires the dependencies of the conversation Manager: the session side
+// through the fenced RuntimeService facade, the repositories, and the M8 ports. Memory is the real
+// retriever (Postgres reader, Redis memctx/memver, the router for the query embedding) and Learner
+// the real learner service, which both degrade on their own: a failure of either never fails a
+// session (spec 7.6.3).
+func buildConversationDeps(cfg config.Realtime, logger *slog.Logger, pool *pgxpool.Pool, rdb redis.UniversalClient, reg *prometheus.Registry,
+	router *provider.Router, rc provider.RouterConfig) conversation.Deps {
+	ids, clk := idgen.NewV7(), clock.System{}
+	store := postgres.NewStore(pool, postgres.WithIDs(ids), postgres.WithClock(clk),
+		postgres.WithTimeouts(cfg.LockTimeout, cfg.StatementTimeout))
 
 	// session.Service is the single writer of sessions.status; the runtime reaches it through the
 	// fenced RuntimeService facade. The realtime process never creates sessions or reads content
@@ -218,30 +244,16 @@ func buildRealtime(podCtx context.Context, cfg config.Realtime, logger *slog.Log
 		OpeningPrompts: openingPromptSource{repo: contentRepo},
 		Metrics:        metrics.NewSession(reg), ServiceName: "realtime",
 	})
-	convMetrics := conversation.NewMetrics(reg)
-	mgr := conversation.NewManager(conversation.Deps{
-		Cfg: cfg.RealtimeTuning, Clock: clk, IDs: ids, Log: logger, Metrics: convMetrics,
+	ml := buildMemoryLearner(store, pool, rdb, router, contentRepo, clk, ids, logger, memory.NewMetrics(reg))
+	return conversation.Deps{
+		Cfg: cfg.RealtimeTuning, Clock: clk, IDs: ids, Log: logger, Metrics: conversation.NewMetrics(reg),
 		Limits:  conversation.Limits{ReadyMax: cfg.ReadyMaxSessions, Max: cfg.MaxSessions, HardMax: cfg.HardMaxSessions},
 		Session: session.NewRuntimeService(sessionSvc, sessions),
 		Turns:   postgres.NewTurnRepo(pool),
 		Events:  conversation.NewSessionEventWriter(postgres.NewEventRepo(pool), ids, clk),
 		Store:   redisstore.NewRealtimeState(rdb, logger),
 		Configs: conversation.NewConfigLoader(content.NewSessionConfigLoader(contentRepo), contentRepo, 128),
-		Learner: staticLearner{}, Memory: noopMemory{}, Router: router,
+		Learner: ml.learner, Memory: ml.memory, Router: router,
 		ProviderSessionGrace: rc.SessionGrace, STTFinalTimeout: rc.TimeoutSTTFinal, Build: buildinfo.Version,
-	})
-	mgr.StartSubscriber(podCtx)
-	go mgr.PodInfoLoop(podCtx)
-	go faults.Run(podCtx)
-
-	gateway := &wsgateway.Handler{
-		Tuning: cfg.RealtimeTuning, Origins: cfg.WSAllowedOrigins, AllowEmptyOrigin: cfg.WSAllowEmptyOrigin,
-		TrustedProxies: cfg.TrustedProxyPrefixes(),
-		Limiter:        redisstore.NewRateLimiter(rdb, ratelimit.NewLocal(clk, 100000), clk, logger, metrics.NewRateLimit(reg)),
-		Tickets:        redisstore.NewTicketStore(rdb, clk),
-		Mgr:            mgr, Log: logger, Metrics: convMetrics, IDs: ids, Clock: clk,
 	}
-	mux := http.NewServeMux()
-	mux.Handle("GET /api/v1/realtime", gateway)
-	return &realtimeApp{handler: mux, mgr: mgr}, nil
 }

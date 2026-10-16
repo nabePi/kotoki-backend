@@ -44,9 +44,11 @@ func EncodeCursor(key any) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+func invalidCursor() error { return errs.New(errs.CodeInvalidCursor, "invalid cursor") }
+
 // DecodeCursor decodes s into key; any failure is INVALID_CURSOR.
 func DecodeCursor(s string, key any) error {
-	invalid := errs.New(errs.CodeInvalidCursor, "invalid cursor")
+	invalid := invalidCursor()
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
 		return invalid

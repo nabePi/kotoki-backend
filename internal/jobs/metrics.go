@@ -15,6 +15,8 @@ type Metrics struct {
 	JobItems       *prometheus.CounterVec   // job, action
 	JobLastSuccess *prometheus.GaugeVec     // job, epoch seconds
 
+	MemoryCleanupDeleted prometheus.Counter // kotoki_memory_cleanup_deleted_total (spec 13.7, 11.8.3)
+
 	SweeperActions           *prometheus.CounterVec // rule = a..e, result = ok|noop|error
 	HeartbeatChecksSuspended prometheus.Gauge
 	MassHeartbeatLoss        prometheus.Counter
@@ -38,6 +40,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "kotoki_job_items_total", Help: "Items a job processed, by action."}, []string{"job", "action"}),
 		JobLastSuccess: f.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "kotoki_job_last_success_timestamp_seconds", Help: "Unix time of the last successful run."}, []string{"job"}),
+		MemoryCleanupDeleted: f.NewCounter(prometheus.CounterOpts{
+			Name: "kotoki_memory_cleanup_deleted_total", Help: "Expired memories hard-deleted by memory_cleanup."}),
 		SweeperActions: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kotoki_sweeper_actions_total", Help: "Session sweeper actions by rule and result."}, []string{"rule", "result"}),
 		HeartbeatChecksSuspended: f.NewGauge(prometheus.GaugeOpts{

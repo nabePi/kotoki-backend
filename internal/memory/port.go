@@ -33,6 +33,7 @@ type ContextItem struct {
 // MemoryContext is the memory block of a session. The name is the one of spec 11.7.1.
 type MemoryContext struct { //nolint:revive // name fixed by spec 11.7.1
 	SessionID      uuid.UUID     `json:"session_id"`
+	UserID         uuid.UUID     `json:"user_id"`      // owner; lets ReloadCoreIfChanged work from the context alone (M8-T16)
 	UserMemVer     int64         `json:"user_mem_ver"` // kotoki:user:{id}:memver when built
 	Core           []ContextItem `json:"core"`         // PROFILE_FACT, PREFERENCE, LEARNING_PATTERN
 	CoreTokens     int           `json:"core_tokens"`
