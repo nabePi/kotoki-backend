@@ -448,3 +448,10 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Komentar `Consumer.retry` dikoreksi**: tertulis "the broker's delivery limit counts it" untuk fallback `Nack(requeue)` saat publish retry gagal; ternyata tidak dihitung.
 - **Retry nyata hanya anak tangga 5 s** (30 s/2 m/10 m tidak dijalankan nyata; plan tidak menyediakan pemendek TTL, queue immutable); tangga penuh dikunci unit `TestProcess_RetryLadder_*` dan routing 5 s oleh `TestRetryQueue_5s_ReturnsOnlyToOriginQueue` (Task 4).
 - **`TestIdempotency_ForcedRedelivery_AfterCommitBeforeAck` memakai `CloseAllConnections()`** (koneksi consumer diputus broker) sebagai "kill" sebelum ack, bukan proses consumer kedua; handler baru dilepas setelah koneksi putus sehingga ack-nya gagal, dan `Run` yang reconnect menerima redelivery.
+
+## M6-T12 — `dlq-replay`
+- **`DryRun` memakai satu `Nack(multiple=true, requeue=true)` di akhir** (atas permintaan plan, bukan nack per pesan yang membaca pesan head yang sama berulang); dijalankan lewat `defer`, jadi juga berlaku bila `ctx` dibatalkan atau `Get` gagal di tengah listing. `n` yang dikembalikan di dry run = jumlah pesan yang dicetak.
+- **`Limit <= 0` berarti seluruh DLQ** (plan tidak menyebut nilai nol). Unknown queue memberi error sebelum menyentuh `conn` (tes memakai `Conn` nil).
+- **Replay yang gagal publish di-`Nack(requeue)` dan fungsi berhenti dengan error** (jumlah yang sudah dipindah tetap dikembalikan); pesan tidak hilang, tetapi tidak ada retry otomatis di dalam `ReplayDLQ`.
+- **Tambahan tes di luar daftar plan:** `DryRun_LimitListsOnlyLimit`, `UnknownQueue_ErrorBeforeBroker`, `PublishFailure_KeepsMessageInDLQ`.
+- **Baris dry-run:** `event_id=<MessageId, fallback body> event_type=<Type> x-error-class=<..> x-last-error="<..>"`.
