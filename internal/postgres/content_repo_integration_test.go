@@ -153,7 +153,13 @@ func TestContentRepoUpdateCharacterLockAndMerge(t *testing.T) {
 				return err
 			}
 			f(&ch)
-			return r.UpdateCharacter(ctx, ch, time.Now().UTC())
+			// The timestamp comes from the database clock: created_at was set by now() in the container,
+			// and the container's clock may run ahead of the host's (time.Now() made this test flaky).
+			var at time.Time
+			if err := tx.DBTX().QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
+				return err
+			}
+			return r.UpdateCharacter(ctx, ch, at.UTC())
 		}))
 	}
 	wg.Add(2)

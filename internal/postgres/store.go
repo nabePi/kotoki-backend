@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/nabePi/kotoki-backend/internal/events"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/errs"
 	"github.com/nabePi/kotoki-backend/internal/platform/idgen"
@@ -118,6 +119,10 @@ func (t *Tx) IDs() idgen.Generator { return t.store.ids }
 
 // Clock returns the Store's clock.
 func (t *Tx) Clock() clock.Clock { return t.store.clock }
+
+// Processed returns the idempotency port bound to the transaction: MarkProcessed commits or rolls
+// back with the business effect (spec 9.7.2, D-093).
+func (t *Tx) Processed() events.ProcessedEvents { return processedEventsTx{q: t.Queries()} }
 
 func pgCode(err error) string {
 	var pe *pgconn.PgError

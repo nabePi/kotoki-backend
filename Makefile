@@ -99,9 +99,9 @@ test-cover:
 	$(GO) test -race -short -count=1 -coverprofile=coverage.out ./...
 	$(GO) run ./test/tools/covercheck -profile coverage.out -thresholds test/tools/covercheck/thresholds.txt
 
-test-cover-integration: ## cakupan adapter (postgres, redisstore, amqp) dari run integration, spec §14.8
-	@pkgs=""; for p in postgres redisstore amqp; do [ -d internal/$$p ] && pkgs="$$pkgs ./internal/$$p/..."; done; \
-	$(GO) test -race -count=1 -p 1 -tags=integration -timeout 20m -coverprofile=coverage.integration.out $$pkgs
+test-cover-integration: ## cakupan adapter (postgres, redisstore, amqp) dari seluruh run integration, spec §14.8
+	@pkgs=""; for p in postgres redisstore amqp; do [ -d internal/$$p ] && pkgs="$$pkgs,./internal/$$p/..."; done; \
+	$(GO) test -race -count=1 -p 1 -tags=integration -timeout 25m -coverpkg=$${pkgs#,} -coverprofile=coverage.integration.out ./...
 	$(GO) run ./test/tools/covercheck -profile coverage.integration.out -thresholds test/tools/covercheck/thresholds.integration.txt
 
 test-integration:
@@ -125,8 +125,9 @@ run-api:
 run-realtime: fixtures16k  ## cgo (opus, webrtcvad); PROVIDER_MODE=fake membaca FAKE_STT_FIXTURE_DIR=out/fixtures16k
 	CGO_ENABLED=1 $(GO) run ./cmd/realtime
 
-run-worker:      ## WORKER_HTTP_ADDR default Bab 9 (:8081) bentrok dengan realtime di host → :9092
-	WORKER_HTTP_ADDR=:9092 $(GO) run ./cmd/worker --handlers=outbox,evaluation,memory,learner,summary,sweeper,cleanup
+WORKER_HANDLERS ?= outbox,sweeper,cleanup
+run-worker:      ## WORKER_HTTP_ADDR default Bab 9 (:8081) bentrok dengan realtime di host → :9092; handler evaluation/memory/learner/summary menyusul (M7/M8)
+	WORKER_HTTP_ADDR=:9092 $(GO) run ./cmd/worker --handlers=$(WORKER_HANDLERS)
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -o bin/ ./cmd/api ./cmd/worker

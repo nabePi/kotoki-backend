@@ -1,0 +1,30 @@
+{
+  "event_id": "0192f1a2-7c3e-7b51-9d2a-3c4e5f6a7b8c",
+  "event_type": "session.completed",
+  "event_version": 1,
+  "occurred_at": "2026-10-12T06:30:15.123Z",
+  "producer": "REALTIME",
+  "aggregate_type": "SESSION",
+  "aggregate_id": "0192f1a0-1111-7aaa-8bbb-cccccccccccc",
+  "user_id": "0192e000-2222-7ddd-8eee-ffffffffffff",
+  "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  "tracestate": null,
+  "payload": {
+    "session_id": "0192f1a0-1111-7aaa-8bbb-cccccccccccc",
+    "final_status": "COMPLETED",
+    "end_reason": "USER_ENDED",
+    "conversation_start_mode": "AI_FIRST",
+    "topic_id": "01920000-0001-7000-8000-000000000001",
+    "scenario_id": "01920000-0002-7000-8000-000000000003",
+    "scenario_version_id": "01920000-0003-7000-8000-000000000003",
+    "character_id": "01920000-000a-7000-8000-000000000001",
+    "prompt_version_id": "01920000-000d-7000-8000-000000000001",
+    "duration_seconds": 900,
+    "started_at": "2026-10-12T06:15:00.000Z",
+    "ended_at": "2026-10-12T06:30:14.500Z",
+    "active_seconds": 888,
+    "charged_seconds": 888,
+    "turn_count": 23,
+    "user_turn_count": 21
+  }
+}

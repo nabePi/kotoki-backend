@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -14,15 +15,19 @@ type TraceRecorder struct {
 	exp *tracetest.InMemoryExporter
 }
 
-// NewTraceRecorder installs an in-memory global tracer provider, restored on cleanup.
+// NewTraceRecorder installs an in-memory global tracer provider and the W3C trace-context
+// propagator (what platform/otel.Setup installs in production), both restored on cleanup.
 func NewTraceRecorder(t testing.TB) *TraceRecorder {
 	t.Helper()
 	exp := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
 	prev := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
 	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 	t.Cleanup(func() {
 		otel.SetTracerProvider(prev)
+		otel.SetTextMapPropagator(prevProp)
 		_ = tp.Shutdown(t.Context())
 	})
 	return &TraceRecorder{t: t, exp: exp}

@@ -89,6 +89,9 @@ type Worker struct {
 	DB
 	Redis
 	OTel
+	Rabbit
+	Outbox
+	Jobs
 	HTTPAddr      string        `env:"WORKER_HTTP_ADDR"`
 	ShutdownGrace time.Duration `env:"WORKER_SHUTDOWN_GRACE"`
 	Handlers      []string      `env:"WORKER_HANDLERS" envSeparator:","`
@@ -145,6 +148,7 @@ func defaultWorker() Worker {
 	return Worker{
 		Common: defaultCommon(), DB: defaultDB(4, 1, 30*time.Second),
 		Redis: defaultRedis(10), OTel: defaultOTel("kotoki-worker"),
+		Rabbit: defaultRabbit(), Outbox: defaultOutbox(), Jobs: defaultJobs(),
 		HTTPAddr: ":8081", ShutdownGrace: 25 * time.Second,
 	}
 }

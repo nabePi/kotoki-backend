@@ -16,6 +16,7 @@ func baseEnv(t *testing.T, addr string, overrides map[string]string) map[string]
 	t.Helper()
 	m := map[string]string{
 		"DB_URL": testutil.NewEmptyPostgresDSN(t), "REDIS_URL": "redis://" + testutil.NewRedis(t).Options().Addr,
+		"RABBITMQ_URL":     testutil.NewRabbitMQ(t),
 		"WORKER_HTTP_ADDR": addr, "LOG_FORMAT": "text",
 	}
 	for k, v := range overrides {
@@ -30,7 +31,7 @@ func TestRunServesOpsAndStopsCleanly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, []string{"--handlers=outbox,evaluation"}) }()
+	go func() { done <- run(ctx, []string{"--handlers=outbox,sweeper,cleanup"}) }()
 	testutil.AssertOpsEndpoints(t, addr, done)
 	cancel()
 	select {
@@ -47,7 +48,7 @@ func TestRunFailsFastOnBadConfig(t *testing.T) {
 	testutil.ApplyEnv(t, env)
 	t.Setenv("DB_URL", "")
 	ctx := context.Background()
-	err := run(ctx, []string{"--handlers=outbox,evaluation"})
+	err := run(ctx, []string{"--handlers=outbox,sweeper,cleanup"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "DB_URL")
 	testutil.AssertNothingListening(t, addr)
