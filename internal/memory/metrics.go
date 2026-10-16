@@ -10,6 +10,7 @@ import (
 type Metrics struct {
 	candidates *prometheus.CounterVec
 	rejected   *prometheus.CounterVec
+	applied    *prometheus.CounterVec
 }
 
 // NewMetrics registers the memory collectors on reg.
@@ -20,6 +21,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "kotoki_memory_candidates_total", Help: "Memory candidates that passed validation, by category."}, []string{"category"}),
 		rejected: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "kotoki_memory_candidates_rejected_total", Help: "Memory candidates rejected by validation, by reason."}, []string{"reason"}),
+		applied: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "kotoki_memory_apply_total", Help: "Memory candidates applied, by action."}, []string{"action"}),
 	}
 }
 
@@ -34,5 +37,12 @@ func (m *Metrics) Candidate(c Category) {
 func (m *Metrics) Rejected(reason string) {
 	if m != nil {
 		m.rejected.WithLabelValues(reason).Inc()
+	}
+}
+
+// Applied counts one ApplyCandidate outcome.
+func (m *Metrics) Applied(a Action) {
+	if m != nil {
+		m.applied.WithLabelValues(string(a)).Inc()
 	}
 }

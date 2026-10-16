@@ -59,6 +59,12 @@ type Candidate struct {
 	ValidDays    *int
 	TurnIDs      []uuid.UUID
 	Embedding    []float32
+
+	// SessionID is the source session (set by ValidateCandidates); PromptVersionID and
+	// EmbeddingModel are filled by the worker with Embedding.
+	SessionID       uuid.UUID
+	PromptVersionID *uuid.UUID
+	EmbeddingModel  string
 }
 
 // ConfidenceThreshold is the minimum confidence to store a candidate of category c (rule 10).
@@ -234,8 +240,9 @@ func ValidateCandidates(out ExtractionOutput, turns map[int]uuid.UUID, sessionID
 		}
 		return cmp.Compare(b.Confidence, a.Confidence)
 	})
-	for _, c := range valid {
-		m.Candidate(c.Category)
+	for i := range valid {
+		valid[i].SessionID = sessionID
+		m.Candidate(valid[i].Category)
 	}
 	return valid
 }
