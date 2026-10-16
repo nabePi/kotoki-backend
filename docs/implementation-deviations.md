@@ -692,3 +692,10 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 ## M8-T3 — Trend dan Replay
 - **`ComputeTrend` memakai toleransi `1e-9` pada ambang slope ±0,05** agar slope yang secara matematis tepat 0,05 tidak jatuh ke STABLE karena derau floating point; spec membandingkan `>= +0.05` / `<= -0.05`.
 - **`Replay` mengabaikan `Count`, `Ceiling`, `LastEvidenceAt` dari `prior`** (hanya `Level` dan `Confidence`), sesuai §12.5.5 (`n := 0; ceiling := nil; last := nil`). Untuk daftar kosong mengembalikan state yang dinormalkan itu dan `rows` nil.
+
+## M8-T4 — Prior dan FocusSkills
+- **Toleransi `1e-9` pada ambang `P_k >= 0.30` dan pada pembandingan tie** (derau floating point; mis. DECLINING murni = 0,30).
+- **Tie kedua (level sama) jatuh ke urutan skill D-097** agar hasil deterministik; spec hanya menyebut level lebih rendah.
+- **Level onboarding tak dikenal diperlakukan seperti `NULL`** (validasi nilai ada di lapisan service/HTTP).
+- **`EffectiveConfidence` menjepit hari negatif ke 0** (jam mundur tidak menaikkan confidence).
+- **`export_test.go` baru** mengekspos `priority` (helper P_k) hanya untuk tes, sesuai plan ("helper `priority`").
