@@ -593,4 +593,4 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Alasan drop tambahan di luar plan:** `over_limit` (batas 15/3; tidak dihitung ke `Rejected`). Tipe tak dikenal dan dimensi STRENGTH di luar lima dimensi masuk `type_dimension_mismatch`.
 - **Original tanpa `turn_seq`** (hanya mungkin pada STRENGTH, kedua field optional) tidak dapat diverifikasi, jadi dibuang sebagai `original_not_found`; `original` yang kosong setelah normalisasi (hanya tanda baca) juga `original_not_found`. Field wajib berisi string kosong/whitespace = `missing_field`.
 - **Urutan `Kept` mengikuti urutan input** (batas jumlah hanya memilih siapa yang lolos); STRENGTH diurutkan berdasar confidence karena severity dipaksa INFO. Deduplikasi `OBJECTIVE_NOT_MET` ganda (semua field null) ikut berlaku karena kuncinya sama.
-- **`Finding.TurnID`** diisi dari `TurnRef` hanya bila `turn_seq` ada. Himpunan tanda baca normalisasi menyertakan `,` dan `.` ASCII (plan memakai `，．`; kedua versi ada).
+- **`Finding.TurnID`** diisi dari `TurnRef` hanya bila `turn_seq` ada.
