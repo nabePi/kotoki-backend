@@ -37,13 +37,19 @@ type learnerRig struct {
 func newLearnerRig(t *testing.T) *learnerRig {
 	t.Helper()
 	pool := testutil.NewPostgres(t)
+	return newLearnerRigOn(t, pool, testutil.SeedContent(t, pool))
+}
+
+// newLearnerRigOn is newLearnerRig over a migrated database whose content is already seeded.
+func newLearnerRigOn(t *testing.T, pool *pgxpool.Pool, c testutil.ContentIDs) *learnerRig {
+	t.Helper()
 	store := postgres.NewStore(pool)
 	// session_turns is partitioned: the first partitions are the current month and the next three,
 	// so the sessions of a test live in the middle of next month
 	now := time.Now().UTC()
 	base := time.Date(now.Year(), now.Month()+1, 5, 10, 0, 0, 0, time.UTC)
 	return &learnerRig{
-		t: t, pool: pool, store: store, content: testutil.SeedContent(t, pool), base: base,
+		t: t, pool: pool, store: store, content: c, base: base,
 		cons: learner.NewConsumer(store.LearnerStore(), store.LearnerUserGate(), clock.System{}, idgen.NewV7(), nil, nil),
 		svc:  learner.NewService(learner.Deps{Store: store.LearnerStore(), Clock: clock.System{}, IDs: idgen.NewV7()}),
 	}

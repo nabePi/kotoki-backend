@@ -62,7 +62,12 @@ type memRig struct {
 
 func newMemRig(t *testing.T) *memRig {
 	t.Helper()
-	pool := testutil.NewPostgres(t)
+	return newMemRigOn(t, testutil.NewPostgres(t))
+}
+
+// newMemRigOn is newMemRig over an existing migrated database.
+func newMemRigOn(t *testing.T, pool *pgxpool.Pool) *memRig {
+	t.Helper()
 	store := postgres.NewStore(pool)
 	clk := clock.System{}
 	r := &memRig{t: t, pool: pool, prov: newMemProvider(), ver: fakes.NewMemVerRecorder(), reg: store.MemoryStore().Reader()}
