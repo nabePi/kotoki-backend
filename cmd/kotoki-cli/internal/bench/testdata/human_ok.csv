@@ -1,0 +1,7 @@
+item_id,reviewer,candidate,score_naturalness,score_level,score_character,mos,kanji_misread
+c1,r1,OPENAI/llm-a,5,4,4,,
+c1,r2,OPENAI/llm-a,4,4,3,,
+c2,r1,OPENAI/llm-a,,,,,
+t1,r1,ELEVENLABS/tts-a/v1,,,,4.5,0
+t2,r1,ELEVENLABS/tts-a/v1,,,,4.0,1
+t1,r2,ELEVENLABS/tts-a/v1,,,,,0
