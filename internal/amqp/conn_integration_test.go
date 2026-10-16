@@ -1,0 +1,137 @@
+//go:build integration
+
+package amqp_test
+
+import (
+	"context"
+	"io"
+	"log/slog"
+	"testing"
+	"time"
+
+	amqp091 "github.com/rabbitmq/amqp091-go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/nabePi/kotoki-backend/internal/amqp"
+	"github.com/nabePi/kotoki-backend/internal/events"
+	"github.com/nabePi/kotoki-backend/internal/testutil"
+)
+
+func dial(t *testing.T, url string) *amqp.Conn {
+	t.Helper()
+	c, err := amqp.Dial(context.Background(), url, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+func msg() amqp091.Publishing {
+	return amqp091.Publishing{DeliveryMode: amqp091.Persistent, Body: []byte(`{}`)}
+}
+
+func TestConfirmPublisher_PublishConfirmed_Delivers(t *testing.T) {
+	url := testutil.NewRabbitMQ(t)
+	adm := testutil.RabbitMQAdmin(t, url)
+	pub := amqp.NewConfirmPublisher(dial(t, url), 5*time.Second)
+
+	require.NoError(t, pub.PublishConfirmed(context.Background(), amqp.ExchangeEvents, "evaluation.completed", msg()))
+
+	assert.Equal(t, 1, adm.QueueMessages(events.QueueLearner), "confirmed means already routed and persisted")
+	assert.Equal(t, 0, adm.QueueMessages(events.QueueEvaluation))
+	assert.True(t, pub.IsOpen())
+}
+
+func TestConfirmPublisher_Send_BatchThenWait(t *testing.T) {
+	url := testutil.NewRabbitMQ(t)
+	adm := testutil.RabbitMQAdmin(t, url)
+	pub := amqp.NewConfirmPublisher(dial(t, url), 5*time.Second)
+
+	var cs []amqp.Confirmation
+	for range 5 {
+		c, err := pub.Send(context.Background(), amqp.ExchangeEvents, "evaluation.completed", msg())
+		require.NoError(t, err)
+		cs = append(cs, c)
+	}
+	for _, c := range cs {
+		acked, err := c.Wait(context.Background())
+		require.NoError(t, err)
+		assert.True(t, acked)
+	}
+	assert.Equal(t, 5, adm.QueueMessages(events.QueueLearner))
+}
+
+func TestConfirmPublisher_Nack_ErrNacked(t *testing.T) {
+	url := testutil.NewRabbitMQ(t)
+	conn := dial(t, url)
+	ch, err := conn.Channel()
+	require.NoError(t, err)
+	_, err = ch.QueueDeclare("tiny", true, false, false, false, amqp091.Table{
+		"x-queue-type": "classic", "x-max-length": int64(1), "x-overflow": "reject-publish"})
+	require.NoError(t, err)
+	_ = ch.Close()
+	pub := amqp.NewConfirmPublisher(conn, 5*time.Second)
+
+	require.NoError(t, pub.PublishConfirmed(context.Background(), "", "tiny", msg()))
+	err = pub.PublishConfirmed(context.Background(), "", "tiny", msg())
+	assert.ErrorIs(t, err, amqp.ErrNacked, "a full reject-publish queue nacks (classic: quorum limits are not exact)")
+}
+
+func TestConn_ReconnectsAfterForcedClose(t *testing.T) {
+	url := testutil.NewRabbitMQ(t)
+	adm := testutil.RabbitMQAdmin(t, url)
+	conn := dial(t, url)
+	pub := amqp.NewConfirmPublisher(conn, 5*time.Second)
+	require.NoError(t, pub.PublishConfirmed(context.Background(), amqp.ExchangeEvents, "evaluation.completed", msg()))
+	require.True(t, conn.Healthy())
+	closed := conn.Closed()
+
+	adm.CloseAllConnections()
+
+	require.Eventually(t, func() bool { return !conn.Healthy() }, 5*time.Second, 50*time.Millisecond)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Closed() not signalled")
+	}
+	assert.False(t, pub.IsOpen())
+	err := pub.PublishConfirmed(context.Background(), amqp.ExchangeEvents, "evaluation.completed", msg())
+	require.ErrorIs(t, err, amqp.ErrBrokerUnavailable)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, conn.Reconnect(ctx))
+	assert.True(t, conn.Healthy())
+	assert.Len(t, adm.Queues(), 25, "topology still there")
+	select {
+	case <-conn.Closed():
+		t.Fatal("Closed() of the new connection must be open")
+	default:
+	}
+
+	require.NoError(t, pub.PublishConfirmed(context.Background(), amqp.ExchangeEvents, "evaluation.completed", msg()))
+	assert.Equal(t, 2, adm.QueueMessages(events.QueueLearner))
+}
+
+func TestConn_ClosedForGood_ReconnectFails(t *testing.T) {
+	url := testutil.NewRabbitMQ(t)
+	conn := dial(t, url)
+	require.NoError(t, conn.Close())
+	assert.False(t, conn.Healthy())
+	assert.ErrorIs(t, conn.Reconnect(context.Background()), amqp.ErrBrokerUnavailable, "closed for good")
+}
+
+func TestConfirmPublisher_ClosedConn_ErrBrokerUnavailable(t *testing.T) {
+	url := testutil.NewRabbitMQ(t)
+	conn := dial(t, url)
+	pub := amqp.NewConfirmPublisher(conn, time.Second)
+	require.NoError(t, conn.Close())
+
+	assert.False(t, pub.IsOpen())
+	assert.NotPanics(t, func() {
+		_, err := pub.Send(context.Background(), amqp.ExchangeEvents, "session.completed", msg())
+		assert.ErrorIs(t, err, amqp.ErrBrokerUnavailable)
+	})
+	_, err := conn.Channel()
+	assert.ErrorIs(t, err, amqp.ErrBrokerUnavailable)
+}
