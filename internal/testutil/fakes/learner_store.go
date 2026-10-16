@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -215,7 +216,10 @@ func cmpReplay(a, b learner.EstimateRow) int {
 	if c := a.AssessedAt.Compare(b.AssessedAt); c != 0 {
 		return c
 	}
-	return compareUUID(a.EvaluationID, b.EvaluationID)
+	if c := compareUUID(a.EvaluationID, b.EvaluationID); c != 0 {
+		return c
+	}
+	return strings.Compare(string(a.Skill), string(b.Skill)) // estimates of several skills share both: keep Estimates stable
 }
 
 func compareUUID(a, b uuid.UUID) int {

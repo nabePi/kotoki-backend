@@ -377,3 +377,29 @@ func (r *learnerRepo) DialectSessions90d(ctx context.Context, userID uuid.UUID, 
 	}
 	return int(n), nil
 }
+
+type learnerUserGate struct{ q *sqlcgen.Queries }
+
+var _ learner.UserGate = learnerUserGate{}
+
+// LearnerUserGate returns the learner.UserGate of s: it reads users.status outside any
+// transaction.
+func (s *Store) LearnerUserGate() learner.UserGate { return learnerUserGate{q: s.Queries()} }
+
+// NewLearnerUserGate returns the learner.UserGate over pool.
+func NewLearnerUserGate(pool *pgxpool.Pool) learner.UserGate {
+	return learnerUserGate{q: sqlcgen.New(pool)}
+}
+
+// UserDeleted reports users.status = 'DELETED'. A user without a row counts as deleted: there is
+// nobody to write for, and retrying cannot change that.
+func (g learnerUserGate) UserDeleted(ctx context.Context, userID uuid.UUID) (bool, error) {
+	status, err := g.q.GetUserStatus(ctx, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, internalErr(err, "get user status failed")
+	}
+	return status == "DELETED", nil
+}
