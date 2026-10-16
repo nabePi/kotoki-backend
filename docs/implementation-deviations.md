@@ -676,3 +676,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`test/tools/modelcheck` diubah (pola dan pengecualian):** pola spec bab 13 dipertahankan tetapi dijangkarkan ke awal kata (`(^|[^A-Za-z0-9])(...)`) karena `scribe` cocok dengan "subscribe"; tag struct ber-`envDefault:` dikecualikan (default model RouterConfig §8.5.1 hidup di `internal/provider/config.go`, bukan `internal/platform/config` seperti tertulis di spec/D-003) dan `internal/testutil/` dilewati. Jika RouterConfig kelak dipindah ke `internal/platform/config`, pengecualian tag tetap aman.
 - **`internal/session` coverage:** hanya tes baru; tidak ada perubahan kode produksi maupun ambang.
 - **`internal/wsgateway/helpers_test.go`:** `rig.Logs` berubah dari `*bytes.Buffer` menjadi `*syncBuffer` (perbaikan race tes).
+
+## M8-T1 — Kontrak tipe learner
+- **`AdaptiveInput.Trends` bertipe `map[Skill]string`** (spec §12.8.2 persis); tipe `Trend` baru ada di Task 3, dan `FocusInput.Trends` (Task 4) memakai `map[Skill]Trend`. Pemanggil mengonversi.
+- **`AdaptiveDifficulty.MarshalJSON` (value receiver) ditambahkan** agar `focus_skills` nil menjadi `[]` (diizinkan plan; perubahan aditif, field tidak berubah). `UnmarshalJSON` tidak diubah.
+- Tipe `memory` M5 sudah sesuai §11.7.1 (tes karakterisasi langsung hijau); tidak ada perbaikan tag JSON.
