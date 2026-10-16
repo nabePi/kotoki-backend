@@ -12,6 +12,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/events"
 	"github.com/nabePi/kotoki-backend/internal/memory"
 	"github.com/nabePi/kotoki-backend/internal/testutil/fakes"
+	"github.com/nabePi/kotoki-backend/internal/testutil/repotest"
 )
 
 var memNow = time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
@@ -208,7 +209,7 @@ func TestMemoryStore_Reads(t *testing.T) {
 	for _, m := range all {
 		ids = append(ids, m.ID)
 	}
-	require.Equal(t, []uuid.UUID{{15: 3}, {15: 2}, {15: 1}, {15: 6}, {15: 7}, {15: 8}}, ids, "category, then newest, then id; ACTIVE and unexpired only")
+	require.Equal(t, []uuid.UUID{{15: 6}, {15: 7}, {15: 8}, {15: 1}, {15: 3}, {15: 2}}, ids, "category (as text, like the SQL), then newest, then id; ACTIVE and unexpired only")
 
 	// keyset paging without gaps or repeats
 	var seen []uuid.UUID
@@ -257,4 +258,17 @@ func TestMemoryStore_RollbackRestoresRowsOpsAndProcessed(t *testing.T) {
 		return tx.Processed().MarkProcessed(ctx, "memory", ev)
 	}))
 	require.Equal(t, 1, s.Processed.Len(), "a committed transaction keeps its row")
+}
+
+func TestFakeMemoryStore_RepoSuite(t *testing.T) {
+	repotest.MemoryRepoSuite(t, func(*testing.T) repotest.MemoryHarness {
+		s := fakes.NewMemoryStore()
+		return repotest.MemoryHarness{
+			Store:           s,
+			NewUser:         func(*testing.T) uuid.UUID { return uuid.Must(uuid.NewV7()) },
+			NewSession:      func(*testing.T, uuid.UUID) uuid.UUID { return uuid.Must(uuid.NewV7()) },
+			PromptVersionID: uuid.Must(uuid.NewV7()),
+			Dump:            func(_ *testing.T, userID uuid.UUID) []memory.Memory { return s.All(userID) },
+		}
+	})
 }

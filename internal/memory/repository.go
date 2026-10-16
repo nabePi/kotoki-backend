@@ -117,7 +117,8 @@ type Reader interface {
 	// minSim, nearest first, skipping those of the session exclude.
 	SearchEpisodic(ctx context.Context, userID uuid.UUID, qvec []float32, minSim float64, k int, exclude *uuid.UUID, now time.Time) ([]EpisodicRow, error)
 	// List returns at most limit ACTIVE, unexpired memories of the user (all categories, or cat),
-	// ordered (category, last_observed_at DESC, id), strictly after the cursor.
+	// ordered (category, last_observed_at DESC, id), strictly after the cursor. The embedding is
+	// not loaded (Memory.Embedding is nil).
 	List(ctx context.Context, userID uuid.UUID, cat *Category, after *ListCursor, limit int, now time.Time) ([]Memory, error)
 }
 

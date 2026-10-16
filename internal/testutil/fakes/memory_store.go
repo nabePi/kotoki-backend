@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -323,18 +324,17 @@ func (r *memoryRepo) DeleteLowest(_ context.Context, userID uuid.UUID, g memory.
 		return err
 	}
 	rows := r.active(userID, g)
-	score := func(m memory.Memory) float64 {
+	// importance and confidence are NUMERIC(4,3) in PostgreSQL: score in thousandths so that equal
+	// stored values tie exactly instead of differing by float noise.
+	score := func(m memory.Memory) int {
 		if g == memory.CapEpisodic {
 			return 0 // the oldest observation goes first
 		}
-		return 0.6*m.Importance + 0.4*m.Confidence
+		return 6*int(math.Round(m.Importance*1000)) + 4*int(math.Round(m.Confidence*1000))
 	}
 	slices.SortFunc(rows, func(a, b memory.Memory) int {
 		if sa, sb := score(a), score(b); sa != sb {
-			if sa < sb {
-				return -1
-			}
-			return 1
+			return sa - sb
 		}
 		if c := a.LastObservedAt.Compare(b.LastObservedAt); c != 0 {
 			return c
@@ -475,14 +475,9 @@ func (r *memoryRepo) SearchEpisodic(_ context.Context, userID uuid.UUID, qvec []
 	return out[:min(k, len(out))], nil
 }
 
-func categoryRank(c memory.Category) int {
-	return slices.Index([]memory.Category{
-		memory.CategoryProfileFact, memory.CategoryPreference, memory.CategoryLearningPattern, memory.CategoryEpisodic,
-	}, c)
-}
-
+// cmpList orders like the SQL of List: category (text), last_observed_at DESC, id.
 func cmpList(a, b memory.Memory) int {
-	if c := categoryRank(a.Category) - categoryRank(b.Category); c != 0 {
+	if c := strings.Compare(string(a.Category), string(b.Category)); c != 0 {
 		return c
 	}
 	if c := b.LastObservedAt.Compare(a.LastObservedAt); c != 0 {
@@ -503,7 +498,9 @@ func (r *memoryRepo) List(_ context.Context, userID uuid.UUID, cat *memory.Categ
 		if after != nil && cmpList(m, memory.Memory{Category: after.Category, LastObservedAt: after.LastObservedAt, ID: after.ID}) <= 0 {
 			continue
 		}
-		rows = append(rows, cloneMemory(m))
+		m = cloneMemory(m)
+		m.Embedding = nil // List never loads the embedding, like the SQL
+		rows = append(rows, m)
 	}
 	slices.SortFunc(rows, cmpList)
 	return rows[:min(limit, len(rows))], nil
