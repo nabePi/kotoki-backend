@@ -90,3 +90,30 @@ func (r *RetentionRepo) DeleteExpiredTokens(ctx context.Context, now time.Time, 
 		return fam + reset, nil
 	})
 }
+
+// deleteByCtid deletes up to batch rows of table matching where (one boundary $1 = cutoff) in one
+// statement; ctid is not visible to sqlc, so this is plain pgx. table and where are constants of
+// this file, never caller input.
+func (r *RetentionRepo) deleteByCtid(ctx context.Context, what, table, where string, before time.Time, batch int) (int, error) {
+	q := "DELETE FROM " + table + " WHERE ctid IN (SELECT ctid FROM " + table + " WHERE " + where + " LIMIT $2)"
+	tag, err := r.pool.Exec(ctx, q, before.UTC(), batch)
+	if err != nil {
+		return 0, internalErr(err, what+" failed")
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// DeleteOutboxPublished deletes up to batch PUBLISHED outbox rows with published_at < before.
+func (r *RetentionRepo) DeleteOutboxPublished(ctx context.Context, before time.Time, batch int) (int, error) {
+	return r.deleteByCtid(ctx, "delete published outbox", "event_outbox", "status = 'PUBLISHED' AND published_at < $1", before, batch)
+}
+
+// DeleteOutboxFailed deletes up to batch FAILED outbox rows with created_at < before.
+func (r *RetentionRepo) DeleteOutboxFailed(ctx context.Context, before time.Time, batch int) (int, error) {
+	return r.deleteByCtid(ctx, "delete failed outbox", "event_outbox", "status = 'FAILED' AND created_at < $1", before, batch)
+}
+
+// DeleteProcessedEvents deletes up to batch processed_events rows with processed_at < before.
+func (r *RetentionRepo) DeleteProcessedEvents(ctx context.Context, before time.Time, batch int) (int, error) {
+	return r.deleteByCtid(ctx, "delete processed events", "processed_events", "processed_at < $1", before, batch)
+}

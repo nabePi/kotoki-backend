@@ -499,3 +499,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Setiap langkah di-drain sampai batch pendek, urutan §9.9.4 (evaluasi, turns, events, ringkasan, token); langkah gagal tidak diulang dalam loop ketat**, langkah berikutnya tetap jalan, dan semua error dikembalikan lewat `errors.Join` (job dicatat `error`). `kotoki_job_items_total{job="transcript_retention",action=evaluation_details|turns|events|summaries|tokens}` bertambah per baris.
 - **Catatan perilaku (sesuai spec, bukan penyimpangan):** langkah 4 menandai `transcript_purged_at` pada sesi dengan `ended_at < now − 180d` tanpa margin, sedangkan turn sesi itu yang dibuat dalam 2 jam terakhir sebelum garis baru terhapus pada run berikutnya; jendela ≤ ~2 jam di mana sesi sudah `410` tetapi baris turn terakhir masih ada.
 - **`FOR UPDATE SKIP LOCKED` pada evaluasi** (spec) tidak punya tes konkurensi; `transcript_retention` dijaga advisory lock satu-run-per-waktu sehingga tidak ada pesaing.
+
+## M6-T19 — Job `outbox_retention`
+- **Loop drain dipakai bersama T17:** `runRetentionSteps`/`drainStep` di `transcript_retention.go` (diekstrak dari method `drain`), sehingga perilaku identik: langkah gagal tidak diulang ketat, langkah berikut tetap jalan, error digabung `errors.Join`.
+- **Cutoff sebagai parameter** (`before time.Time`), bukan `now() - interval` di SQL, sama seperti T17 (deterministik dengan jam palsu). Kondisi `status = 'PUBLISHED'` pada langkah published secara logika redundan dengan CHECK `published_at`, tetapi dipertahankan untuk index parsial `idx_event_outbox_published_at`.
+- Langkah memakai pgx mentah (`ctid` tak dikenal sqlc), sesuai plan; nama tabel/kondisi adalah konstanta file, bukan input.

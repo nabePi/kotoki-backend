@@ -86,9 +86,15 @@ func (j *TranscriptRetentionJob) Run(ctx context.Context) error {
 			return j.s.DeleteExpiredTokens(ctx, now, time.Duration(j.cfg.ExpiredTokensDays)*day, b)
 		}},
 	}
+	return runRetentionSteps(ctx, transcriptRetentionName, steps, j.m, j.log)
+}
+
+// runRetentionSteps runs steps in order, each drained until a batch comes back short. A failing
+// step is logged and the next one still runs; all failures are returned together.
+func runRetentionSteps(ctx context.Context, job string, steps []retentionStep, m *Metrics, log *slog.Logger) error {
 	var errs []error
 	for _, st := range steps {
-		if err := j.drain(ctx, st); err != nil {
+		if err := drainStep(ctx, job, st, m, log); err != nil {
 			errs = append(errs, err)
 			if ctx.Err() != nil {
 				break
@@ -98,17 +104,17 @@ func (j *TranscriptRetentionJob) Run(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (j *TranscriptRetentionJob) drain(ctx context.Context, st retentionStep) error {
+func drainStep(ctx context.Context, job string, st retentionStep, m *Metrics, log *slog.Logger) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("%s: %w", st.action, err)
 		}
 		n, err := st.run(ctx, st.batch)
 		if n > 0 {
-			j.m.JobItems.WithLabelValues(transcriptRetentionName, st.action).Add(float64(n))
+			m.JobItems.WithLabelValues(job, st.action).Add(float64(n))
 		}
 		if err != nil {
-			j.log.ErrorContext(ctx, "transcript_retention: step failed", "step", st.action, "error", err.Error())
+			log.ErrorContext(ctx, job+": step failed", "step", st.action, "error", err.Error())
 			return fmt.Errorf("%s: %w", st.action, err)
 		}
 		if n < st.batch {
