@@ -1,0 +1,4 @@
+{"meta": {"vendor": "ELEVENLABS", "capability": "STT", "source": "https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime (error message_type names and {message_type,error} shape; read 2026-10-16; error texts and the WebSocket close codes are NOT in the docs: invented for the fixture, unverified)", "verified": false}}
+{"ws_upgrade": {"path": "/v1/speech-to-text/realtime", "headers": {"xi-api-key": "xi-test-key"}}}
+{"ws": {"dir": "on", "match": {"message_type": "input_audio_chunk", "commit": false}, "send": [{"at_ms": 0, "text": "{\"message_type\": \"rate_limited\", \"error\": \"Too many requests\"}"}]}}
+{"ws": {"dir": "send", "at_ms": 0, "text": "{\"message_type\": \"session_started\", \"session_id\": \"sess_fixture\", \"config\": {}}"}}

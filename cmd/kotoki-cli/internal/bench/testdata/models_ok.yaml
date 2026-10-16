@@ -1,0 +1,7 @@
+candidates:
+  - {capability: STT, provider: OPENAI, model: stt-model-a}
+  - {capability: STT, provider: CARTESIA, model: stt-model-b}
+  - {capability: LLM, provider: DEEPSEEK, model: llm-model-a}
+  - {capability: TTS, provider: ELEVENLABS, model: tts-model-a, voice: voice-1, role: PRIMARY, characters: [HARUKA, KENJI]}
+  - {capability: TTS, provider: CARTESIA, model: tts-model-b, voice: voice-2, role: FALLBACK}
+  - {capability: TTS, provider: FAKE_PRIMARY, model: fake-tts, voice: fake-voice, role: PRIMARY}

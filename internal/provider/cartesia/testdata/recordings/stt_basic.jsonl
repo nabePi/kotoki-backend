@@ -1,0 +1,5 @@
+{"meta": {"vendor": "CARTESIA", "capability": "STT", "source": "https://docs.cartesia.ai/api-reference/stt/stt (endpoint, query, finalize/close, transcript/flush_done/done/error shapes; read 2026-10-16; ja transcripts and timing are NOT in the docs: written from the documented shapes, unverified)", "verified": false}}
+{"ws_upgrade": {"path": "/stt/websocket", "query": {"model": "m_ink", "encoding": "pcm_s16le", "sample_rate": "16000", "cartesia_version": "v1"}, "headers": {"X-API-Key": "ct-test-key"}}}
+{"ws": {"dir": "on", "match": {"binary": true}}}
+{"ws": {"dir": "on", "match": {"raw_text": "finalize"}, "send": [{"at_ms": 0, "text": "{\"type\": \"transcript\", \"is_final\": true, \"request_id\": \"req_fixture\", \"text\": \"日本語の勉強\", \"duration\": 0.2, \"words\": [{\"word\": \"日本語\", \"start\": 0.0, \"end\": 0.12}, {\"word\": \"の勉強\", \"start\": 0.12, \"end\": 0.2}]}"}, {"at_ms": 0, "text": "{\"type\": \"flush_done\", \"request_id\": \"req_fixture\"}"}]}}
+{"ws": {"dir": "on", "match": {"raw_text": "close"}, "send": [{"at_ms": 0, "text": "{\"type\": \"done\", \"request_id\": \"req_fixture\"}"}]}}

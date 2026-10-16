@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 
 	"github.com/nabePi/kotoki-backend/cmd/internal/providerwire"
@@ -8,24 +9,38 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/provider"
 )
 
-// workerCaps are the capabilities the worker router is wired with. provider.NewRouter requires every
-// adapter, and the async side uses LLM (summary, via EVALUATION following LLM) and EMBEDDING (M8
-// memory); STT and TTS are built only to satisfy it and are never called by the worker.
-var workerCaps = []provider.Capability{provider.CapSTT, provider.CapLLM, provider.CapTTS, provider.CapEmbedding}
+// workerCaps are the capabilities the worker calls: LLM (summary, via EVALUATION following LLM) and
+// EMBEDDING (M8 memory). provider.NewRouter requires every adapter, so providerwire.Assemble fills STT
+// and TTS with fake stand-ins that the worker never calls.
+var workerCaps = []provider.Capability{provider.CapLLM, provider.CapEmbedding}
 
 // buildRouter wires the provider router of the worker (spec 8.5, Role worker: async slot waits and
-// retries). M7 knows only PROVIDER_MODE=fake; real mode is refused by providerwire (M9 adds the
-// vendor adapters). Fault injection (spec 8.9.6) is not wired: the worker's fakes use none.
+// retries): LLM/EVALUATION and EMBEDDING come from the vendor adapters in PROVIDER_MODE=real, while
+// STT and TTS stay fake stand-ins (providerwire.Assemble). Fault injection (spec 8.9.6) is not
+// wired: the worker's fakes use none.
 func buildRouter(clk clock.Clock, logger *slog.Logger, pm *provider.Metrics) (*provider.Router, error) {
 	rc, fc, err := providerwire.ParseConfigs()
 	if err != nil {
 		return nil, err
 	}
-	rd, err := providerwire.BuildFake(rc, fc, workerCaps, providerwire.Deps{
+	a, err := providerwire.Assemble(rc, fc, workerCaps, providerwire.Deps{
 		Role: provider.RoleWorker, Clock: clk, Log: logger, Metrics: pm,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return provider.NewRouter(rc, rd)
+	return provider.NewRouter(a.Config, a.Deps)
+}
+
+// validateProviders checks the provider configuration of PROVIDER_MODE=real before any connection
+// is opened; it only matters for a worker that runs consumers (the only ones that call providers).
+func validateProviders() error {
+	rc, _, err := providerwire.ParseConfigs()
+	if err != nil {
+		return fmt.Errorf("provider config: %w", err)
+	}
+	if err := providerwire.ValidateReal(rc, workerCaps); err != nil {
+		return fmt.Errorf("provider config: %w", err)
+	}
+	return nil
 }

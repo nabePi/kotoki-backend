@@ -1,0 +1,3 @@
+{"meta": {"vendor": "CARTESIA", "capability": "STT", "source": "GUESS: the Cartesia STT docs state no session duration limit and no error_code for one; error_code reuses provider.rotationTriggers' session_time_limit_exceeded (invented for the fixture, unverified)", "verified": false}}
+{"ws_upgrade": {"path": "/stt/websocket", "headers": {"X-API-Key": "ct-test-key"}}}
+{"ws": {"dir": "on", "match": {"binary": true}, "send": [{"at_ms": 0, "text": "{\"type\": \"error\", \"status_code\": 408, \"title\": \"Request Timeout\", \"message\": \"Maximum session duration reached\", \"error_code\": \"session_time_limit_exceeded\", \"request_id\": \"req_fixture\"}"}]}}

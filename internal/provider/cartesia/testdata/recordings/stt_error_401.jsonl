@@ -1,0 +1,3 @@
+{"meta": {"vendor": "CARTESIA", "capability": "STT", "source": "https://docs.cartesia.ai/api-reference/stt/stt (error message shape status_code/title/message/error_code/request_id; the docs show only the model_not_found example: texts and status/code pairs here are invented for the fixture, unverified)", "verified": false}}
+{"ws_upgrade": {"path": "/stt/websocket", "headers": {"X-API-Key": "ct-test-key"}}}
+{"ws": {"dir": "on", "match": {"binary": true}, "send": [{"at_ms": 0, "text": "{\"type\": \"error\", \"status_code\": 401, \"title\": \"Unauthorized\", \"message\": \"Invalid API key\", \"request_id\": \"req_fixture\"}"}]}}

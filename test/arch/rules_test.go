@@ -13,10 +13,10 @@ var (
 		"internal/evaluation", "internal/memory", "internal/learner",
 		"internal/summary", "internal/admin", "internal/events",
 	}
-	vendorExempt = []string{"internal/provider/openai", "internal/provider/gemini", "internal/provider/azure"}
+	vendorExempt = []string{"internal/provider/openai", "internal/provider/elevenlabs", "internal/provider/cartesia", "internal/provider/deepseek", "internal/provider/gemini", "internal/provider/azure"}
 	adapters     = []string{
 		"internal/postgres", "internal/redisstore", "internal/amqp", "internal/objectstore",
-		"internal/mailer", "internal/provider/elevenlabs", "internal/provider/deepgram",
+		"internal/mailer", "internal/provider/elevenlabs", "internal/provider/cartesia", "internal/provider/deepseek", "internal/provider/deepgram",
 		"internal/provider/openai", "internal/provider/gemini", "internal/provider/azure",
 	}
 	handlers     = []string{"internal/httpapi", "internal/wsgateway"}
@@ -32,7 +32,7 @@ var (
 	featureDenyInternal = []string{
 		"internal/postgres", "internal/redisstore", "internal/amqp", "internal/objectstore",
 		"internal/mailer", "internal/httpapi", "internal/wsgateway", "internal/jobs",
-		"internal/provider/elevenlabs", "internal/provider/deepgram", "internal/provider/openai",
+		"internal/provider/elevenlabs", "internal/provider/cartesia", "internal/provider/deepseek", "internal/provider/deepgram", "internal/provider/openai",
 		"internal/provider/gemini", "internal/provider/azure",
 	}
 	handlerDenyExternal = []string{

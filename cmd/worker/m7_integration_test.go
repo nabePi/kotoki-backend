@@ -49,12 +49,40 @@ func TestWorker_RunEvaluationFlags(t *testing.T) {
 		20*time.Second, 50*time.Millisecond, "/readyz 200 with evaluation and summary consumers")
 }
 
-// PROVIDER_MODE=real is refused until M9, for the flags that need a provider.
-func TestWorker_RealProviderModeRefusedForConsumers(t *testing.T) {
-	workerEnv(t, map[string]string{"PROVIDER_MODE": "real"})
-	err := runWith(context.Background(), []string{"--handlers=evaluation"}, io.Discard, io.Discard)
+// PROVIDER_MODE=real is accepted by the consumers that call providers, but a configuration that cannot
+// start is refused before any connection, naming the variable.
+func TestWorker_RealProviderModeWithoutKeysRefusedForConsumers(t *testing.T) {
+	// RabbitMQ is unreachable: the provider check comes before any connection, so the key is the error.
+	workerEnv(t, map[string]string{"PROVIDER_MODE": "real", "OPENAI_API_KEY": "", "DEEPSEEK_API_KEY": "", "RABBITMQ_URL": "amqp://u:p@127.0.0.1:1/"})
+	t.Setenv("OPENAI_API_KEY", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := runWith(ctx, []string{"--handlers=evaluation"}, io.Discard, io.Discard)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "PROVIDER_MODE=real")
+	assert.Contains(t, err.Error(), "OPENAI_API_KEY")
+}
+
+// A real configuration with keys (fake values: nothing calls a vendor) builds the router from the
+// vendor adapters, and the evaluation and summary consumers turn ready. ElevenLabs/Cartesia keys are
+// not needed: the worker only calls LLM/EVALUATION and EMBEDDING.
+func TestWorker_RunRealModeWithKeys(t *testing.T) {
+	env, _, _ := workerEnv(t, map[string]string{
+		"PROVIDER_MODE": "real", "OPENAI_API_KEY": "fake-openai", "ELEVENLABS_API_KEY": "", "CARTESIA_API_KEY": "",
+	})
+	t.Setenv("ELEVENLABS_API_KEY", "")
+	t.Setenv("CARTESIA_API_KEY", "")
+	runWorker(t, "evaluation,summary")
+	require.Eventually(t, func() bool { c, _ := status(env["WORKER_HTTP_ADDR"], "/readyz"); return c == 200 },
+		20*time.Second, 50*time.Millisecond, "/readyz 200 in real mode with keys")
+}
+
+// A handler set without provider consumers never validates the provider configuration.
+func TestWorker_RealProviderModeIgnoredWithoutConsumers(t *testing.T) {
+	env, _, _ := workerEnv(t, map[string]string{"PROVIDER_MODE": "real", "OPENAI_API_KEY": ""})
+	t.Setenv("OPENAI_API_KEY", "")
+	runWorker(t, "outbox")
+	require.Eventually(t, func() bool { c, _ := status(env["WORKER_HTTP_ADDR"], "/readyz"); return c == 200 },
+		20*time.Second, 50*time.Millisecond)
 }
 
 // The whole worker, as deployed: outbox publisher + evaluation + summary consumers in one process.

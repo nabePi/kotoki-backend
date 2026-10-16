@@ -7381,6 +7381,15 @@ Item **verifikasi di task adapter** (URL di atas):
 - Apakah pengiriman backlog lebih cepat dari realtime (replay 8.5.8) diterima tanpa `queue_overflow`/`chunk_size_exceeded`; ukuran chunk maksimum.
 - Apakah commit dengan audio 20 ms silence menghasilkan `committed_transcript` walau teks kosong. Jika vendor tidak mengirim apa pun untuk commit kosong, adapter MUST menghasilkan `FINAL{Text:"", FromFinalize:true}` sintetis setelah 400 ms tanpa pesan baru.
 
+Hasil verifikasi M9-T8 (dok realtime STT + cookbook commit strategies, dibaca 2026-10-16; tanpa akses nyata):
+- `language_code`: dok menyatakan "ISO 639-1 or ISO 639-3", jadi `ja` valid (tidak perlu `jpn`); dukungan Jepang khusus model realtime tetap belum eksplisit → benchmark.
+- `partial_transcript`: dok hanya menyebut "interim results"; bentuk teks-penuh-segmen adalah inferensi (keepalive server dijelaskan sebagai "repeat of the latest partial text"). Adapter tetap memperlakukannya sebagai teks penuh. TERBUKA sampai rekaman nyata.
+- Commit audio kosong/silence: dok TIDAK menyatakan apakah `committed_transcript` dikirim → FINAL sintetis 400 ms tetap berlaku.
+- Ukuran chunk: dok menyarankan 0,1-1 s per chunk dan tidak menyebut batas maksimum atau penerimaan backlog lebih cepat dari realtime; adapter mengirim 40 ms (keputusan spec); risiko `queue_overflow`/`chunk_size_exceeded` pada replay rotasi TERBUKA (bila terjadi, perlu `PROVIDER_ROTATION_REPLAY_SPEED`).
+- `keepalive_interval_ms` (500-10000): dok menyatakan keepalive mengulang partial terakhir dan "the server closes the connection after 15 seconds without any client messages" (tidak dapat dikonfigurasi) → parameter ini TIDAK menggantikan silence keep-alive klien; adapter tidak mengirimnya.
+- Auto-commit: dok menyebut commit otomatis setelah ±36 s audio pada mode manual (sesuai spec); "Committing manually several times in a short sequence can degrade model performance" dicatat sebagai risiko kualitas untuk Finalize beruntun.
+- Bentuk pesan server: setiap pesan membawa `message_type`; pesan error membawa `error` (string); `warning` membawa `warning`.
+
 #### 8.4.2 OpenAI — STT (Realtime transcription)
 
 Pilihan STT default (`OPENAI_STT_ENABLED=true`, D-017). Memakai **Realtime API sesi transkripsi** (WebSocket), bukan endpoint `POST /v1/audio/transcriptions` (batch, tidak streaming). Bagian yang **terverifikasi** dari panduan resmi per 2026-10-14 (https://developers.openai.com/api/docs/guides/realtime-transcription, https://developers.openai.com/api/docs/guides/realtime-websocket); sisanya **verifikasi di task adapter** — halaman panduan tidak memuat URL/handshake sesi transkripsi, sehingga builder MUST membaca Realtime API reference (https://developers.openai.com/api/reference) sebelum menulis adapter.
@@ -7539,6 +7548,17 @@ Mapping event:
 
 `Open` sukses = handshake WebSocket 101 (tidak ada pesan "session started" terdokumentasi). Keep-alive saat tidak ada audio, limit konkurensi plan, dan satuan harga STT → **verifikasi di task adapter / benchmark** (https://docs.cartesia.ai/pricing). Timestamp: adapter menghitung posisi audio sendiri (byte terkirim / 32); `words[].start/end` dipakai bila ada.
 
+Hasil verifikasi M9-T10 (docs api-reference/stt/stt, build-with-cartesia/stt-models, pricing; dibaca 2026-10-16; tanpa akses nyata):
+- (a) Auth: header `X-API-Key`. Versi API: `cartesia_version` adalah parameter query WAJIB (enum `2026-08-14`); header `Cartesia-Version` TIDAK didokumentasikan untuk STT WS → adapter hanya mengirim query.
+- (b) Query: `model`, `encoding`, `sample_rate`, `cartesia_version`; `keyterm` hanya untuk `ink-2`/`ink-preview` (adapter menghilangkannya untuk model berfamili `whisper`; istilah yang tidak muat di 100 istilah / 1.200 karakter dibuang utuh, tidak dipotong di tengah); `language` (ISO-639-1) hanya `ink-whisper` (adapter mengirim `ja` untuk model itu saja). Halaman model menyatakan `ink-2` dan `ink-preview` mendukung `ja`, tetapi TIDAK menjelaskan bagaimana bahasa dipilih pada `ink-2` (tidak ada parameter `language`) → TERBUKA (benchmark); dukungan `ja` pada `ink-whisper` tidak dinyatakan → TERBUKA.
+- (c) Ukuran potongan: dok "small chunks, e.g. 100 ms" → batching 5 frame (3.200 byte) tetap.
+- (d) `text` pada `transcript`: "A delta since the last chunk with is_final: true" → teks `is_final=false` adalah teks berjalan sejak final terakhir (PARTIAL = teks segmen berjalan, sesuai kontrak port); final digabung tanpa trim/spasi tambahan. Apakah partial benar-benar kumulatif dalam segmen TERBUKA (inferensi dari kalimat dok).
+- (e) `finalize` → `transcript(is_final=true)`… lalu `flush_done`; `close` → `done` (terverifikasi dari dok).
+- (f) `error{status_code,title,message}` (+`error_code`,`doc_url`,`request_id`): dok hanya mencontohkan `model_not_found` (400); kode kuota/kredit habis TIDAK tercantum (pricing: bila overage mati request "fail until renewal") → adapter memakai tebakan substring (`quota`/`credit`/`insufficient`) pada `error_code` untuk `RATE_LIMITED` non-retryable. TEBAKAN.
+- (g) Batas durasi/idle sesi dan keep-alive: dok TIDAK menyebutnya. Tidak ada sinyal rotasi yang terdokumentasi; adapter memetakan `error_code=session_time_limit_exceeded` (TEBAKAN: memakai kode yang sudah dikenal `provider.rotationTriggers`) menjadi UNAVAILABLE+`VendorCode` persis agar `rotatingSTT` merotasi bila vendor mengirimnya; `provider.rotationTriggers` TIDAK diperluas karena kode Cartesia nyata belum diketahui. Keep-alive tidak dikirim secara default (`Config.KeepAliveAfter=0`): silence ditagih ("Silence is billed even when no transcript is produced"); bila rekaman nyata menunjukkan idle-close, set `KeepAliveAfter`.
+- (h) Penerimaan backlog lebih cepat dari realtime: TIDAK dinyatakan → TERBUKA.
+- (i) Harga STT: per detik audio, `ink-2` WebSocket 3 kredit/detik, `ink-whisper` WebSocket 1 kredit/detik (bukan per jam; silence ditagih). Limit konkurensi plan tidak dinyatakan di halaman pricing (rujuk cartesia.ai/pricing) → TERBUKA.
+
 #### 8.4.7 Matriks vendor × kapabilitas
 
 | Vendor | STT | LLM | Evaluation | Embedding | TTS | Flag env |
@@ -7626,7 +7646,8 @@ Unit test `internal/provider/generation_test.go`: voice kosong/vendor tak terdaf
 | OpenAI Realtime transcription: `session.update` `type="transcription"`, `audio/pcm` 24 kHz, `turn_detection=null`, `input_audio_buffer.append/commit`, event `...transcription.delta/completed` | Terverifikasi (2026-10-14) | guides/realtime-transcription |
 | OpenAI transcription: URL/query handshake (`intent=transcription`?), model id default, `languages` vs `language`, partial sebelum commit, batas durasi sesi, usage, Jepang | **Verifikasi di task adapter** + benchmark | guides/realtime-websocket, API reference |
 | Cartesia STT: `wss://api.cartesia.ai/stt/websocket`, `X-API-Key`, query `model/encoding/sample_rate/cartesia_version/keyterm`, `finalize`→`flush_done`, `close`→`done`, pesan `transcript`/`error`; `ink-2` mendukung `ja` | Terverifikasi (2026-10-14) | api-reference/stt/stt, stt-models |
-| Cartesia STT: pemilihan bahasa pada `ink-2`, semantik partial (delta vs kumulatif), keep-alive/batas sesi, kuota, harga | **Verifikasi di task adapter** | docs.cartesia.ai |
+| Cartesia STT: header versi tidak ada (query `cartesia_version`), harga per detik (`ink-2` WS 3 kredit/s) | Terverifikasi (2026-10-16, M9-T10) | docs.cartesia.ai |
+| Cartesia STT: pemilihan bahasa pada `ink-2`, semantik partial, keep-alive/batas sesi (kode rotasi), kuota, backlog cepat, limit konkurensi | **Terbuka** (butuh akses nyata) | docs.cartesia.ai |
 | ElevenLabs TTS `pcm_24000`, `voice_settings`, `previous_text`, `language_code` | Terverifikasi | text-to-speech/stream |
 | ElevenLabs WS: `voice_settings` hanya di pesan pertama | Terverifikasi | stream-input |
 | OpenAI Chat streaming `include_usage` | Terverifikasi (cookbook/announcement) | community.openai.com |
@@ -7634,7 +7655,8 @@ Unit test `internal/provider/generation_test.go`: voice kosong/vendor tak terdaf
 | DeepSeek: status nama model (`deepseek-flash`/`deepseek-v4-pro` vs lama), kode error HTTP (402), system-only request | **Verifikasi di task adapter** | api-docs.deepseek.com/quick_start |
 | `text-embedding-3-small` 1536 dim, 8.192 token | Terverifikasi | guides/embeddings |
 | Cartesia TTS WebSocket `wss://api.cartesia.ai/tts/websocket`, pesan `chunk`/`done`/`error`, `output_format` raw `pcm_s16le` 24000, `generation_config.speed` 0,6–1,5, cancel per `context_id` | Terverifikasi (docs, 2026-10-14) | api-reference/tts/websocket |
-| Cartesia TTS auth (header `X-API-Key` vs `Authorization: Bearer`), pemasangan versi API di WS, daftar kode error, limit konkurensi plan, satuan biaya (karakter vs detik), ID model (`sonic-3.6` vs `sonic3.6`) | **Verifikasi di task adapter** | docs.cartesia.ai (8.4.14) |
+| Cartesia TTS WS: auth `X-API-Key`, versi lewat query `cartesia_version`, ID model docs `sonic-3.6/3.5/3/latest` (contoh `sonic3.6` tidak ada di docs), satuan biaya ~1 kredit/karakter | Terverifikasi (2026-10-16, M9-T11) | docs.cartesia.ai (8.4.14) |
+| Cartesia TTS: auth `/tts/bytes`, kode error kuota, idle timeout/ping, ack cancel, limit konkurensi plan, mono/durasi PCM, dukungan Jepang | **Terbuka** (butuh akses nyata/benchmark) | docs.cartesia.ai (8.4.14) |
 
 
 #### 8.4.14 Cartesia — TTS (Sonic, dipilih per karakter) (D-015)
@@ -7658,6 +7680,17 @@ Vendor TTS baru; dapat menjadi TTS utama (`characters.provider_name=CARTESIA`) a
 | Usage | `Characters = utf8.RuneCountInString(Text)`; `AudioMs = totalBytes / 48` (keduanya selalu dicatat; satuan harga lihat 8.7.2) |
 | Fake | Tidak ada fake khusus vendor: perilaku vendor nyata diuji lewat contract test WS memutar ulang `internal/provider/cartesia/testdata/tts_*.jsonl` (8.11); jalur router/fallback memakai `fake` TTS (8.9.4) |
 | Dok | https://docs.cartesia.ai/api-reference/tts/websocket , https://docs.cartesia.ai/api-reference/tts/bytes , https://docs.cartesia.ai/use-the-api/compare-tts-endpoints , https://docs.cartesia.ai/pricing |
+
+Hasil verifikasi M9-T11 (docs api-reference/tts/websocket, api-reference/tts/bytes, use-the-api/compare-tts-endpoints, use-the-api/tts-websocket/contexts, pricing; dibaca 2026-10-16; tanpa akses nyata):
+- (a) Auth WS: header `X-API-Key` (terverifikasi). Auth `POST /tts/bytes`: spesifikasi hanya menyebut skema bearer (`sk_car_…`), nama header tidak dinyatakan → TERBUKA (adapter hanya memakai WS).
+- (b) Versi API WS: parameter `cartesia_version` ("API version, e.g. 2026-08-14") dipasang sebagai query pada URL handshake; header `Cartesia-Version` hanya didokumentasikan untuk `/tts/bytes` (default dan satu-satunya nilai `2026-08-14`) → adapter WS mengirim query saja.
+- (c) ID model sah pada docs: `sonic-3.6` (default bytes), `sonic-3.5`, `sonic-3`, `sonic-latest`. Contoh pemilik produk `sonic3.6` TIDAK ada pada docs; adapter mengirim apa adanya dan TIDAK menormalisasi. Penentuan nama final tetap TERBUKA (benchmark/rekaman nyata).
+- (d) `generation_config.speed` 0,6–1,5; docs: "Available on `sonic-3` and newer models; not available on earlier models". Semua ID yang didaftar docs adalah `sonic-3` ke atas, jadi adapter SELALU mengirim `generation_config.speed` (tidak ada daftar model tanpa dukungan; literal `sonic` dilarang `modelname-check`). Pemetaan `sonic-latest` tidak dinyatakan.
+- (e) `output_format` `raw`/`pcm_s16le`/24000 sah; mono dan durasi = bytes/48.000 s tidak dinyatakan eksplisit (asumsi, TERBUKA sampai rekaman nyata). Frame `data` kosong diabaikan oleh adapter bila ada.
+- (f) Pesan server: `chunk{type,data,done,status_code,step_time,context_id}`, `done{type,done,status_code,context_id}`, `error{type,title,message,status_code,done?,error_code?,doc_url?,request_id?,context_id?}`, `flush_done`, `timestamps`, `phoneme_timestamps` (semua membawa `context_id`). Kode kuota/kredit habis tidak terdokumentasi (tebakan substring `quota|credit|insufficient` pada `error_code` -> `RATE_LIMITED` non-retryable).
+- (g) Cancel: `{"context_id":…,"cancel":true}`; docs: "It will only halt requests that have not begun generating a response yet. Any currently generating request will continue sending responses until completion"; server TIDAK terdokumentasi mengirim ack/`done` untuk context yang dibatalkan. Maka koneksi tidak dianggap bebas setelah cancel: stream ditutup seketika (≤ 50 ms, tanpa chunk sesudahnya), pesan cancel dikirim, koneksi dikuras (pesan context itu dibuang) sampai `done`/`error` untuk context tersebut datang dalam `CancelGrace` (500 ms) → kembali ke pool; kalau tidak → ditutup dan slot diganti koneksi baru. Konteks kedaluwarsa 1 s setelah audio terakhir (docs contexts). Idle timeout koneksi dan ping/keep-alive TIDAK didokumentasikan: adapter tidak mengirim ping; koneksi idle yang mati terdeteksi pembaca/penulisan dan kalimat berikutnya diulang SEKALI pada koneksi baru bila belum ada pesan context itu.
+- (h) Harga TTS: ~1 kredit per karakter ("Roughly 1 credit per character", bergantung pra-pemrosesan transkrip) — satuan karakter, bukan jam audio; `prices.yaml` `per_1m_characters` (nilai tetap 0 sampai Task 22). Limit konkurensi plan tidak dinyatakan di halaman pricing → TERBUKA.
+- (i) Dukungan Jepang Sonic: tidak diperiksa di sini (benchmark Task 22). Multiplex beberapa context per koneksi: docs menyiratkan didukung ("multiple context_id values on one connection"); adapter tetap satu context aktif per koneksi.
 
 ---
 

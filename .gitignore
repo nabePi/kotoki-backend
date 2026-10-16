@@ -3,3 +3,5 @@ bin/
 out/
 coverage.out
 coverage.integration.out
+# voice ID nyata operator untuk e2e real (M9-T17); contoh ada di seed/env/example/
+seed/env/local/

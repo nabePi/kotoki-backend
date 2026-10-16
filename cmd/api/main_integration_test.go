@@ -18,6 +18,7 @@ func baseEnv(t *testing.T, addr string, overrides map[string]string) map[string]
 	m := map[string]string{
 		"DB_URL": testutil.NewEmptyPostgresDSN(t), "REDIS_URL": "redis://" + testutil.NewRedis(t).Options().Addr,
 		"OPS_ADDR": addr, "HTTP_ADDR": testutil.FreeAddr(t), "LOG_FORMAT": "text",
+		"PROVIDER_MODE": "fake", // real mode checks the voices of the characters table: this DB has no schema
 	}
 	for k, v := range overrides {
 		m[k] = v

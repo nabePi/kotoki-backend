@@ -1,0 +1,5 @@
+{"meta": {"vendor": "ELEVENLABS", "capability": "STT", "source": "https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime (message_type/field names; read 2026-10-16; session_started.config content, ja transcripts and timing are NOT in the docs: written from the documented shapes, unverified)", "verified": false}}
+{"ws_upgrade": {"path": "/v1/speech-to-text/realtime", "query": {"model_id": "m_stt", "language_code": "ja", "audio_format": "pcm_16000", "commit_strategy": "manual", "include_timestamps": "false", "enable_logging": "false"}, "headers": {"xi-api-key": "xi-test-key"}}}
+{"ws": {"dir": "on", "match": {"message_type": "input_audio_chunk", "commit": false}}}
+{"ws": {"dir": "on", "match": {"message_type": "input_audio_chunk", "commit": true}, "send": [{"at_ms": 0, "text": "{\"message_type\": \"committed_transcript\", \"text\": \"日本語の勉強\"}"}]}}
+{"ws": {"dir": "send", "at_ms": 0, "text": "{\"message_type\": \"session_started\", \"session_id\": \"sess_fixture\", \"config\": {\"sample_rate\": 16000, \"audio_format\": \"pcm_16000\", \"language_code\": \"ja\", \"commit_strategy\": \"manual\"}}"}}

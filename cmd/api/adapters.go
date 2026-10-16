@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 
 	"github.com/caarlos0/env/v11"
@@ -86,4 +87,16 @@ func resolverConfig(rc provider.RouterConfig) content.ResolverConfig {
 // validatorConfig is content.ValidatorConfig from the provider settings.
 func validatorConfig(rc provider.RouterConfig) content.ValidatorConfig {
 	return content.ValidatorConfig{TTSEnabled: ttsEnabled(rc), TTSModeReal: rc.ModeFor(provider.CapTTS) == provider.ModeReal}
+}
+
+// voiceCheckConfig is the input of content.ValidateVoices from the provider settings: the enabled TTS
+// vendors are those of the *_TTS_ENABLED switches, the same source as the resolver (spec 6.9).
+func voiceCheckConfig(rc provider.RouterConfig, logger *slog.Logger) content.VoiceCheckConfig {
+	return content.VoiceCheckConfig{
+		RealTTS: rc.ModeFor(provider.CapTTS) == provider.ModeReal,
+		Vendors: content.ConfiguredTTSVendors(map[string]bool{
+			string(provider.ElevenLabs): rc.ElevenLabsTTSEnabled, string(provider.Cartesia): rc.CartesiaTTSEnabled,
+		}),
+		Log: logger,
+	}
 }

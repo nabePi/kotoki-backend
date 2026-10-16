@@ -408,6 +408,12 @@ func serve(ctx context.Context, handlersFlag string, stdout io.Writer) (retErr e
 	logger.InfoContext(ctx, "starting", "build", buildinfo.String())
 	logger.InfoContext(ctx, "worker handlers enabled", "handlers", strings.Join(handlers, ","))
 	set := handlerSet(handlers)
+	if len(set.Consumers) > 0 { // before any connection: a real configuration that cannot start fails here
+		if err := validateProviders(); err != nil {
+			logger.ErrorContext(ctx, "invalid provider configuration", "error", err)
+			return err
+		}
+	}
 	bg := context.WithoutCancel(ctx)
 
 	otelShutdown, err := otel.Setup(ctx, otel.Config{

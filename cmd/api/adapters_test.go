@@ -89,3 +89,24 @@ func TestResolverAndValidatorConfigFromProviderSettings(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, resolverConfig(rc).LLMConfigured, "real mode without an active LLM vendor")
 }
+
+func TestVoiceCheckConfigFromProviderSettings(t *testing.T) {
+	t.Setenv("PROVIDER_MODE", "real")
+	t.Setenv("PROVIDER_MODE_TTS", "")
+	t.Setenv("CARTESIA_TTS_ENABLED", "false")
+	rc, err := loadProviderSettings()
+	require.NoError(t, err)
+	v := voiceCheckConfig(rc, nil)
+	require.True(t, v.RealTTS)
+	require.Equal(t, []string{"ELEVENLABS"}, v.Vendors)
+
+	t.Setenv("CARTESIA_TTS_ENABLED", "true")
+	rc, err = loadProviderSettings()
+	require.NoError(t, err)
+	require.Equal(t, []string{"CARTESIA", "ELEVENLABS"}, voiceCheckConfig(rc, nil).Vendors)
+
+	t.Setenv("PROVIDER_MODE", "fake")
+	rc, err = loadProviderSettings()
+	require.NoError(t, err)
+	require.False(t, voiceCheckConfig(rc, nil).RealTTS, "fake TTS does not inspect the voice")
+}

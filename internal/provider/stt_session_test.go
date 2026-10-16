@@ -301,7 +301,7 @@ func TestRotationReplayChunks3200(t *testing.T) {
 }
 
 func TestRotationTriggers(t *testing.T) {
-	for _, code := range []string{"session_time_limit_exceeded", "insufficient_audio_activity"} {
+	for _, code := range []string{"session_time_limit_exceeded", "insufficient_audio_activity", "session_expired"} {
 		t.Run(code, func(t *testing.T) {
 			rec := &recSTT{}
 			r, env, s := openRec(t, rec, withCfg(func(c *provider.RouterConfig) { c.CBFailureThreshold = 1 }))
