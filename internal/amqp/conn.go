@@ -40,6 +40,10 @@ type Conn struct {
 	name string
 	log  *slog.Logger
 
+	// redial serialises Reconnect (a 1-slot semaphore so a waiter can give up with its ctx): the
+	// callers that share a Conn (consumers, the keep-alive) must not each dial a connection.
+	redial chan struct{}
+
 	mu     sync.Mutex
 	conn   *amqp091.Connection
 	closed chan struct{} // closed when the current connection drops
@@ -48,7 +52,7 @@ type Conn struct {
 
 // Dial connects (one attempt, bounded by ctx and a dial timeout) and declares the topology.
 func Dial(ctx context.Context, url, name string, log *slog.Logger) (*Conn, error) {
-	c := &Conn{url: url, name: name, log: log}
+	c := &Conn{url: url, name: name, log: log, redial: make(chan struct{}, 1)}
 	if err := c.connect(ctx); err != nil {
 		return nil, err
 	}
@@ -124,8 +128,18 @@ func (c *Conn) Closed() <-chan struct{} {
 }
 
 // Reconnect re-establishes the connection, retrying with Backoff until it succeeds or ctx ends.
-// It returns nil at once when the connection is already healthy.
+// It returns nil at once when the connection is already healthy, also when another caller just
+// re-established it (concurrent callers dial once).
 func (c *Conn) Reconnect(ctx context.Context) error {
+	if c.Healthy() {
+		return nil
+	}
+	select {
+	case c.redial <- struct{}{}:
+		defer func() { <-c.redial }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	for attempt := 0; ; attempt++ {
 		if c.Healthy() {
 			return nil

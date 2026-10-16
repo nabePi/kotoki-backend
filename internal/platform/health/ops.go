@@ -30,6 +30,11 @@ type OpsOptions struct {
 	MetricsEnabled bool
 	PprofEnabled   bool
 	Checks         []Check
+	// LiveChecks are evaluated on every /readyz once the service is ready (1 s timeout each); one
+	// failing turns the answer into 503 {"status":"not_ready"} until it passes again. Unlike Checks,
+	// which only gate startup, they follow the dependency while the process runs (the worker's
+	// RabbitMQ connection and Postgres). Their error text is logged, never returned.
+	LiveChecks []Check
 	// StartupBackoff is the first wait between failed startup rounds (default 200 ms,
 	// doubling up to 2 s).
 	StartupBackoff time.Duration
@@ -42,8 +47,8 @@ type OpsOptions struct {
 }
 
 // Ops is the ops HTTP surface. /readyz is "starting" until all startup checks
-// succeed once; later dependency failures never make it unready. Providers are
-// never called.
+// succeed once; later dependency failures never make it unready unless a LiveCheck is
+// configured. Providers are never called.
 type Ops struct {
 	opts     OpsOptions
 	ready    atomic.Bool
@@ -116,17 +121,38 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+const liveCheckTimeout = time.Second
+
+// liveChecksPass runs every LiveCheck (each bounded by liveCheckTimeout) and reports whether all passed.
+func (o *Ops) liveChecksPass(ctx context.Context) bool {
+	ok := true
+	for _, c := range o.opts.LiveChecks {
+		cctx, cancel := context.WithTimeout(ctx, liveCheckTimeout)
+		err := c.Fn(cctx)
+		cancel()
+		if err != nil {
+			ok = false
+			o.opts.Logger.WarnContext(ctx, "live readiness check failed", "check", c.Name, "error", err.Error())
+		}
+	}
+	return ok
+}
+
 // Handler returns the ops mux.
 func (o *Ops) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case o.draining.Load():
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "draining"})
 		case o.ready.Load():
+			if !o.liveChecksPass(r.Context()) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+				return
+			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 		default:
 			o.mu.Lock()

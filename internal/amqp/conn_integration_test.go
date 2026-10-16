@@ -6,6 +6,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,6 +113,59 @@ func TestConn_ReconnectsAfterForcedClose(t *testing.T) {
 
 	require.NoError(t, pub.PublishConfirmed(context.Background(), amqp.ExchangeEvents, "evaluation.completed", msg()))
 	assert.Equal(t, 2, adm.QueueMessages(events.QueueLearner))
+}
+
+// syncBuf is a goroutine-safe log sink.
+type syncBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+// Several goroutines (the consumers and the keep-alive of one worker share a Conn) may Reconnect
+// at once; exactly one of them may dial, the others must find the new connection healthy.
+func TestConn_ConcurrentReconnect_DialsOnce(t *testing.T) {
+	url := testutil.NewRabbitMQ(t)
+	adm := testutil.RabbitMQAdmin(t, url)
+	var logs syncBuf
+	conn, err := amqp.Dial(context.Background(), url, "test", slog.New(slog.NewTextHandler(&logs, nil)))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	adm.CloseAllConnections()
+	require.Eventually(t, func() bool { return !conn.Healthy() }, 5*time.Second, 50*time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, conn.Reconnect(ctx))
+		}()
+	}
+	wg.Wait()
+	assert.True(t, conn.Healthy())
+	assert.Equal(t, 1, strings.Count(logs.String(), "amqp connection established"), "one dial for eight callers")
+}
+
+func TestConn_Reconnect_WaiterHonoursContext(t *testing.T) {
+	url := testutil.NewRabbitMQ(t)
+	adm := testutil.RabbitMQAdmin(t, url)
+	conn := dial(t, url)
+	adm.CloseAllConnections()
+	require.Eventually(t, func() bool { return !conn.Healthy() }, 5*time.Second, 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.Error(t, conn.Reconnect(ctx), "a cancelled caller never dials")
 }
 
 func TestConn_ClosedForGood_ReconnectFails(t *testing.T) {
