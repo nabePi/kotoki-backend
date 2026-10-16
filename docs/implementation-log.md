@@ -1295,3 +1295,8 @@ Dijalankan 2026-10-16 pada `feat/m6-async-jobs` (Docker OrbStack, `TESTCONTAINER
 ## M7-T1 — Preflight kontrak M3/M4/M6 + kode error evaluasi
 - **Baru:** `internal/m7preflight_test.go` (pemeriksaan kompilasi simbol `prompt`, `provider`, `content`, `events`, `amqp` yang dipakai M7), `internal/platform/errs/m7codes_test.go`. Tidak ada kode produksi: kedua kode error sudah ada.
 - **Verifikasi:** `go test -race` errs/httpapi/internal `-run TestM7` hijau; `go build ./...`; `go test -race ./internal/... ./cmd/...` hijau (2212); `make arch-check`; `make lint` 0 isu. Mutasi status `SESSION_NOT_ENDED` 409 → 400 merah.
+
+## M7-T2 — Domain evaluasi: enum, spesifikasi finding, overall, insufficient, `Config`, `Metrics`
+- **Baru:** `internal/evaluation/{enums,rules,config,metrics}.go` (paket baru; hanya impor `content`, `platform/metrics`, prometheus), `internal/platform/config/worker_eval.go`. **Diubah:** `platform/config/{config,validate}.go` (`Worker.Evaluation/Summary`), `.env.example`.
+- **Tes:** `rules_test.go`, `metrics_test.go`, `worker_eval_test.go`.
+- **Verifikasi:** Step 2 gagal (build, undefined), lalu `go test ./internal/evaluation/ ./internal/platform/config/ -race` hijau; `go build ./...`; `go test -race ./internal/... ./cmd/...` hijau (2224); `make arch-check`; `make lint` 0 isu. Mutasi, semua merah (11): pembulatan overall dihapus, `<` jadi `<=` pada active/user turns, `corrected` EXCESSIVE_FILLER jadi Required, format `rubric-v%d`, default confidence 0.5, default speech 25, bucket histogram nil, guard nil metrik dibalik, `Evaluation.validate`/`Summary.validate` tidak dipanggil.
