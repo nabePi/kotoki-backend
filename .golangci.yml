@@ -164,7 +164,7 @@ linters:
       - path: 'internal/provider/providertest/'
         linters: [forbidigo]
         text: 'time\.Now'
-      - path: 'internal/provider/(elevenlabs|deepgram|openai|gemini|azure)/'
+      - path: 'internal/provider/(elevenlabs|deepgram|openai|deepseek|gemini|azure)/'
         linters: [forbidigo]
         text: 'time\.Now'
       - path-except: 'internal/(auth|balance|session|content|conversation|prompt|provider|evaluation|memory|learner|summary|admin|events)/'

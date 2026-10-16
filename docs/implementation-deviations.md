@@ -901,3 +901,13 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`Events()`: antrean internal 64 + kanal 64** (PARTIAL tertua dibuang saat 64 antrean menunggu), bukan satu kanal 64; FINAL/ERROR/CLOSED tidak dibuang. FINAL sintetis ditentukan per commit (bukan hitungan), supaya timer yang jatuh bersamaan tidak saling menghilangkan; `completed` yang datang setelah FINAL sintetis menjadi FINAL biasa (`FromFinalize=false`, dibuang bila kosong).
 - **Span `provider.STT` berakhir saat sesi berakhir** (outcome success bila `Close()`, cancelled bila ctx induk dibatalkan, error bila ada ERROR), bukan saat `Open` kembali.
 - **TDD:** merah = build error `undefined: openai.STT` (implementasi dipindahkan). Mutasi (17) semua tertangkap; empat yang awalnya selamat (batas buffer, `completed` kosong tanpa Finalize, timer sintetis setelah jawaban nyata, FINAL kosong tak diteruskan) mendapat tes baru.
+
+## M9-T5 — DeepSeek Config, klien, LLM streaming
+- `Config` mendapat `Metrics RateLimitSink` (antarmuka kecil duplikat milik paket `deepseek`, tidak mengimpor `openai`; `*provider.Metrics` memenuhinya) mengikuti pola M9-T2. DeepSeek tidak mendokumentasikan header rate-limit; gauge hanya diisi bila header `x-ratelimit-remaining-requests/-tokens` ada.
+- `Config.Tap` ada sesuai plan tetapi tidak dipanggil adapter LLM (HTTP direkam lewat `replay.Recorder` sebagai `http.RoundTripper`); dicadangkan agar bentuk `Config` seragam.
+- `Config.Thinking` yang tidak dikenal (bukan kosong/`disabled`/`enabled`) menggagalkan `NewLLM` (plan tidak menyebut validasi). `enabled` mengirim `{"type":"enabled"}` (Step 0(c)); `temperature` tetap dikirim.
+- Pemetaan 400 `content_filter`/`content_policy_violation` -> `CONTENT_FILTERED` ditambahkan secara defensif (Review Focus #2 menyebutnya untuk DeepSeek); DeepSeek tidak mendokumentasikan kode ini, dan `finish_reason=content_filter` tetap jalur utama.
+- Mode `SYSTEM-only` dikirim apa adanya (Step 0(g): tidak terdokumentasi ditolak); `openingTurn` tidak dibuat. Bila rekaman nyata (Task 16) menunjukkan penolakan, tambahkan `openingTurn` di `LLM.Stream` dan perbarui spec §8.4.4.
+- `max_tokens` dihilangkan bila `LLMRequest.MaxTokens <= 0`. Error di tengah stream (`data: {"error":...}`) diperlakukan `ERROR{UNAVAILABLE, retryable}` seperti openai (tidak ada di spec DeepSeek).
+- `make modelname-check`: pola Makefile sudah memuat `deepseek-` (di `test/tools/modelcheck`), sehingga Makefile tidak diubah. `.golangci.yml` ditambah `deepseek` di pengecualian `forbidigo time.Now` untuk adapter vendor (§Global Constraints plan mengizinkan `time.Now()` di adapter).
+- Spec §8.4.4/§8.4.13 tidak berubah (Step 0 tidak menemukan perbedaan).
