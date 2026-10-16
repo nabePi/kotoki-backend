@@ -35,6 +35,11 @@ type Config struct {
 	// adapter sends thinking:{"type":"disabled"} unless asked otherwise.
 	Thinking string
 
+	// EvaluationThinking is the thinking mode of Evaluation requests ("disabled" when empty,
+	// DEEPSEEK_EVALUATION_THINKING). Thinking voids temperature, which would make evaluation
+	// results non-deterministic, hence disabled by default.
+	EvaluationThinking string
+
 	// Tap is reserved for the recorder (HTTP traffic is recorded through replay.Recorder as an
 	// http.RoundTripper, so the LLM adapter does not call it).
 	Tap func(dir string, text bool, data []byte)

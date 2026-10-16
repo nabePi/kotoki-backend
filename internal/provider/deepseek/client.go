@@ -28,10 +28,12 @@ const (
 // body shape is the OpenAI-compatible one); the content-filter codes mirror OpenAI and are
 // defensive (spec 8.4.4: content_filter normally arrives as finish_reason).
 const (
-	codeContentFilter   = "content_filter"
-	codeContentPolicy   = "content_policy_violation"
-	statusInsufficient  = 402 // "Insufficient Balance" (https://api-docs.deepseek.com/quick_start/error_codes)
-	errMessageStreamCut = "stream ended before [DONE]"
+	codeContentFilter    = "content_filter"
+	codeContentPolicy    = "content_policy_violation"
+	statusInsufficient   = 402 // "Insufficient Balance" (https://api-docs.deepseek.com/quick_start/error_codes)
+	errMessageStreamCut  = "stream ended before [DONE]"
+	errMessageNoChoices  = "response has no choices"
+	errMessageEmptyReply = "response content is empty"
 )
 
 // client is the HTTP plumbing shared by the DeepSeek capabilities.
@@ -49,6 +51,9 @@ func newClient(cfg Config, hc *http.Client, log *slog.Logger) (*client, error) {
 		return nil, errors.New("deepseek: BaseURL is empty")
 	}
 	if _, err := thinkingValue(cfg.Thinking); err != nil {
+		return nil, err
+	}
+	if _, err := thinkingValue(cfg.EvaluationThinking); err != nil {
 		return nil, err
 	}
 	if hc == nil {

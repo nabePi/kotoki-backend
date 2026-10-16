@@ -911,3 +911,13 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - `max_tokens` dihilangkan bila `LLMRequest.MaxTokens <= 0`. Error di tengah stream (`data: {"error":...}`) diperlakukan `ERROR{UNAVAILABLE, retryable}` seperti openai (tidak ada di spec DeepSeek).
 - `make modelname-check`: pola Makefile sudah memuat `deepseek-` (di `test/tools/modelcheck`), sehingga Makefile tidak diubah. `.golangci.yml` ditambah `deepseek` di pengecualian `forbidigo time.Now` untuk adapter vendor (§Global Constraints plan mengizinkan `time.Now()` di adapter).
 - Spec §8.4.4/§8.4.13 tidak berubah (Step 0 tidak menemukan perbedaan).
+
+## M9-T6 — DeepSeek Evaluation JSON mode tanpa skema strict
+- **Urutan TDD:** `evaluation.go`/`schema.go` ditulis sebelum tesnya; merah dibuktikan setelahnya dengan memindahkan keduanya (build error `undefined`), lalu mutasi menutup celah (lihat log). Bukan penyimpangan perilaku, hanya urutan.
+- `Seed` tidak dikirim (Step 0: tidak terdokumentasi); `TestDeepSeekEvalSeedOnlyIfSupported` memastikan tidak ada `seed` di body. Bila rekaman/dokumentasi nanti mendukung `seed`, kirim saat `Seed != nil`.
+- `NewEvaluation` (via `newClient`) memvalidasi `Thinking` dan `EvaluationThinking`; nilai selain kosong/`disabled`/`enabled` menggagalkan konstruksi. `EvaluationThinking:"enabled"` mengirim `{"type":"enabled"}`.
+- Validasi permintaan (di luar plan, setara openai M9-T3): `SchemaName` harus `[a-z0-9_]{1,64}`, `JSONSchema` harus objek JSON valid, `Messages` tidak kosong, selain itu `INVALID_REQUEST` tanpa request.
+- Kerangka skema: hanya properti `required` yang diisi (properti non-required dihilangkan); `$ref`/tipe tak dikenal menjadi `null`; kedalaman dibatasi 16 (lebih dalam menjadi `null`). Skema bab 10/11 mengikuti batasan strict OpenAI (semua properti required), jadi kerangka lengkap.
+- Pesan instruksi berbahasa Inggris (instruksi ke model, bukan teks pengguna) dan memuat kata "JSON" sesuai syarat docs.
+- Tambahan: `finish_reason` `insufficient_system_resource`/`aborted` pada Evaluation -> `UNAVAILABLE` retryable (konsisten dengan LLM, tidak ada di tabel §8.4.9).
+- `StructuredResult.Model` = `req.Model`; `FinishReason` sukses selalu `STOP`.
