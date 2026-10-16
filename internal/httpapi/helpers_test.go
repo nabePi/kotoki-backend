@@ -19,6 +19,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/content"
+	"github.com/nabePi/kotoki-backend/internal/evaluation"
 	"github.com/nabePi/kotoki-backend/internal/httpapi"
 	"github.com/nabePi/kotoki-backend/internal/mailer"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
@@ -139,7 +140,8 @@ func newAPI(t *testing.T, mutate ...func(*httpapi.Deps)) *apiEnv {
 
 	deps := httpapi.Deps{
 		Session: sessSvc, SessionQuery: session.NewQueryService(fakes.NewSessionViews(sessStore, contentRepo), sessStore.TurnReader(), clk, 180), Tickets: ticketSvc,
-		Content: catalog, ContentAdmin: contentAdmin,
+		Evaluation: evaluation.NewQueryService(fakes.NewEvaluationStore()),
+		Content:    catalog, ContentAdmin: contentAdmin,
 		AdminSessions: session.NewAdminQueryService(fakes.NewSessionAdmin(sessStore, contentRepo), clk, 180), AdminAudit: adminSvc,
 		Log: log, Limiter: limiter, Tokens: tokens, Clock: clk, Auth: svc, Users: users, Balance: balSvc, Admin: adminSvc, AdminGate: allowAdmin{},
 		Cfg: httpapi.Config{

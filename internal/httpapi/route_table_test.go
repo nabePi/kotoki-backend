@@ -53,7 +53,7 @@ var routeTable = []routeRow{
 	{"POST", "/sessions/{session_id}/cancel", grpUser, []string{"api_user_default"}, true, ""},
 	{"POST", "/sessions/{session_id}/realtime-ticket", grpUser, []string{"ticket_user"}, true, ""},
 	{"GET", "/sessions/{session_id}/turns", grpUser, []string{"api_user_default"}, true, ""},
-	{"GET", "/sessions/{session_id}/evaluation", grpUser, []string{"api_user_default"}, false, ""},
+	{"GET", "/sessions/{session_id}/evaluation", grpUser, []string{"api_user_default"}, true, ""},
 	{"GET", "/balance", grpUser, []string{"api_user_default"}, true, ""},
 	{"GET", "/balance/transactions", grpUser, []string{"api_user_default"}, true, ""},
 	{"GET", "/profile", grpUser, []string{"api_user_default"}, false, ""},
@@ -200,7 +200,7 @@ func TestRouteTableUserGroupPrefixes(t *testing.T) {
 		for _, p := range []string{"/sessions", "/topics", "/scenarios", "/characters"} {
 			if strings.HasPrefix(r.Path, p) {
 				require.Equal(t, grpUser, r.Group, r.Path)
-				if r.Ready { // later milestones add /sessions/{id}/evaluation and friends
+				if r.Ready { // rows of later milestones are not registered yet
 					want = append(want, r.Method+" "+r.Path)
 				}
 			}
@@ -209,7 +209,7 @@ func TestRouteTableUserGroupPrefixes(t *testing.T) {
 	sort.Strings(got)
 	sort.Strings(want)
 	require.Equal(t, want, got)
-	require.Len(t, got, 11)
+	require.Len(t, got, 12)
 }
 
 func TestRouteTable_AdminSessions(t *testing.T) {

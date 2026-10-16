@@ -190,6 +190,8 @@ func (c Worker) Validate() error {
 	c.Rabbit.validate(v, c.Common)
 	c.Outbox.validate(v)
 	c.Jobs.validate(v)
+	c.Evaluation.validate(v)
+	c.Summary.validate(v)
 	v.positive("WORKER_SHUTDOWN_GRACE", c.ShutdownGrace)
 	validateHandlers(v, c.Handlers)
 	return v.err()

@@ -742,6 +742,38 @@ func TestEvaluationGetWaitsUntilCompleted(t *testing.T) {
 	assert.Contains(t, c.mustRun("evaluation", "get", "--session", testSession.String()), "PENDING")
 }
 
+func TestEvaluationGetPrintsStatus(t *testing.T) {
+	b := newBackend(t, "a")
+	b.evalStatus = []string{"PENDING"}
+	c := newCLI(t, b)
+	c.login()
+	code, out, errw := c.run("evaluation", "get", "--session", testSession.String())
+	require.Equal(t, 0, code, errw)
+	assert.Contains(t, out, "PENDING")
+	assert.Equal(t, 1, b.hitCount("GET /api/v1/sessions/"+testSession.String()+"/evaluation"))
+}
+
+func TestEvalGoldenExitCodes(t *testing.T) {
+	c := newCLI(t, nil)
+	code, _, errw := c.run("eval-golden")
+	assert.Equal(t, 2, code, "--dataset is required")
+	assert.Contains(t, errw, "--dataset")
+
+	dataset := filepath.Join("..", "..", "testdata", "benchmark", "evaluation", "rubric-v1")
+	out := filepath.Join(t.TempDir(), "report.json")
+	code, _, errw = c.run("eval-golden", "--dataset", dataset, "--out", out)
+	assert.Equal(t, 1, code, "no database configured")
+	assert.Contains(t, errw, "DATABASE_URL")
+	assert.NoFileExists(t, out)
+
+	code, _, errw = c.run("eval-golden", "--dataset", filepath.Join(t.TempDir(), "nope"))
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errw, "manifest")
+
+	_, _, usage := c.run("help")
+	assert.Contains(t, usage, "eval-golden")
+}
+
 // ---- tests: converse --------------------------------------------------------------------
 
 func TestConverseRequiresWav(t *testing.T) {

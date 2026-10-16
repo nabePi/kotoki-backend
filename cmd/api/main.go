@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/content"
+	"github.com/nabePi/kotoki-backend/internal/evaluation"
 	"github.com/nabePi/kotoki-backend/internal/httpapi"
 	"github.com/nabePi/kotoki-backend/internal/mailer"
 	"github.com/nabePi/kotoki-backend/internal/platform/buildinfo"
@@ -35,8 +37,10 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/platform/otel"
 	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
 	"github.com/nabePi/kotoki-backend/internal/postgres"
+	"github.com/nabePi/kotoki-backend/internal/prompt"
 	"github.com/nabePi/kotoki-backend/internal/redisstore"
 	"github.com/nabePi/kotoki-backend/internal/session"
+	"github.com/nabePi/kotoki-backend/internal/summary"
 )
 
 const service = "kotoki-api"
@@ -217,6 +221,7 @@ func buildAPI(ctx context.Context, cfg config.API, logger *slog.Logger, pool *pg
 	// admin.Service doubles as the AccountDeleter behind DELETE /me (spec 3.2).
 	userSvc := auth.NewUserService(store.AuthStore(), hasher, adminSvc, clk, logger, cfg.PrivacyPolicyVersion)
 
+	registerPromptFixtures()
 	contentSvcs, err := buildContent(ctx, cfg, logger, pool, store, reg, ids, clk)
 	if err != nil {
 		return nil, nil, err
@@ -244,9 +249,22 @@ func buildAPI(ctx context.Context, cfg config.API, logger *slog.Logger, pool *pg
 		Auth: authSvc, Users: userSvc, Balance: balanceSvc, Admin: adminSvc, AdminGate: adminSvc,
 		Content: contentSvcs.catalog, ContentAdmin: contentSvcs.admin,
 		Session: sessionSvc, SessionQuery: sessionQuery, Tickets: tickets,
+		Evaluation:    evaluation.NewQueryService(postgres.NewEvaluationReader(pool)),
 		AdminSessions: adminSessions, AdminAudit: adminSvc,
 	})
 	return router, dispatcher, nil
+}
+
+var fixturesOnce sync.Once
+
+// registerPromptFixtures gives the prompt keys owned by M7 their render fixtures (spec 6.10.1), which
+// the catalog validation needs to render the seeded EVALUATION and SUMMARY versions. RegisterFixtures
+// panics on a second call for a key, so it runs once per process. M8 adds MEMORY_EXTRACTION here.
+func registerPromptFixtures() {
+	fixturesOnce.Do(func() {
+		prompt.RegisterFixtures("EVALUATION", evaluation.PromptFixtures)
+		prompt.RegisterFixtures("SUMMARY", summary.PromptFixtures)
+	})
 }
 
 // contentServices are the content components the api binary mounts.

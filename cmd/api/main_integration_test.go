@@ -49,6 +49,33 @@ func TestRunServesOpsAndStopsCleanly(t *testing.T) {
 	}
 }
 
+// The evaluation route exists only when Deps.Evaluation is wired: without it the path is a 404, with
+// it the auth middleware answers 401 first.
+func TestRunMountsEvaluationRoute(t *testing.T) {
+	addr := testutil.FreeAddr(t)
+	env := baseEnv(t, addr, nil)
+	testutil.ApplyEnv(t, env)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- run(ctx) }()
+	testutil.AssertOpsEndpoints(t, addr, done)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		"http://"+env["HTTP_ADDR"]+"/api/v1/sessions/01920000-0000-7000-8000-000000000001/evaluation", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return within 5s of cancel")
+	}
+}
+
 func TestRunFailsFastOnBadConfig(t *testing.T) {
 	addr := testutil.FreeAddr(t)
 	env := baseEnv(t, addr, map[string]string{"DB_URL": ""})

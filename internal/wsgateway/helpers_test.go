@@ -97,7 +97,7 @@ type rig struct {
 	Limiter *stubLimiter
 	Tickets *countingTickets
 	Srv     *httptest.Server
-	Logs    *bytes.Buffer
+	Logs    *syncBuffer
 }
 
 type rigOpt func(*rig)
@@ -105,11 +105,11 @@ type rigOpt func(*rig)
 func newRig(t *testing.T, harnessOpts []rtharness.Option, opts ...rigOpt) *rig {
 	t.Helper()
 	testutil.NoGoroutineLeak(t, wsPkg)
-	r := &rig{t: t, Limiter: &stubLimiter{}, Tickets: &countingTickets{TicketStore: fakes.NewTicketStore()}, Logs: &bytes.Buffer{}}
+	r := &rig{t: t, Limiter: &stubLimiter{}, Tickets: &countingTickets{TicketStore: fakes.NewTicketStore()}, Logs: &syncBuffer{}}
 	r.H = rtharness.New(t, harnessOpts...)
 	r.Handler = &wsgateway.Handler{
 		Tuning: rtharness.DefaultTuning(t), Origins: []string{allowedOrigin}, Limiter: r.Limiter, Tickets: r.Tickets, Mgr: r.H.Mgr,
-		Log:     slog.New(slog.NewJSONHandler(&syncWriter{w: r.Logs}, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Log:     slog.New(slog.NewJSONHandler(r.Logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Metrics: r.H.Metrics,
 	}
 	for _, f := range opts {
@@ -120,15 +120,22 @@ func newRig(t *testing.T, harnessOpts []rtharness.Option, opts ...rigOpt) *rig {
 	return r
 }
 
-type syncWriter struct {
+// syncBuffer is a log sink the handler goroutines write to while the test reads it.
+type syncBuffer struct {
 	mu sync.Mutex
-	w  io.Writer
+	b  bytes.Buffer
 }
 
-func (s *syncWriter) Write(p []byte) (int, error) {
+func (s *syncBuffer) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.w.Write(p)
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 // issue stores a ticket of the harness session and returns it.

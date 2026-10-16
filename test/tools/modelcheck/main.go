@@ -17,12 +17,15 @@ import (
 	"strings"
 )
 
-var modelRE = regexp.MustCompile(`(gpt-|o[0-9]-|deepseek-|claude-|eleven_|scribe|sonic|ink-|text-embedding-)`)
+// modelRE is the spec 13 pattern, anchored so that it only matches at the start of a word:
+// "subscribe" (scribe), "SubscribePod" or "think-" are not model names.
+var modelRE = regexp.MustCompile(`(^|[^A-Za-z0-9])(gpt-|o[0-9]-|deepseek-|claude-|eleven_|scribe|sonic|ink-|text-embedding-)`)
 
 func skip(path string) bool {
 	p := filepath.ToSlash(path)
 	return strings.HasSuffix(p, "_test.go") ||
 		strings.Contains(p, "internal/platform/config/") ||
+		strings.Contains(p, "internal/testutil/") || // test support, kept out of production by depguard
 		strings.Contains(p, "/testdata/") || strings.HasPrefix(p, "testdata/")
 }
 
@@ -41,9 +44,18 @@ func scan(roots []string) ([]string, error) {
 			if err != nil {
 				return err
 			}
+			// Struct tags carrying envDefault are the model defaults of config structs (spec 13, the
+			// exception for the defaults of spec 8.5.1); every other literal is checked.
+			tags := map[*ast.BasicLit]bool{}
+			ast.Inspect(f, func(n ast.Node) bool {
+				if fld, ok := n.(*ast.Field); ok && fld.Tag != nil && strings.Contains(fld.Tag.Value, "envDefault:") {
+					tags[fld.Tag] = true
+				}
+				return true
+			})
 			ast.Inspect(f, func(n ast.Node) bool {
 				lit, ok := n.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
+				if !ok || lit.Kind != token.STRING || tags[lit] {
 					return true
 				}
 				s, err := strconv.Unquote(lit.Value)
