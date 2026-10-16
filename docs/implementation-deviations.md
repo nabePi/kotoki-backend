@@ -426,3 +426,13 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Tes unexported ada di `errors_internal_test.go` (package `amqp`)**, bukan `errors_test.go`, karena `errorCode/headerInt/truncate` tidak diekspor (plan); `errors_test.go` (eksternal) hanya memuat `Classify`. Pola sama dengan `carrier_internal_test.go`.
 - **SQLSTATE retryable (aturan 7) tidak punya cabang eksplisit**: hasilnya sama dengan default aturan 11, sehingga hanya kelas `22`/`23` yang di-switch (Dead); perilaku sesuai tabel §9.7.3 dan dikunci tes tabel.
 - **`events.ErrSkippedDeletedUser` ditambahkan ke aturan 1 (Ack)** sesuai Step 1 plan (spec §9.7.2); `truncate` memotong pada batas rune UTF-8 (hasil ≤ n byte).
+
+## M6-T9 — `Consumer.process`: ack/nack, retry ladder, DLQ, idempotensi
+- **`NewConsumerForTest(h, pub, processed, m, log, clk)`** menerima `Metrics`, logger, dan `clock.Clock` (plan: hanya `h, pub, processed`) supaya tes membaca metrik dan memeriksa `x-first-failed-at`/`x-dead-at` deterministik. Ditambah `Consumer.Process` di `export_test.go`.
+- **Test double bernama `recPub`/`pubRecord`** karena `fakePub`/`published` sudah dipakai suite integration paket yang sama.
+- **Event type tak dikenal handler → DLQ `DECODE_ERROR`** (spec §9.7.4 memetakan semua kegagalan `checkSupported` ke `DECODE_ERROR`); hanya versi di atas `SupportedEvents` yang `UNSUPPORTED_EVENT_VERSION`. Pesan tak terdecode/tak didukung tidak memanggil `OnFailure` (tidak ada `Delivery`).
+- **Publish retry/DLQ memakai `context.WithoutCancel(ctx)`** dan `OnFailure` juga: bila shutdown terjadi tepat saat handler gagal dengan error non-`Canceled`, salinan retry/DLQ tetap terkirim dan dikonfirmasi, bukan `Nack(requeue)` karena ctx batal. Error `Canceled` saat shutdown tetap `ClassRequeue` (aturan 2).
+- **`OnFailure` dilindungi `recover()`** (panic di dalamnya tidak mengubah routing; spec: "error dari OnFailure hanya di-log").
+- **Dead-letter yang gagal dipublish tetap menaikkan metrik `dead`** (message di-`Nack(false,false)` dan jatuh ke `<Q>.dlq` lewat DLX level queue).
+- **Span: atribut `messaging.*`, `kotoki.user_id/session_id` hanya ada bila envelope terdecode**; `kotoki.session_id` hanya untuk `aggregate_type=SESSION`. Pre-check `IsProcessed` yang error diabaikan (lanjut ke handler; `MarkProcessed` tetap penjaga).
+- **Log memakai `buildinfo.Version`** untuk `worker_version`. `Consumer.conn` baru dipakai Task 10 (`Run`).

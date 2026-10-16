@@ -89,3 +89,12 @@ func truncate(s string, n int) string {
 	}
 	return s[:n]
 }
+
+// asPermanent returns err when it already is a PermanentError, else wraps it with code.
+func asPermanent(code string, err error) error {
+	var perm *events.PermanentError
+	if errors.As(err, &perm) {
+		return err
+	}
+	return events.Permanent(code, err)
+}
