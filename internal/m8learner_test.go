@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/nabePi/kotoki-backend/internal/amqp"
+	"github.com/nabePi/kotoki-backend/internal/conversation"
 	"github.com/nabePi/kotoki-backend/internal/events"
 	"github.com/nabePi/kotoki-backend/internal/learner"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
@@ -20,6 +21,10 @@ import (
 
 // *learner.Consumer must satisfy amqp.Handler structurally (learner never imports amqp).
 var _ amqp.Handler = (*learner.Consumer)(nil)
+
+// *learner.Service must satisfy conversation.LearnerContextProvider structurally (learner never
+// imports conversation).
+var _ conversation.LearnerContextProvider = (*learner.Service)(nil)
 
 // TestLearnerConsumerClassification drives the real Consumer and feeds each outcome to
 // amqp.Classify, the way the AMQP consumer does after Handle (spec 9.7.3).

@@ -748,3 +748,10 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Jalur out-of-order mengurutkan ulang hasil `ListBySkill` di consumer** dengan pembanding yang sama dengan `Replay` (`assessed_at`, id evaluasi) agar baris turunan terpetakan benar bila urutan port berubah; mutan yang membuang pengurutan ini setara selama kontrak port dipenuhi. Mutan `!inserted` pada jalur out-of-order juga setara: replay ulang menghasilkan nilai yang sama (hanya kerja ekstra).
 - **`Metrics` dibuat di `learner` (`NewMetrics(reg)`), nil-safe;** wiring `cmd/worker` (Task 19).
 
+## M8-T10 — Adaptive service
+- **Tes integrasi di `test/integration/m8_adaptive_test.go`** (`TestM8ComputeAdaptive_*`), bukan `internal/learner/adaptive_service_integration_test.go` (depguard, sama dengan M8-T8/T9); menggantikan nama plan `TestComputeAdaptive_Under20msP95OnFixture` dengan `TestM8ComputeAdaptive_P95OnFixture` (batas 100 ms, p95 dicatat lewat `t.Log`).
+- **Query di `ComputeAdaptiveDifficulty` = satu tx kecil (Ensure + profil + state) + `RecentFindings` + `TopicSessions90d` + `DialectSessions90d`** (plan menyebut `VoiceExposure`/`TopicSessions90d`; `VoiceExposure` tidak dipakai fungsi murni, sedangkan `DialectSessions90d` dibutuhkan `dialectExposure`). Ditambah `Load` konten.
+- **Wiring `cmd/api` dan `cmd/realtime` ditunda ke Task 20:** `adaptiveAdapter` belum dipakai `main.go` (hanya asersi antarmuka); `session.NeutralAdaptiveProvider` tetap di sana sampai itu.
+- **Mutan setara:** membuang `EvaluationsConsidered` dan `ScenarioFocus` dari `AdaptiveInput` tidak mengubah keluaran karena `ComputeAdaptiveDifficulty` murni tidak membacanya (M8-T5; `Focus` sudah dihitung pemanggil lewat `FocusSkills`, yang membaca `fi`). `Trends` dikonversi ke `map[Skill]string` sesuai tipe `AdaptiveInput` (M8-T1) dengan alasan yang sama.
+- **`PromptContext` memakai tx (`EnsureProfile` + `Get`)** sehingga user tanpa profil (sesi lama) tidak gagal; menulis hanya bila profil belum ada.
+
