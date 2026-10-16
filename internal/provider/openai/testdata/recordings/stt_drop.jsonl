@@ -1,0 +1,6 @@
+{"meta":{"vendor":"OPENAI","capability":"STT","source":"https://developers.openai.com/api/docs/guides/realtime-transcription (event and session.update shapes; handshake query, session.created/updated, committed and error payloads are NOT in the docs: written from the Realtime API event naming, unverified)","verified":false}}
+{"ws_upgrade":{"query":{"intent":"transcription"},"headers":{"Authorization":"Bearer sk-test"}}}
+{"ws":{"dir":"send","at_ms":0,"text":"{\"type\": \"session.created\", \"session\": {\"id\": \"sess_fixture\", \"type\": \"transcription\"}}"}}
+{"ws":{"dir":"recv","json":{"type":"session.update","session":{"type":"transcription"}}}}
+{"ws":{"dir":"send","at_ms":0,"text":"{\"type\": \"session.updated\", \"session\": {\"id\": \"sess_fixture\", \"type\": \"transcription\"}}"}}
+{"ws":{"dir":"close","code":1011}}

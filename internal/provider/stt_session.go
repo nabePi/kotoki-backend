@@ -18,7 +18,8 @@ const (
 
 // rotationTriggers are the vendor closes that mean "reconnect to the same vendor": a
 // duration or idle limit, not a failure (spec 8.5.8).
-var rotationTriggers = map[string]bool{"session_time_limit_exceeded": true, "insufficient_audio_activity": true}
+// "session_expired" is the OpenAI Realtime session-duration code (unverified, M9-T4).
+var rotationTriggers = map[string]bool{"session_time_limit_exceeded": true, "insufficient_audio_activity": true, "session_expired": true}
 
 // OpenSTT opens a stream on the single active STT vendor: breaker, then a semaphore try
 // (no wait), then Open with a connect timeout. There is no other vendor to try.
