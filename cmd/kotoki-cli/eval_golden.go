@@ -21,9 +21,9 @@ type errExit int
 
 func (e errExit) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
 
-// goldenCaps are the capabilities provider.NewRouter needs to be built (it requires every adapter);
-// only EVALUATION is called.
-var goldenCaps = []provider.Capability{provider.CapSTT, provider.CapLLM, provider.CapTTS, provider.CapEmbedding}
+// goldenCaps are the capabilities the golden run calls: EVALUATION, which follows LLM (same vendor).
+// providerwire.Assemble fills the other router slots with fake stand-ins.
+var goldenCaps = []provider.Capability{provider.CapLLM}
 
 // cmdEvalGolden is `kotoki-cli eval-golden`: the calibration run of spec 10.12. The logic lives in
 // golden.Main; this only wires the evaluator: the published EVALUATION prompt version read from
@@ -60,11 +60,11 @@ func (a *app) buildGoldenEvaluator(ctx context.Context) (golden.Evaluator, func(
 	if err != nil {
 		return nil, nil, err
 	}
-	rd, err := providerwire.BuildFake(rc, fc, goldenCaps, providerwire.Deps{Role: provider.RoleWorker, Clock: clock.System{}})
+	asm, err := providerwire.Assemble(rc, fc, goldenCaps, providerwire.Deps{Role: provider.RoleWorker, Clock: clock.System{}})
 	if err != nil {
 		return nil, nil, err
 	}
-	router, err := provider.NewRouter(rc, rd)
+	router, err := provider.NewRouter(asm.Config, asm.Deps)
 	if err != nil {
 		return nil, nil, err
 	}

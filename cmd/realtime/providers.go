@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,26 +26,51 @@ var realtimeCaps = []provider.Capability{provider.CapSTT, provider.CapLLM, provi
 // faultRunner polls the fake-provider fault document until its context ends.
 type faultRunner interface{ Run(ctx context.Context) }
 
-// buildRouter wires the provider router of the pod. M5 knows only PROVIDER_MODE=fake: the fakes
-// read their fault injection from Redis (spec 8.9.6), and the returned runner polls it. Real mode
-// is refused here (M9 adds the vendor adapters).
+// buildRouter wires the provider router of the pod: a capability in PROVIDER_MODE=real comes from the
+// vendor adapters (providerwire.Build, after providerwire.ValidateReal), the others from the fakes,
+// which read their fault injection from Redis (spec 8.9.6); the returned runner polls it.
 func buildRouter(rdb redis.UniversalClient, clk clock.Clock, logger *slog.Logger, pm *provider.Metrics) (*provider.Router, provider.RouterConfig, faultRunner, error) {
 	rc, fc, err := providerwire.ParseConfigs()
 	if err != nil {
 		return nil, rc, nil, err
 	}
 	faults := redisstore.NewFakeFaults(rdb, fc.FaultsRedisKey, fc.FaultsPollInterval, clk, logger)
-	rd, err := providerwire.BuildFake(rc, fc, realtimeCaps, providerwire.Deps{
+	a, err := providerwire.Assemble(rc, fc, realtimeCaps, providerwire.Deps{
 		Role: provider.RoleRealtime, Clock: clk, Log: logger, Metrics: pm, Faults: faults,
 	})
 	if err != nil {
 		return nil, rc, nil, err
 	}
-	router, err := provider.NewRouter(rc, rd)
+	router, err := provider.NewRouter(a.Config, a.Deps)
 	if err != nil {
 		return nil, rc, nil, err
 	}
-	return router, rc, faults, nil
+	return router, a.Config, faults, nil
+}
+
+// validateProviders is the first check of the process (before any connection): the provider
+// configuration of PROVIDER_MODE=real must be able to start (exactly one STT and LLM, keys, models).
+func validateProviders() error {
+	rc, _, err := providerwire.ParseConfigs()
+	if err != nil {
+		return fmt.Errorf("provider config: %w", err)
+	}
+	if err := providerwire.ValidateReal(rc, realtimeCaps); err != nil {
+		return fmt.Errorf("provider config: %w", err)
+	}
+	return nil
+}
+
+// voiceCheckConfig is the input of content.ValidateVoices: the enabled TTS vendors are the ones
+// providerwire.Build builds (the *_TTS_ENABLED switches).
+func voiceCheckConfig(rc provider.RouterConfig, logger *slog.Logger) content.VoiceCheckConfig {
+	return content.VoiceCheckConfig{
+		RealTTS: rc.ModeFor(provider.CapTTS) == provider.ModeReal,
+		Vendors: content.ConfiguredTTSVendors(map[string]bool{
+			string(provider.ElevenLabs): rc.ElevenLabsTTSEnabled, string(provider.Cartesia): rc.CartesiaTTSEnabled,
+		}),
+		Log: logger,
+	}
 }
 
 // memoryLearner are the M8 ports of the runtime: the memory retriever and the learner service.

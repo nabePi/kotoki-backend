@@ -25,7 +25,7 @@ func baseEnv(t *testing.T, addr string, overrides map[string]string) map[string]
 	m := map[string]string{
 		"DB_URL": testutil.NewEmptyPostgresDSN(t), "REDIS_URL": "redis://" + testutil.NewRedis(t).Options().Addr,
 		"OPS_ADDR": addr, "HTTP_ADDR": testutil.FreeAddr(t), "LOG_FORMAT": "text",
-		"PROVIDER_MODE": "fake", // M5 has fake providers only (M9 adds real)
+		"PROVIDER_MODE": "fake",
 	}
 	for k, v := range overrides {
 		m[k] = v
@@ -62,13 +62,36 @@ func TestRunFailsFastOnBadConfig(t *testing.T) {
 	testutil.AssertNothingListening(t, addr)
 }
 
-func TestRunRefusesRealModeBeforeListening(t *testing.T) {
+// A real-mode configuration that cannot start is refused before any connection and before listening,
+// naming the variable (never a value).
+func TestRunRefusesRealModeWithoutKeysBeforeListening(t *testing.T) {
 	addr := testutil.FreeAddr(t)
-	env := baseEnv(t, addr, map[string]string{"PROVIDER_MODE": "real"})
+	env := baseEnv(t, addr, map[string]string{
+		"PROVIDER_MODE": "real", "OPENAI_API_KEY": "", "ELEVENLABS_API_KEY": "", "CARTESIA_API_KEY": "", "DEEPSEEK_API_KEY": "",
+	})
+	testutil.ApplyEnv(t, env)
+	t.Setenv("OPENAI_API_KEY", "")
+	err := run(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "OPENAI_API_KEY")
+	testutil.AssertNothingListening(t, addr)
+	testutil.AssertNothingListening(t, env["HTTP_ADDR"])
+}
+
+// Real mode with keys but characters still on PLACEHOLDER_ voices stops before listening (spec 6.13.3).
+func TestRunRefusesPlaceholderVoicesInRealMode(t *testing.T) {
+	addr := testutil.FreeAddr(t)
+	pool := testutil.NewPostgres(t)
+	testutil.ApplySeed(t, pool)
+	env := baseEnv(t, addr, map[string]string{
+		"PROVIDER_MODE": "real", "OPENAI_API_KEY": "fake-o", "ELEVENLABS_API_KEY": "fake-e", "CARTESIA_API_KEY": "fake-c",
+		"DB_URL": pool.Config().ConnString(),
+	})
 	testutil.ApplyEnv(t, env)
 	err := run(context.Background())
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "M9")
+	require.Contains(t, err.Error(), "HARUKA")
+	require.Contains(t, err.Error(), "0900_voice_ids.sql")
 	testutil.AssertNothingListening(t, addr)
 	testutil.AssertNothingListening(t, env["HTTP_ADDR"])
 }

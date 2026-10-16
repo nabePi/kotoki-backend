@@ -91,18 +91,79 @@ func TestReadyzStillStartsBeforeTheChecksPass(t *testing.T) {
 	require.Equal(t, "starting", body["status"])
 }
 
-func TestRealtimeRejectsRealModeInM5(t *testing.T) {
-	// M9 inverts this test: real mode is accepted once the vendor adapters exist.
+// realEnv sets a PROVIDER_MODE=real environment: the D-017 defaults, every vendor key either a fake
+// value (withKeys) or empty. No vendor is ever called: building adapters does not dial.
+func realEnv(t *testing.T, mode string, withKeys bool) {
+	t.Helper()
+	t.Setenv("PROVIDER_MODE", mode)
+	for _, k := range []string{"PROVIDER_MODE_STT", "PROVIDER_MODE_LLM", "PROVIDER_MODE_TTS", "PROVIDER_MODE_EVALUATION", "PROVIDER_MODE_EMBEDDING"} {
+		t.Setenv(k, "")
+	}
+	for _, k := range []string{"OPENAI_API_KEY", "DEEPSEEK_API_KEY", "ELEVENLABS_API_KEY", "CARTESIA_API_KEY"} {
+		v := ""
+		if withKeys {
+			v = "fake-" + k
+		}
+		t.Setenv(k, v)
+	}
+}
+
+func TestRealtimeAcceptsRealModeWithKeys(t *testing.T) {
 	for _, mode := range []string{"real", ""} { // PROVIDER_MODE defaults to real
 		t.Run("mode="+mode, func(t *testing.T) {
-			t.Setenv("PROVIDER_MODE", mode)
-			rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}) // never dialled: the build fails first
+			realEnv(t, mode, true)
+			require.NoError(t, validateProviders())
+			rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}) // never dialled by the build
 			t.Cleanup(func() { _ = rdb.Close() })
-			_, _, _, err := buildRouter(rdb, clock.System{}, nil, provider.NewMetrics(nil))
-			require.ErrorIs(t, err, providerwire.ErrRealModeUnavailable)
-			require.Contains(t, err.Error(), "M9")
+			router, rc, _, err := buildRouter(rdb, clock.System{}, nil, provider.NewMetrics(nil))
+			require.NoError(t, err)
+			require.NotNil(t, router)
+			require.Equal(t, provider.ModeReal, rc.ModeFor(provider.CapSTT))
+			require.Equal(t, provider.ModeReal, rc.ModeFor(provider.CapTTS))
 		})
 	}
+}
+
+func TestRealtimeRejectsRealModeWithoutKeys(t *testing.T) {
+	realEnv(t, "real", false)
+	err := validateProviders()
+	require.ErrorContains(t, err, "OPENAI_API_KEY")
+	require.ErrorContains(t, err, "ELEVENLABS_API_KEY")
+	require.ErrorContains(t, err, "CARTESIA_API_KEY")
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}) // never dialled: the build fails first
+	t.Cleanup(func() { _ = rdb.Close() })
+	_, _, _, err = buildRouter(rdb, clock.System{}, nil, provider.NewMetrics(nil))
+	require.ErrorContains(t, err, "OPENAI_API_KEY")
+}
+
+func TestRealtimeRejectsTwoSTTEnabled(t *testing.T) {
+	realEnv(t, "real", true)
+	t.Setenv("OPENAI_STT_ENABLED", "true")
+	t.Setenv("CARTESIA_STT_ENABLED", "true")
+	err := validateProviders()
+	require.ErrorContains(t, err, "OPENAI_STT_ENABLED")
+	require.ErrorContains(t, err, "ELEVENLABS_STT_ENABLED")
+	require.ErrorContains(t, err, "CARTESIA_STT_ENABLED")
+	require.NotContains(t, err.Error(), "fake-OPENAI_API_KEY", "key values never appear in a message")
+}
+
+func TestVoiceCheckConfigFromSwitches(t *testing.T) {
+	realEnv(t, "real", true)
+	rc, _, err := providerwire.ParseConfigs()
+	require.NoError(t, err)
+	v := voiceCheckConfig(rc, nil)
+	require.True(t, v.RealTTS)
+	require.Equal(t, []string{"CARTESIA", "ELEVENLABS"}, v.Vendors)
+	rc.CartesiaTTSEnabled = false
+	require.Equal(t, []string{"ELEVENLABS"}, voiceCheckConfig(rc, nil).Vendors)
+	rc.ModeTTS = "fake"
+	require.False(t, voiceCheckConfig(rc, nil).RealTTS)
+}
+
+func TestRealtimeFakeModeDoesNotValidateRealFlags(t *testing.T) {
+	realEnv(t, "fake", false)
+	t.Setenv("OPENAI_STT_ENABLED", "false") // would be "zero STT" in real mode
+	require.NoError(t, validateProviders())
 }
 
 func TestBuildRouterInFakeMode(t *testing.T) {

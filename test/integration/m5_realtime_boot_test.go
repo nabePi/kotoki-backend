@@ -188,17 +188,61 @@ func TestM5BootIntegration(t *testing.T) {
 	require.Contains(t, p.out.String(), `"msg":"stopped"`)
 }
 
-func TestM5RealtimeRefusesRealMode(t *testing.T) {
+// PROVIDER_MODE=real without a usable configuration exits 1 naming the variable, before listening.
+func TestRealtimeRefusesRealModeWithoutKeys(t *testing.T) {
 	pool := testutil.NewPostgres(t)
 	rdb := testutil.NewRedis(t)
-	p := startRealtime(t, pool.Config().ConnString(), rdb.Options().Addr, map[string]string{"PROVIDER_MODE": "real"})
+	p := startRealtime(t, pool.Config().ConnString(), rdb.Options().Addr, map[string]string{
+		"PROVIDER_MODE": "real", "OPENAI_API_KEY": "", "ELEVENLABS_API_KEY": "", "CARTESIA_API_KEY": "", "DEEPSEEK_API_KEY": "",
+	})
+	select {
+	case err := <-p.exited:
+		require.Error(t, err)
+		var ee *exec.ExitError
+		require.ErrorAs(t, err, &ee)
+		require.Equal(t, 1, ee.ExitCode())
+	case <-time.After(30 * time.Second):
+		t.Fatalf("realtime keeps running in real mode without keys\n%s", p.out.String())
+	}
+	require.Contains(t, p.out.String(), "OPENAI_API_KEY")
+	testutil.AssertNothingListening(t, p.opsAddr)
+	testutil.AssertNothingListening(t, p.httpAddr)
+}
+
+// Real mode with fake keys and no PLACEHOLDER_ voice boots (nothing calls a vendor) and drains on SIGTERM.
+func TestRealtimeBootsInRealModeWithKeys(t *testing.T) {
+	pool := testutil.NewPostgres(t) // migrated, no characters: no placeholder voice
+	rdb := testutil.NewRedis(t)
+	p := startRealtime(t, pool.Config().ConnString(), rdb.Options().Addr, map[string]string{
+		"PROVIDER_MODE": "real", "OPENAI_API_KEY": "fake-openai", "ELEVENLABS_API_KEY": "fake-eleven", "CARTESIA_API_KEY": "fake-cartesia",
+	})
+	p.waitReady(t)
+	require.NoError(t, p.cmd.Process.Signal(syscall.SIGTERM))
+	select {
+	case err := <-p.exited:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("realtime did not stop")
+	}
+	require.NotContains(t, p.out.String(), "fake-openai")
+}
+
+// Real mode with the seeded PLACEHOLDER_ voices exits 1 naming the characters and the seed file.
+func TestRealtimeRefusesPlaceholderVoicesInRealMode(t *testing.T) {
+	pool := testutil.NewPostgres(t)
+	testutil.ApplySeed(t, pool)
+	rdb := testutil.NewRedis(t)
+	p := startRealtime(t, pool.Config().ConnString(), rdb.Options().Addr, map[string]string{
+		"PROVIDER_MODE": "real", "OPENAI_API_KEY": "fake-openai", "ELEVENLABS_API_KEY": "fake-eleven", "CARTESIA_API_KEY": "fake-cartesia",
+	})
 	select {
 	case err := <-p.exited:
 		require.Error(t, err)
 	case <-time.After(30 * time.Second):
-		t.Fatalf("realtime keeps running in real mode\n%s", p.out.String())
+		t.Fatalf("realtime keeps running with placeholder voices\n%s", p.out.String())
 	}
-	require.Contains(t, p.out.String(), "M9")
+	require.Contains(t, p.out.String(), "HARUKA")
+	require.Contains(t, p.out.String(), "0900_voice_ids.sql")
 	testutil.AssertNothingListening(t, p.opsAddr)
 	testutil.AssertNothingListening(t, p.httpAddr)
 }

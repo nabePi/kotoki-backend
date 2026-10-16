@@ -312,6 +312,11 @@ func buildContent(ctx context.Context, cfg config.API, logger *slog.Logger, pool
 	if err != nil {
 		return contentServices{}, fmt.Errorf("provider settings: %w", err)
 	}
+	// PROVIDER_MODE real: a PLACEHOLDER_ voice of an ACTIVE character of an enabled TTS vendor
+	// stops the start (spec 6.13.3); cmd/api does not import providerwire, so the vendors come from the switches.
+	if err := content.ValidateVoices(ctx, postgres.NewVoiceCheckRepo(pool), voiceCheckConfig(rc, logger)); err != nil {
+		return contentServices{}, err
+	}
 	cache := content.NewCachedRepository(postgres.NewContentRepo(pool), cfg.CacheTTL(), clk)
 	observer := metrics.NewContent(reg)
 	vcfg := validatorConfig(rc)

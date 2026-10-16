@@ -72,6 +72,10 @@ func run(ctx context.Context) error {
 	})
 	slog.SetDefault(logger)
 	logger.InfoContext(ctx, "starting", "build", buildinfo.String())
+	if err := validateProviders(); err != nil {
+		logger.ErrorContext(ctx, "invalid provider configuration", "error", err)
+		return err
+	}
 
 	otelShutdown, err := otel.Setup(ctx, otel.Config{
 		Endpoint: cfg.Endpoint, ServiceName: cfg.ServiceName, ResourceAttributes: cfg.ResourceAttributes,
@@ -202,6 +206,9 @@ func buildRealtime(podCtx context.Context, cfg config.Realtime, logger *slog.Log
 	router, rc, faults, err := buildRouter(rdb, clk, logger, provider.NewMetrics(reg))
 	if err != nil {
 		return nil, fmt.Errorf("provider: %w", err)
+	}
+	if err := content.ValidateVoices(podCtx, postgres.NewVoiceCheckRepo(pool), voiceCheckConfig(rc, logger)); err != nil {
+		return nil, err
 	}
 	deps := buildConversationDeps(cfg, logger, pool, rdb, reg, router, rc)
 	mgr := conversation.NewManager(deps)
