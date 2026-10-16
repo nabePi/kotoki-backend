@@ -594,3 +594,10 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Original tanpa `turn_seq`** (hanya mungkin pada STRENGTH, kedua field optional) tidak dapat diverifikasi, jadi dibuang sebagai `original_not_found`; `original` yang kosong setelah normalisasi (hanya tanda baca) juga `original_not_found`. Field wajib berisi string kosong/whitespace = `missing_field`.
 - **Urutan `Kept` mengikuti urutan input** (batas jumlah hanya memilih siapa yang lolos); STRENGTH diurutkan berdasar confidence karena severity dipaksa INFO. Deduplikasi `OBJECTIVE_NOT_MET` ganda (semua field null) ikut berlaku karena kuncinya sama.
 - **`Finding.TurnID`** diisi dari `TurnRef` hanya bila `turn_seq` ada.
+
+## M7-T9 — LLMEvaluator
+- **`INVALID_RESPONSE` pada panggilan kedua** dipetakan ke `ErrInvalidModelOutput` (output ditolak), bukan dikembalikan sebagai error provider; spec hanya merinci kasus call 1. Keduanya retryable sehingga klasifikasi retry tidak berubah (`failure_code` menjadi `INVALID_MODEL_OUTPUT` alih-alih `PROVIDER_UNAVAILABLE`).
+- **Repair setelah `INVALID_RESPONSE` tidak menyertakan pesan `assistant`** (tidak ada output untuk dikutip; pesan assistant kosong ditolak sebagian vendor); hanya pesan `user` berisi daftar error generik. Token panggilan yang gagal tidak terhitung (tidak ada `Usage` pada error).
+- **Pesan error repair untuk >50 % finding ditolak** berbentuk ringkasan `findings: N of M findings violate the rules (reason=count, ...)` tanpa mengutip teks finding (tidak ada teks user/AI di prompt repair tambahan maupun log). Daftar problem dibatasi 20 butir.
+- **Metrik `findings_dropped_total` dihitung untuk setiap percobaan** yang difilter, termasuk output yang kemudian ditolak (`TooManyRejected`); `LLMResult.Dropped` hanya milik output yang diterima. Label provider metrik pada error/`INVALID_RESPONSE` memakai `ev.Name()` (hasil tak berprovider).
+- **Kegagalan kompilasi skema** (`SchemaCache.Get`) dikembalikan apa adanya sebelum panggilan apa pun; Service (T13) memetakannya ke `CONFIGURATION_ERROR` (spec §10.5 langkah 3).

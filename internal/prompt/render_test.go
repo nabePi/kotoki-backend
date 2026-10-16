@@ -93,3 +93,10 @@ func TestRenderParseError(t *testing.T) {
 	_, err := prompt.Render(prompt.Template{Key: "K", Version: 1, System: "{{.A"}, struct{ A string }{})
 	require.ErrorContains(t, err, "K v1")
 }
+
+func TestParamsSeedOr(t *testing.T) {
+	require.EqualValues(t, 42, prompt.Params{}.SeedOr(42))
+	seven, zero := int64(7), int64(0)
+	require.EqualValues(t, 7, prompt.Params{Seed: &seven}.SeedOr(42))
+	require.EqualValues(t, 0, prompt.Params{Seed: &zero}.SeedOr(42), "a stored 0 wins over the default")
+}

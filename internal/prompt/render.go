@@ -32,6 +32,14 @@ func (p Params) MaxOutputTokensOr(def int) int {
 	return def
 }
 
+// SeedOr returns the stored seed or def.
+func (p Params) SeedOr(def int64) int64 {
+	if p.Seed != nil {
+		return *p.Seed
+	}
+	return def
+}
+
 // Template is a prompt version as the renderer needs it (content.PromptVersion.Template()
 // builds it, so prompt never imports content). User == "" means no user message.
 type Template struct {
