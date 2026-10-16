@@ -43,7 +43,15 @@ const (
 	resultDead      = "dead"
 	resultRequeue   = "requeue"
 	resultSkipped   = "skipped_deleted_user"
+	// resultRetryPublishFailed counts a retry whose copy could not be published (confirm failed or
+	// the broker is down): the delivery went back to its queue after retryFallbackDelay.
+	resultRetryPublishFailed = "retry_publish_failed"
 )
+
+// retryFallbackDelay is how long a delivery whose retry copy could not be published is held before
+// its nack requeue. RabbitMQ 4 does not count a nack requeue toward x-delivery-limit, so without
+// this pause a broken publisher would turn the redelivery into a hot loop.
+const retryFallbackDelay = time.Second
 
 // Handler is implemented structurally by the feature consumers (evaluation, memory, learner,
 // summary); it is defined here, on the consuming side (spec 9.7.1).
@@ -83,6 +91,9 @@ type Consumer struct {
 	m         *Metrics
 	log       *slog.Logger
 	clk       clock.Clock
+
+	// after is the timer behind retryFallbackDelay; nil means time.After. A test seam.
+	after func(time.Duration) <-chan time.Time
 
 	lifeOnce sync.Once
 	lc       *lifecycle
@@ -233,9 +244,24 @@ func (c *Consumer) onFailure(ctx context.Context, log *slog.Logger, d events.Del
 	c.h.OnFailure(context.WithoutCancel(ctx), d, cause, final)
 }
 
+// holdBeforeRequeue waits retryFallbackDelay, or until ctx (the root context, cancelled by Shutdown
+// after its grace) or Shutdown's stop signal ends, so a shutdown never waits on the pause.
+func (c *Consumer) holdBeforeRequeue(ctx context.Context) {
+	after := c.after
+	if after == nil {
+		after = time.After
+	}
+	select {
+	case <-after(retryFallbackDelay):
+	case <-ctx.Done():
+	case <-c.life().stop:
+	}
+}
+
 // retry publishes a copy to the retry queue of the current level, then acks the original. A failed
-// publish nacks with requeue so the message is not lost (RabbitMQ 4 does not count a nack requeue
-// toward x-delivery-limit, so the loop ends only when the publish works again).
+// publish nacks with requeue so the message is not lost. RabbitMQ 4 does not count a nack requeue
+// toward x-delivery-limit, so the nack is delayed by retryFallbackDelay (cut short by shutdown):
+// the redelivery loop stays bounded to one round per second while the publisher is broken.
 func (c *Consumer) retry(ctx context.Context, log *slog.Logger, msg amqp091.Delivery, d events.Delivery, cause error) {
 	lvl := RetryLevels[d.RetryCount]
 	h := cloneHeaders(msg.Headers)
@@ -249,7 +275,10 @@ func (c *Consumer) retry(ctx context.Context, log *slog.Logger, msg amqp091.Deli
 
 	pctx := context.WithoutCancel(ctx)
 	if err := c.pub.PublishConfirmed(pctx, ExchangeRetry, RetryQueueName(d.Queue, lvl), copyMessage(msg, h)); err != nil {
-		log.WarnContext(ctx, "retry publish failed, requeueing", "error", err, "level", lvl.Suffix)
+		c.m.ConsumerMessages.WithLabelValues(d.Queue, resultRetryPublishFailed).Inc()
+		log.WarnContext(ctx, "retry publish failed, requeueing after delay", "error", err, "level", lvl.Suffix,
+			"delay", retryFallbackDelay)
+		c.holdBeforeRequeue(ctx)
 		if nerr := msg.Nack(false, true); nerr != nil {
 			log.WarnContext(ctx, "nack requeue failed", "error", nerr)
 		}

@@ -523,6 +523,7 @@ func TestProcess_HandlerTimeout_Retries(t *testing.T) {
 func TestProcess_RetryPublishFails_NacksRequeue(t *testing.T) {
 	e := newEnv(t, &fakeHandler{handle: failWith(errors.New("boom"))}, fakeProcessed{})
 	e.pub.fail["kotoki.retry"] = amqp.ErrConfirmTimeout
+	e.c.SetAfter(func(time.Duration) <-chan time.Time { return elapsed() })
 	msg, ack := delivery(validBody(t), nil)
 
 	e.c.Process(e.root, msg)
@@ -530,6 +531,79 @@ func TestProcess_RetryPublishFails_NacksRequeue(t *testing.T) {
 	assert.Equal(t, []string{"nack requeue=true"}, ack.verdicts(), "never ack a message whose retry copy was not confirmed")
 	assert.Empty(t, e.pub.all())
 	assert.Equal(t, 0.0, e.result("retry"))
+	assert.Equal(t, 1.0, e.result("retry_publish_failed"))
+}
+
+func elapsed() <-chan time.Time {
+	ch := make(chan time.Time, 1)
+	ch <- time.Time{}
+	return ch
+}
+
+// A broken publisher must not turn the nack-requeue into a hot loop (RabbitMQ 4 does not count a
+// requeue toward x-delivery-limit): the nack waits retryFallbackDelay first.
+func TestProcess_RetryPublishFails_NackWaitsFallbackDelay(t *testing.T) {
+	e := newEnv(t, &fakeHandler{handle: failWith(errors.New("boom"))}, fakeProcessed{})
+	e.pub.fail["kotoki.retry"] = amqp.ErrNacked
+	timer := make(chan time.Time)
+	asked := make(chan time.Duration, 1)
+	e.c.SetAfter(func(d time.Duration) <-chan time.Time { asked <- d; return timer })
+	msg, ack := delivery(validBody(t), nil)
+
+	done := make(chan struct{})
+	go func() { e.c.Process(e.root, msg); close(done) }()
+
+	assert.Equal(t, amqp.RetryFallbackDelay, <-asked)
+	assert.Equal(t, time.Second, amqp.RetryFallbackDelay)
+	select {
+	case <-done:
+		t.Fatal("Process returned before the fallback delay elapsed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	assert.Empty(t, ack.verdicts(), "no verdict while the delay runs")
+
+	timer <- time.Time{}
+	<-done
+	assert.Equal(t, []string{"nack requeue=true"}, ack.verdicts())
+}
+
+func TestProcess_RetryPublishFails_DelayCutShortByRootCancel(t *testing.T) {
+	root, cancelRoot := context.WithCancel(context.Background())
+	e := newEnv(t, &fakeHandler{handle: failWith(errors.New("boom"))}, fakeProcessed{})
+	e.pub.fail["kotoki.retry"] = amqp.ErrNacked
+	asked := make(chan struct{}, 1)
+	e.c.SetAfter(func(time.Duration) <-chan time.Time { asked <- struct{}{}; return make(chan time.Time) })
+	msg, ack := delivery(validBody(t), nil)
+
+	done := make(chan struct{})
+	go func() { e.c.Process(root, msg); close(done) }()
+	<-asked
+	cancelRoot()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("root cancel did not end the fallback delay")
+	}
+	assert.Equal(t, []string{"nack requeue=true"}, ack.verdicts())
+}
+
+func TestProcess_RetryPublishFails_DelayCutShortByShutdown(t *testing.T) {
+	e := newEnv(t, &fakeHandler{handle: failWith(errors.New("boom"))}, fakeProcessed{})
+	e.pub.fail["kotoki.retry"] = amqp.ErrNacked
+	asked := make(chan struct{}, 1)
+	e.c.SetAfter(func(time.Duration) <-chan time.Time { asked <- struct{}{}; return make(chan time.Time) })
+	msg, ack := delivery(validBody(t), nil)
+
+	done := make(chan struct{})
+	go func() { e.c.Process(e.root, msg); close(done) }()
+	<-asked
+	require.NoError(t, e.c.Shutdown(context.Background(), time.Second)) // not started: stops, returns
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown did not end the fallback delay")
+	}
+	assert.Equal(t, []string{"nack requeue=true"}, ack.verdicts())
 }
 
 func TestProcess_DeadPublishFails_NacksWithoutRequeue(t *testing.T) {
