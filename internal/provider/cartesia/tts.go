@@ -68,6 +68,9 @@ func NewTTS(cfg Config, hc *http.Client, log *slog.Logger) (*TTS, error) {
 // Name is CARTESIA.
 func (*TTS) Name() provider.Name { return provider.Cartesia }
 
+// PoolSize is the number of concurrent WebSocket connections the adapter may hold (Config.PoolSize).
+func (t *TTS) PoolSize() int { return cap(t.pool.sem) }
+
 // Close closes the idle pooled connections; connections of calls in flight close when those end.
 func (t *TTS) Close() error {
 	t.pool.close()
