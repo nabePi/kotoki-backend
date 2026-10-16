@@ -165,6 +165,8 @@ func (a *app) dispatch(ctx context.Context, rest []string) error {
 		return a.cmdEvalGolden(ctx, args)
 	case "provider-bench":
 		return a.cmdProviderBench(ctx, args)
+	case "provider-report":
+		return a.cmdProviderReport(ctx, args)
 	default:
 		a.usage()
 		return usagef("unknown subcommand %q", cmd)
@@ -190,6 +192,9 @@ subcommands:
   provider-bench --suite stt|llm|llm-json|tts|e2e|concurrency|all --out DIR [--dataset testdata/benchmark]
               [--models-file bench/models.yaml] [--repeat 3] [--audio-root DIR] [--human CSV] [--concurrency-steps 10,50,100,200]
               benchmark the provider candidates against the spec 8.10.4 gates (PROVIDER_MODE, vendor keys)
+  provider-report --from DATE --to DATE [--format csv|json] [--prices FILE]
+              per stack (STT, LLM, TTS): latency, failure and fallback rate, cost, evaluation score
+              from session_turns, range [from, to) (DATABASE_URL, read-only)
 
 global flags (also from the environment):
   --api-url   REST base URL            (KOTOKI_CLI_API_URL, default `+defaultAPIURL+`)
