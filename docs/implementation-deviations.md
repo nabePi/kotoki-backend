@@ -576,3 +576,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`ApplySeed` memakai `testutil.ModuleRoot`** untuk lokasi `seed/` (tes M3 tetap memakai `runSeed` lokal berbasis path relatif; tidak diubah).
 - **Tes tambahan:** validasi skema negatif (skor 101, tipe finding tak dikenal ditolak) dan cek tiap field `EvaluationPromptData` muncul di user prompt hasil render seed.
 - **Step 2 merah:** seed dikembalikan ke versi lama sementara (`git stash`): `content: not found`.
+
+## M7-T6 — Fake evaluation, finding turunan transcript
+- **Tanda baca `original` = tepat himpunan filter §10.7.2 (`、。，．,.！？!?「」…・`) + whitespace**, bukan `unicode.IsPunct`: tanda lain (mis. `『』`) tidak dibuang filter, sehingga membuangnya di fake akan membuat `original` bukan substring `user_text` ternormalisasi.
+- **Step 2 merah dibuktikan lewat mutasi hook** (hook dimatikan, tes merah); kode ditulis sebelum tes.
+- **Fixture memakai `{{score}}` juga untuk dua signal** (sama dengan lima dimensi); `pattern_key` finding turunan `null`; `explanation` kalimat Indonesia tetap. Baris USER diparse dengan `(?m)^\[T(\d+)\] USER[^:\n]*: (.+)$` pada pesan terakhir; tidak ada import `evaluation` dari `fake` (arch).

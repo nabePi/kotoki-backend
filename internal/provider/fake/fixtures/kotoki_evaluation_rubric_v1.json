@@ -1,0 +1,20 @@
+{
+  "scores": {
+    "GRAMMAR": {"score": "{{score}}", "confidence": 0.8, "comment": "Kalimat sederhanamu sudah jelas, tetapi partikel lokasi dan bentuk lampau kata sifat masih sering keliru."},
+    "VOCABULARY": {"score": "{{score}}", "confidence": 0.7, "comment": "Kosakata sehari-hari cukup, tetapi masih terbatas untuk topik pekerjaan."},
+    "FLUENCY": {"score": "{{score}}", "confidence": 0.75, "comment": "Jawabanmu sering sangat pendek; coba tambahkan alasan atau contoh."},
+    "NATURALNESS": {"score": "{{score}}", "confidence": 0.7, "comment": "Bentuk です・ます sudah konsisten, namun beberapa ungkapan terdengar kaku."},
+    "TASK_ACHIEVEMENT": {"score": "{{score}}", "confidence": 0.8, "comment": "Kamu menjawab semua pertanyaan, tetapi belum bertanya balik."}
+  },
+  "signals": {
+    "LISTENING_RESPONSE": {"score": "{{score}}", "confidence": 0.7},
+    "INTERACTION_COMPLEXITY": {"score": "{{score}}", "confidence": 0.6}
+  },
+  "summary": "Kamu bisa mempertahankan percakapan tentang pekerjaan dengan kalimat sederhana. Fokus berikutnya: partikel で untuk tempat aktivitas dan bentuk lampau kata sifat.",
+  "strengths": ["Penggunaan です・ます konsisten sepanjang percakapan."],
+  "focus_areas": ["Partikel で vs に untuk tempat", "Bentuk lampau kata sifat-i"],
+  "recommendations": [
+    {"title": "Latihan partikel で", "detail": "Buat 5 kalimat tentang tempat kamu melakukan aktivitas sehari-hari.", "example_ja": "図書館で勉強します。"}
+  ],
+  "findings": []
+}

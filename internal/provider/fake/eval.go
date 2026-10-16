@@ -86,6 +86,9 @@ func (e *Evaluation) GenerateJSON(ctx context.Context, req provider.StructuredRe
 			"fake: no fixture for schema "+req.SchemaName)
 	}
 	body := strings.ReplaceAll(string(raw), scorePlaceholder, strconv.Itoa(fakeScore(req.RequestID)))
+	if req.SchemaName == rubricSchemaName {
+		body = string(RubricFindings(req, []byte(body)))
+	}
 	if !json.Valid([]byte(body)) {
 		return provider.StructuredResult{}, provider.NewError(e.name, provider.CapEvaluation, provider.KindInvalidResponse,
 			fmt.Sprintf("fake: fixture %s is not valid JSON", req.SchemaName))

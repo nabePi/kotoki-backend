@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,8 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/evaluation"
 	"github.com/nabePi/kotoki-backend/internal/postgres"
 	"github.com/nabePi/kotoki-backend/internal/prompt"
+	"github.com/nabePi/kotoki-backend/internal/provider"
+	"github.com/nabePi/kotoki-backend/internal/provider/fake"
 	"github.com/nabePi/kotoki-backend/internal/testutil"
 )
 
@@ -112,4 +115,49 @@ func TestSchemaCopyMatchesSeed(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, json.Valid(b))
 	require.JSONEq(t, string(b), string(pv.OutputSchema))
+}
+
+func TestFakeRubricFixtureMatchesSeedSchema(t *testing.T) {
+	pool := testutil.NewPostgres(t)
+	testutil.ApplySeed(t, pool)
+	ctx := context.Background()
+	pv, err := postgres.NewContentRepo(pool).GetPublishedPromptVersion(ctx, content.PromptEvaluation)
+	require.NoError(t, err)
+	schema := compileSchema(t, pv.OutputSchema)
+
+	texts := []string{"今日は会社で働きます", "昨日は友達と映画を見ました", "私は学生です", "毎日電車で通います", "週末はよく散歩します", "来週は旅行に行きたいです"}
+	base := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	var turns []evaluation.TurnRow
+	for i, text := range texts {
+		status, user, ai := "COMPLETED", text, "そうですか。"
+		start := base.Add(time.Duration(i) * 10 * time.Second)
+		end := start.Add(3 * time.Second)
+		turns = append(turns, evaluation.TurnRow{
+			Seq: i + 1, Status: &status, UserText: &user, AssistantText: &ai, UserStartedAt: &start, UserEndedAt: &end,
+		})
+	}
+	data := evaluation.PromptFixtures()[0].(evaluation.EvaluationPromptData)
+	data.Transcript = evaluation.BuildTranscript(turns, 0)
+	out, err := prompt.Render(pv.Template(), data)
+	require.NoError(t, err)
+
+	ev := fake.NewEvaluation(provider.FakePrimary, fake.CapConfig{}, fake.Config{}, fake.Deps{Seed: 42})
+	res, err := ev.GenerateJSON(ctx, provider.StructuredRequest{
+		Task: "EVALUATION", SchemaName: "kotoki_evaluation_rubric_v1", RequestID: "EVALUATION:s1",
+		Messages: []provider.Message{{Role: provider.RoleSystem, Content: out.System}, {Role: provider.RoleUser, Content: out.User}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, validate(t, schema, string(res.JSON)))
+
+	var doc struct {
+		Findings []struct {
+			TurnSeq  int    `json:"turn_seq"`
+			Original string `json:"original"`
+		} `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal(res.JSON, &doc))
+	require.Len(t, doc.Findings, 2)
+	require.Equal(t, 3, doc.Findings[0].TurnSeq)
+	require.Equal(t, 6, doc.Findings[1].TurnSeq)
+	require.Contains(t, data.Transcript, doc.Findings[0].Original)
 }
