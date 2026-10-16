@@ -46,6 +46,7 @@ linters:
             - "**/internal/prompt/**"
             - "**/internal/provider/**"
             - "!**/internal/provider/openai/**"
+            - "!**/internal/provider/elevenlabs/**"
             - "!**/internal/provider/gemini/**"
             - "!**/internal/provider/azure/**"
             - "**/internal/evaluation/**"

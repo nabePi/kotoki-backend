@@ -921,3 +921,12 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - Pesan instruksi berbahasa Inggris (instruksi ke model, bukan teks pengguna) dan memuat kata "JSON" sesuai syarat docs.
 - Tambahan: `finish_reason` `insufficient_system_resource`/`aborted` pada Evaluation -> `UNAVAILABLE` retryable (konsisten dengan LLM, tidak ada di tabel §8.4.9).
 - `StructuredResult.Model` = `req.Model`; `FinishReason` sukses selalu `STOP`.
+
+## M9-T7 — ElevenLabs Config dan TTS
+- **Urutan TDD:** `tts.go` ditulis sebelum tesnya; merah dibuktikan setelahnya dengan memindahkan `tts.go` (build error `undefined`), lalu 16 mutasi. Bukan penyimpangan perilaku.
+- **Fixture tambahan** `tts_conformance.jsonl` (500 ms audio sintetis berjadwal 100 ms per chunk) untuk `providertest.TTSSuite`; `tts_mid_error` mensimulasikan putus dengan header `Content-Length` lebih besar dari body (simulator tidak punya aksi "putus").
+- **Chunk `Final` tidak membawa PCM** (hanya `Usage`); chunk audio tidak pernah `Final`.
+- **Byte ganjil tersisa di EOF dibuang** (tidak bisa jadi sampel utuh); `AudioMs` dihitung dari byte yang dikirim.
+- **`Config.Metrics`** mengikuti pola `openai`/`deepseek`, ElevenLabs tidak mendokumentasikan header rate-limit sehingga hanya header `x-ratelimit-remaining-requests/-tokens` yang dibaca bila ada.
+- **Step 0 tidak terkonfirmasi** (halaman resmi tidak memuat): rentang `speed`, deskripsi `pcm_24000`, bentuk body error `detail.status`, pembatasan `speed`/`previous_text` per model. Spec §8.4.5 tidak diubah; sumber kebenaran tetap spec sampai rekaman nyata (Task 16).
+- **depguard:** `elevenlabs` dikeluarkan dari daftar `feature-no-infra` di `.golangci.yml` (seperti `openai`) agar tes paket sendiri boleh mengimpornya.
