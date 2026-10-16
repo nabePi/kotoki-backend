@@ -1163,3 +1163,9 @@ Tanggal: 2026-10-14
 - **`.env.example`**: blok "Worker: outbox & job" (13 variabel; `RABBITMQ_URL` dan `RETENTION_TRANSCRIPT_DAYS` sudah ada). `TestEnvExampleLoads` tetap hijau.
 - **Tes** (`worker_groups_test.go`): `TestWorkerGroupDefaults`, `TestWorkerGroupOverrides`, `TestValidateRabbit` (21 kasus), `TestRabbitURLRedacted`.
 - **Verifikasi:** tes gagal (build) tanpa implementasi, lalu hijau; `go test -race ./internal/platform/config` hijau; `go build ./...`; `go test -race ./internal/... ./cmd/...`; `make arch-check`; `make lint` 0 isu. Mutasi, semua merah: cek amqps strict dihapus, validasi `OUTBOX_TX_TIMEOUT` dihapus, batas bawah hari dihapus, default `BatchSize` 50, default heartbeat 40 s, `Rabbit.validate`/`Jobs.validate` tidak dipanggil.
+
+
+## M6-T2 — Paket `events` (envelope, payload V1, idempotensi, error)
+- **Baru:** `envelope.go` (`Envelope`, `Event.Envelope`, `DecodeEnvelope`, `DecodePayload[T]`), `delivery.go`, `errors.go` (`PermanentError`/`Permanent`, `ErrSkippedDeletedUser`), `idempotency.go` (`ErrAlreadyProcessed`, `ProcessedEvents`), `queues.go` (4 nama queue), `payloads.go` (`SessionCompletedV1` alias, `EvaluationCompletedV1`, `EvaluationFailedV1`, `MemoryExtractedV1` + builder). **Diubah:** `types.go` (konstanta `EvaluationCompleted/Failed`, `MemoryExtracted`, `AggregateEvaluation`, `CurrentVersion`, `SupportedVersions`).
+- **Tes:** `envelope_test.go`, `payloads_test.go`, `errors_test.go` + 4 golden di `testdata/`; cakupan paket 100%.
+- **Verifikasi:** `go test -race -cover ./internal/events` hijau (cover 100,0%); `go build ./...`; `go test -race ./internal/... ./cmd/...`; `make arch-check`; `make lint` 0 isu. Mutasi, semua merah (16): pembulatan alih-alih pemotongan ms, `occurred_at` RFC3339Nano, batas versi, payload `null`, cek `event_id`/`event_type`, kode DECODE_ERROR, map/array nil jadi null, aggregate ID/type salah, `omitempty` pada skor, format `Error()`, `Unwrap` putus, nama queue, `SupportedVersions`.

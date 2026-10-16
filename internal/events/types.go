@@ -9,10 +9,23 @@ import (
 
 // Event types (routing keys) and aggregate types.
 const (
-	SessionCompleted = "session.completed"
+	SessionCompleted    = "session.completed"
+	EvaluationCompleted = "evaluation.completed"
+	EvaluationFailed    = "evaluation.failed"
+	MemoryExtracted     = "memory.extracted"
 
-	AggregateSession = "SESSION"
+	AggregateSession    = "SESSION"
+	AggregateEvaluation = "EVALUATION"
 )
+
+// CurrentVersion is the event_version every event type is published with today (spec 9.4).
+const CurrentVersion = 1
+
+// SupportedVersions is the highest event_version this build understands per event type; a consumer
+// treats a higher version as UNSUPPORTED_EVENT_VERSION (spec 9.4, 9.7.3).
+var SupportedVersions = map[string]int{
+	SessionCompleted: 1, EvaluationCompleted: 1, EvaluationFailed: 1, MemoryExtracted: 1,
+}
 
 // Producers.
 const (

@@ -1,0 +1,11 @@
+{
+  "session_id": "0192f1a0-1111-7aaa-8bbb-cccccccccccc",
+  "created_memory_ids": ["0192f1c0-0000-7000-8000-000000000001"],
+  "updated_memory_ids": [],
+  "superseded_memory_ids": [],
+  "category_counts": {"PREFERENCE": 1},
+  "prompt_version_id": "01920000-000e-7000-8000-000000000001",
+  "provider": "FAKE",
+  "model": "fake-llm",
+  "extracted_at": "2026-10-12T06:32:00.250Z"
+}

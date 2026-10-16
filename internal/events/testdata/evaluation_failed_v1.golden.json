@@ -1,0 +1,7 @@
+{
+  "evaluation_id": "0192f1b0-0000-7000-8000-000000000001",
+  "session_id": "0192f1a0-1111-7aaa-8bbb-cccccccccccc",
+  "failure_code": "PROVIDER_UNAVAILABLE",
+  "attempt_count": 3,
+  "failed_at": "2026-10-12T06:40:00.000Z"
+}

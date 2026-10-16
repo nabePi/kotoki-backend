@@ -1,0 +1,16 @@
+{
+  "evaluation_id": "0192f1b0-0000-7000-8000-000000000001",
+  "session_id": "0192f1a0-1111-7aaa-8bbb-cccccccccccc",
+  "rubric_version": "rubric-v1",
+  "insufficient_evidence": false,
+  "scores": {"GRAMMAR": 72, "VOCABULARY": 65, "FLUENCY": 80, "NATURALNESS": null, "TASK_ACHIEVEMENT": 90},
+  "dimension_confidence": {"GRAMMAR": 0.8, "VOCABULARY": 0.7, "FLUENCY": 0.9, "TASK_ACHIEVEMENT": 0.6},
+  "signals": {"LISTENING_RESPONSE": {"score": 70, "confidence": 0.5}, "INTERACTION_COMPLEXITY": null},
+  "overall_score": 76.75,
+  "session_ended_at": "2026-10-12T06:30:14.500Z",
+  "scenario_difficulty_level": 3,
+  "user_turn_count": 21,
+  "user_speech_seconds": 240,
+  "finding_counts": {"GRAMMAR": {"MAJOR": 1, "MINOR": 3, "INFO": 0}},
+  "completed_at": "2026-10-12T06:31:02.007Z"
+}
