@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -48,6 +49,8 @@ type env struct {
 	rt        *proc
 	apiURL    string // http://host:port
 	wsURL     string // ws://host:port/api/v1/realtime
+	workerMu  sync.Mutex
+	workerBin string
 	procMu    sync.Mutex
 	procs     []*proc
 	catalogMu sync.Mutex
@@ -168,6 +171,27 @@ func (e *env) startRealtime(tb testing.TB, podID string) *proc {
 	return e.launch(tb, p, e.rtBin, e.baseEnv(tb, map[string]string{
 		"HTTP_ADDR": p.addr, "OPS_ADDR": p.opsAddr, "REALTIME_POD_ID": podID,
 	}))
+}
+
+// startWorker starts a cmd/worker process with the given handler flags (WORKER_HANDLERS) against the
+// shared Postgres and Redis and the RabbitMQ at rabbitURL, and waits until it is ready. The binary
+// is built on first use: only the M6 scenarios need a worker, and a worker left running in every
+// test would sweep the sessions other scenarios leave ACTIVE on purpose. The sweeper tick is 2 s
+// so a scenario does not wait for the 10 s production interval. The caller stops it with p.stop.
+func (e *env) startWorker(tb testing.TB, rabbitURL, handlers string) *proc {
+	e.workerMu.Lock()
+	if e.workerBin == "" {
+		e.workerBin = e.build(tb, "worker")
+	}
+	bin := e.workerBin
+	e.workerMu.Unlock()
+	p := &proc{name: "worker-" + strings.ReplaceAll(handlers, ",", "-"), opsAddr: testutil.FreeAddr(tb)}
+	p = e.launch(tb, p, bin, e.baseEnv(tb, map[string]string{
+		"WORKER_HTTP_ADDR": p.opsAddr, "WORKER_HANDLERS": handlers, "RABBITMQ_URL": rabbitURL,
+		"SWEEPER_INTERVAL": "2s", "WORKER_SHUTDOWN_GRACE": "5s",
+	}))
+	p.waitReady(tb)
+	return p
 }
 
 func (e *env) launch(tb testing.TB, p *proc, bin string, environ []string) *proc {
