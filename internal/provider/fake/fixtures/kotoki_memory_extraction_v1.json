@@ -1,0 +1,62 @@
+{
+  "memories": [
+    {
+      "category": "PROFILE_FACT",
+      "key": "occupation",
+      "content_ja": "バックエンドエンジニアとして働いている。",
+      "display_text_id": "Bekerja sebagai backend engineer.",
+      "evidence_type": "EXPLICIT_USER_STATEMENT",
+      "confidence": 0.95,
+      "importance": 0.9,
+      "is_temporary": false,
+      "valid_days": null,
+      "source_turn_seqs": [
+        1
+      ],
+      "sensitive": false
+    },
+    {
+      "category": "PROFILE_FACT",
+      "key": "plan:job_interview",
+      "content_ja": "来月、日本企業の面接を受ける予定。",
+      "display_text_id": "Bulan depan akan wawancara kerja di perusahaan Jepang.",
+      "evidence_type": "EXPLICIT_USER_STATEMENT",
+      "confidence": 0.9,
+      "importance": 0.8,
+      "is_temporary": true,
+      "valid_days": 45,
+      "source_turn_seqs": [
+        2
+      ],
+      "sensitive": false
+    },
+    {
+      "category": "LEARNING_PATTERN",
+      "key": "error:particle_wa_ga",
+      "content_ja": "「は」と「が」を混同することが多い。",
+      "display_text_id": "Sering tertukar antara partikel は dan が.",
+      "evidence_type": "INFERRED",
+      "confidence": 0.8,
+      "importance": 0.7,
+      "is_temporary": false,
+      "valid_days": null,
+      "source_turn_seqs": [
+        1,
+        2,
+        3
+      ],
+      "sensitive": false
+    }
+  ],
+  "episode": {
+    "content_ja": "面接練習（バックエンドエンジニア）。Goを選んだ理由とマイクロサービスの経験を説明した。",
+    "display_text_id": "Latihan wawancara (backend engineer). Menjelaskan alasan memilih Go dan pengalaman microservices.",
+    "confidence": 0.9,
+    "importance": 0.6,
+    "source_turn_seqs": [
+      1,
+      2,
+      3
+    ]
+  }
+}
