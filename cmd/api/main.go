@@ -27,6 +27,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/evaluation"
 	"github.com/nabePi/kotoki-backend/internal/httpapi"
 	"github.com/nabePi/kotoki-backend/internal/mailer"
+	"github.com/nabePi/kotoki-backend/internal/memory"
 	"github.com/nabePi/kotoki-backend/internal/platform/buildinfo"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/config"
@@ -257,13 +258,14 @@ func buildAPI(ctx context.Context, cfg config.API, logger *slog.Logger, pool *pg
 
 var fixturesOnce sync.Once
 
-// registerPromptFixtures gives the prompt keys owned by M7 their render fixtures (spec 6.10.1), which
-// the catalog validation needs to render the seeded EVALUATION and SUMMARY versions. RegisterFixtures
-// panics on a second call for a key, so it runs once per process. M8 adds MEMORY_EXTRACTION here.
+// registerPromptFixtures gives the prompt keys owned by M7 and M8 their render fixtures (spec 6.10.1),
+// which the catalog validation needs to render the seeded EVALUATION, SUMMARY and MEMORY_EXTRACTION versions. RegisterFixtures
+// panics on a second call for a key, so it runs once per process.
 func registerPromptFixtures() {
 	fixturesOnce.Do(func() {
 		prompt.RegisterFixtures("EVALUATION", evaluation.PromptFixtures)
 		prompt.RegisterFixtures("SUMMARY", summary.PromptFixtures)
+		prompt.RegisterFixtures("MEMORY_EXTRACTION", memory.PromptFixtures)
 	})
 }
 

@@ -60,15 +60,16 @@ func TestHandlerSets_Section98(t *testing.T) {
 	assert.True(t, dup.Publisher)
 }
 
-// Until M8 fills the seam, a feature handler without a consumer must stop the process at startup:
-// silently running without it would leave its queue growing. evaluation and summary exist (M7).
-// M8 removes this test once memory and learner are wired.
-func TestBuildConsumers_UnimplementedHandlerFailsStartup(t *testing.T) {
-	for _, h := range []string{"memory", "learner"} {
-		_, err := buildConsumers([]string{"outbox", h}, consumerDeps{})
-		require.ErrorIs(t, err, errHandlerNotImplemented, h)
-		assert.Contains(t, err.Error(), h)
-	}
+// A flag the worker does not know is a startup error naming it, never a silently unconsumed
+// queue; flags without a consumer (outbox, sweeper, cleanup) build none.
+func TestBuildConsumers_UnknownFlagFails(t *testing.T) {
+	_, err := buildConsumers([]string{"outbox", "bogus"}, consumerDeps{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bogus")
+	_, err = newHandler("bogus", consumerDeps{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bogus")
+
 	cs, err := buildConsumers([]string{"outbox", "sweeper", "cleanup"}, consumerDeps{})
 	require.NoError(t, err)
 	assert.Empty(t, cs)
@@ -100,7 +101,41 @@ func TestBuildConsumers_EvaluationAndSummary(t *testing.T) {
 
 	_, err = buildConsumers([]string{"evaluation"}, consumerDeps{Reg: prometheus.NewRegistry()})
 	require.Error(t, err, "a consumer without its provider router is a startup error, not a nil dereference later")
-	assert.NotErrorIs(t, err, errHandlerNotImplemented)
+	assert.ErrorIs(t, err, errRouterRequired)
+}
+
+// M8: memory (session.completed -> memory.session_completed) and learner (evaluation.completed ->
+// learner.evaluation_completed) are wired; every consumer flag now has a handler.
+func TestBuildConsumers_MemoryAndLearner(t *testing.T) {
+	for flag, tc := range map[string]struct {
+		queue  string
+		events map[string]int
+	}{
+		"memory":  {events.QueueMemory, map[string]int{"session.completed": 1}},
+		"learner": {events.QueueLearner, map[string]int{"evaluation.completed": 1}},
+	} {
+		h, err := newHandler(flag, m7Deps())
+		require.NoError(t, err, flag)
+		assert.Equal(t, tc.queue, h.Queue(), flag)
+		assert.Equal(t, tc.events, h.SupportedEvents(), flag)
+		assert.Positive(t, h.Timeout(), flag)
+	}
+	cs, err := buildConsumers([]string{"outbox", "memory"}, m7Deps())
+	require.NoError(t, err)
+	require.Len(t, cs, 1)
+	cs, err = buildConsumers([]string{"learner"}, m7Deps())
+	require.NoError(t, err)
+	require.Len(t, cs, 1)
+	cs, err = buildConsumers([]string{"learner", "summary"}, m7Deps())
+	require.NoError(t, err)
+	assert.Len(t, cs, 2)
+	cs, err = buildConsumers(consumerFlags, m7Deps())
+	require.NoError(t, err)
+	assert.Len(t, cs, 4, "every consumer flag has a handler")
+
+	_, err = buildConsumers([]string{"memory"}, consumerDeps{Reg: prometheus.NewRegistry()})
+	require.Error(t, err, "memory without the provider router is a startup error, not a nil dereference later")
+	assert.ErrorIs(t, err, errRouterRequired)
 }
 
 // platform/config does not import the feature packages, so the worker maps the groups field by
