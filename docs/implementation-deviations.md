@@ -421,3 +421,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`Metrics` juga memuat metrik consumer** (`kotoki_consumer_*`) karena plan: "semua metrik amqp Global Constraints"; dipakai Task 9-10. Metrik job/sweeper/partisi ada di `internal/jobs`.
 - **Tambahan di luar daftar plan:** `RunOutboxGauges(ctx, pool, m, onErr)` (15 s) dan `RunQueueDepth(ctx, open, queues, m, onErr)` (30 s) untuk wiring Task 22; `RefreshQueueDepth` mengabaikan ctx (API `QueueDeclarePassive` tidak menerimanya).
 - **Tes memakai `fakePub` untuk skenario ack/nack/timeout/channel mati dan broker nyata untuk end-to-end/outage**; `TestPublishBatch_SkipLocked_TwoPublishersNoDuplicate` memakai rendezvous (kedua publisher harus sudah `Send` sebelum confirm) agar keduanya terbukti memegang batch bersamaan.
+
+## M6-T8 — `Classify` dan kode error consumer
+- **Tes unexported ada di `errors_internal_test.go` (package `amqp`)**, bukan `errors_test.go`, karena `errorCode/headerInt/truncate` tidak diekspor (plan); `errors_test.go` (eksternal) hanya memuat `Classify`. Pola sama dengan `carrier_internal_test.go`.
+- **SQLSTATE retryable (aturan 7) tidak punya cabang eksplisit**: hasilnya sama dengan default aturan 11, sehingga hanya kelas `22`/`23` yang di-switch (Dead); perilaku sesuai tabel §9.7.3 dan dikunci tes tabel.
+- **`events.ErrSkippedDeletedUser` ditambahkan ke aturan 1 (Ack)** sesuai Step 1 plan (spec §9.7.2); `truncate` memotong pada batas rune UTF-8 (hasil ≤ n byte).
