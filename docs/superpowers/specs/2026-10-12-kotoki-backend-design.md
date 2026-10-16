@@ -7548,6 +7548,17 @@ Mapping event:
 
 `Open` sukses = handshake WebSocket 101 (tidak ada pesan "session started" terdokumentasi). Keep-alive saat tidak ada audio, limit konkurensi plan, dan satuan harga STT → **verifikasi di task adapter / benchmark** (https://docs.cartesia.ai/pricing). Timestamp: adapter menghitung posisi audio sendiri (byte terkirim / 32); `words[].start/end` dipakai bila ada.
 
+Hasil verifikasi M9-T10 (docs api-reference/stt/stt, build-with-cartesia/stt-models, pricing; dibaca 2026-10-16; tanpa akses nyata):
+- (a) Auth: header `X-API-Key`. Versi API: `cartesia_version` adalah parameter query WAJIB (enum `2026-08-14`); header `Cartesia-Version` TIDAK didokumentasikan untuk STT WS → adapter hanya mengirim query.
+- (b) Query: `model`, `encoding`, `sample_rate`, `cartesia_version`; `keyterm` hanya untuk `ink-2`/`ink-preview` (adapter menghilangkannya untuk model berfamili `whisper`; istilah yang tidak muat di 100 istilah / 1.200 karakter dibuang utuh, tidak dipotong di tengah); `language` (ISO-639-1) hanya `ink-whisper` (adapter mengirim `ja` untuk model itu saja). Halaman model menyatakan `ink-2` dan `ink-preview` mendukung `ja`, tetapi TIDAK menjelaskan bagaimana bahasa dipilih pada `ink-2` (tidak ada parameter `language`) → TERBUKA (benchmark); dukungan `ja` pada `ink-whisper` tidak dinyatakan → TERBUKA.
+- (c) Ukuran potongan: dok "small chunks, e.g. 100 ms" → batching 5 frame (3.200 byte) tetap.
+- (d) `text` pada `transcript`: "A delta since the last chunk with is_final: true" → teks `is_final=false` adalah teks berjalan sejak final terakhir (PARTIAL = teks segmen berjalan, sesuai kontrak port); final digabung tanpa trim/spasi tambahan. Apakah partial benar-benar kumulatif dalam segmen TERBUKA (inferensi dari kalimat dok).
+- (e) `finalize` → `transcript(is_final=true)`… lalu `flush_done`; `close` → `done` (terverifikasi dari dok).
+- (f) `error{status_code,title,message}` (+`error_code`,`doc_url`,`request_id`): dok hanya mencontohkan `model_not_found` (400); kode kuota/kredit habis TIDAK tercantum (pricing: bila overage mati request "fail until renewal") → adapter memakai tebakan substring (`quota`/`credit`/`insufficient`) pada `error_code` untuk `RATE_LIMITED` non-retryable. TEBAKAN.
+- (g) Batas durasi/idle sesi dan keep-alive: dok TIDAK menyebutnya. Tidak ada sinyal rotasi yang terdokumentasi; adapter memetakan `error_code=session_time_limit_exceeded` (TEBAKAN: memakai kode yang sudah dikenal `provider.rotationTriggers`) menjadi UNAVAILABLE+`VendorCode` persis agar `rotatingSTT` merotasi bila vendor mengirimnya; `provider.rotationTriggers` TIDAK diperluas karena kode Cartesia nyata belum diketahui. Keep-alive tidak dikirim secara default (`Config.KeepAliveAfter=0`): silence ditagih ("Silence is billed even when no transcript is produced"); bila rekaman nyata menunjukkan idle-close, set `KeepAliveAfter`.
+- (h) Penerimaan backlog lebih cepat dari realtime: TIDAK dinyatakan → TERBUKA.
+- (i) Harga STT: per detik audio, `ink-2` WebSocket 3 kredit/detik, `ink-whisper` WebSocket 1 kredit/detik (bukan per jam; silence ditagih). Limit konkurensi plan tidak dinyatakan di halaman pricing (rujuk cartesia.ai/pricing) → TERBUKA.
+
 #### 8.4.7 Matriks vendor × kapabilitas
 
 | Vendor | STT | LLM | Evaluation | Embedding | TTS | Flag env |

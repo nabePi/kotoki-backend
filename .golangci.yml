@@ -47,6 +47,7 @@ linters:
             - "**/internal/provider/**"
             - "!**/internal/provider/openai/**"
             - "!**/internal/provider/elevenlabs/**"
+            - "!**/internal/provider/cartesia/**"
             - "!**/internal/provider/gemini/**"
             - "!**/internal/provider/azure/**"
             - "**/internal/evaluation/**"
@@ -72,6 +73,7 @@ linters:
             - {pkg: "github.com/nabePi/kotoki-backend/internal/wsgateway", desc: "D-005: handler bergantung ke fitur, bukan sebaliknya"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/jobs", desc: "D-005: job memanggil Service fitur, bukan sebaliknya"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/elevenlabs", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
+            - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/cartesia", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/deepgram", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/openai", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
             - {pkg: "github.com/nabePi/kotoki-backend/internal/provider/gemini", desc: "D-005: adapter vendor di-wire di cmd/*/main.go"}
@@ -101,6 +103,7 @@ linters:
             - "**/internal/objectstore/**"
             - "**/internal/mailer/**"
             - "**/internal/provider/elevenlabs/**"
+            - "**/internal/provider/cartesia/**"
             - "**/internal/provider/deepgram/**"
             - "**/internal/provider/openai/**"
             - "**/internal/provider/gemini/**"
@@ -165,7 +168,7 @@ linters:
       - path: 'internal/provider/providertest/'
         linters: [forbidigo]
         text: 'time\.Now'
-      - path: 'internal/provider/(elevenlabs|deepgram|openai|deepseek|gemini|azure)/'
+      - path: 'internal/provider/(elevenlabs|cartesia|deepgram|openai|deepseek|gemini|azure)/'
         linters: [forbidigo]
         text: 'time\.Now'
       - path-except: 'internal/(auth|balance|session|content|conversation|prompt|provider|evaluation|memory|learner|summary|admin|events)/'

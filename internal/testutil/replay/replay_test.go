@@ -321,3 +321,17 @@ func TestWSSimShutdownReleasesHandlerOfUnfinishedScript(t *testing.T) {
 	}
 	_ = client.CloseNow()
 }
+
+func TestWSSimRawTextRuleAndRecv(t *testing.T) {
+	s := replay.LoadScriptString(t, `{"meta":{"vendor":"CARTESIA","capability":"STT","source":"x","verified":false}}
+{"ws":{"dir":"on","match":{"raw_text":"finalize"},"send":[{"text":"{\"type\":\"flush_done\"}"}],"times":1}}
+{"ws":{"dir":"recv","json":{"raw_text":"close"}}}`)
+	srv := replay.NewWSServer(t, s)
+	c := dial(t, srv.URL)
+	ctx := context.Background()
+	require.NoError(t, c.Write(ctx, websocket.MessageText, []byte("finalize")))
+	require.JSONEq(t, `{"type":"flush_done"}`, readText(t, c))
+	require.NoError(t, c.Write(ctx, websocket.MessageText, []byte("close")))
+	require.Eventually(t, func() bool { return len(srv.ClientMessages()) == 2 }, 2*time.Second, 5*time.Millisecond)
+	srv.AssertDone()
+}

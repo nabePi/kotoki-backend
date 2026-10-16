@@ -135,6 +135,9 @@ func matchesRule(match json.RawMessage, msg Message) bool {
 	if b, ok := m["binary"].(bool); ok && len(m) == 1 && b {
 		return !msg.Text
 	}
+	if raw, ok := rawTextMatch(m); ok {
+		return msg.Text && string(msg.Data) == raw
+	}
 	if !msg.Text {
 		return false
 	}
@@ -143,6 +146,13 @@ func matchesRule(match json.RawMessage, msg Message) bool {
 		return false
 	}
 	return len(jsonSubset("match", m, got)) == 0
+}
+
+// rawTextMatch recognises the match/expectation {"raw_text":"..."}: a text frame that is not
+// JSON (e.g. Cartesia's "finalize") and must equal the string exactly.
+func rawTextMatch(m map[string]any) (string, bool) {
+	raw, ok := m["raw_text"].(string)
+	return raw, ok && len(m) == 1
 }
 
 func writeChunk(ctx context.Context, conn *websocket.Conn, c Chunk) error {
@@ -218,6 +228,15 @@ func matchRecv(st *WSStep, msg Message) []string {
 	}
 	if !msg.Text {
 		return []string{"want text frame got binary"}
+	}
+	var want map[string]any
+	if json.Unmarshal(st.JSON, &want) == nil {
+		if raw, ok := rawTextMatch(want); ok {
+			if string(msg.Data) != raw {
+				return []string{fmt.Sprintf("raw_text: want %q got %q", raw, msg.Data)}
+			}
+			return nil
+		}
 	}
 	return matchJSONBody(st.JSON, msg.Data)
 }
