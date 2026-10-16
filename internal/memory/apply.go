@@ -94,36 +94,52 @@ func NewApplier(ids idgen.Generator, clk clock.Clock, m *Metrics) *Applier {
 	return &Applier{ids: ids, clk: clk, m: m}
 }
 
+// Outcome is what ApplyCandidate did: Action, the row it created (ActionCreated, ActionSuperseded)
+// or reinforced (ActionReinforced) in ID, and the row it retired in SupersededID
+// (ActionSuperseded). Both ids are the zero UUID where they do not apply.
+type Outcome struct {
+	Action       Action
+	Category     Category
+	ID           uuid.UUID
+	SupersededID uuid.UUID
+}
+
 // Apply stores one candidate inside tx, in the order of spec 11.6: tombstone, same slot, nearest
 // memory of the category, insert. The caller holds the user lock (ApplyAll takes it).
 func (a *Applier) Apply(ctx context.Context, tx Tx, userID uuid.UUID, c Candidate) (Action, error) {
-	act, err := a.apply(ctx, tx.Memories(), userID, c)
-	if err != nil {
-		return "", err
-	}
-	a.m.Applied(act)
-	return act, nil
+	o, err := a.ApplyOutcome(ctx, tx, userID, c)
+	return o.Action, err
 }
 
-func (a *Applier) apply(ctx context.Context, repo Repository, userID uuid.UUID, c Candidate) (Action, error) {
+// ApplyOutcome is Apply that also reports the rows it touched.
+func (a *Applier) ApplyOutcome(ctx context.Context, tx Tx, userID uuid.UUID, c Candidate) (Outcome, error) {
+	o, err := a.apply(ctx, tx.Memories(), userID, c)
+	if err != nil {
+		return Outcome{}, err
+	}
+	a.m.Applied(o.Action)
+	return o, nil
+}
+
+func (a *Applier) apply(ctx context.Context, repo Repository, userID uuid.UUID, c Candidate) (Outcome, error) {
 	if len(c.Embedding) == 0 {
-		return "", ErrNoEmbedding
+		return Outcome{}, ErrNoEmbedding
 	}
 	now := a.clk.Now().UTC()
 	expires := TTLFor(c, now)
 
 	deleted, err := repo.TombstoneActive(ctx, userID, c.Category, c.Key, now)
 	if err != nil {
-		return "", fmt.Errorf("memory: tombstone: %w", err)
+		return Outcome{}, fmt.Errorf("memory: tombstone: %w", err)
 	}
 	if deleted {
 		a.m.Rejected(ReasonUserDeletedSlot)
-		return ActionRejected, nil
+		return Outcome{Action: ActionRejected, Category: c.Category}, nil
 	}
 
 	slot, err := repo.GetActiveSlotForUpdate(ctx, userID, c.Category, c.Key)
 	if err != nil {
-		return "", fmt.Errorf("memory: slot: %w", err)
+		return Outcome{}, fmt.Errorf("memory: slot: %w", err)
 	}
 	if slot != nil {
 		sim := 0.0 // a slot without embedding counts as different
@@ -131,26 +147,42 @@ func (a *Applier) apply(ctx context.Context, repo Repository, userID uuid.UUID, 
 			sim = Cosine(c.Embedding, slot.Embedding)
 		}
 		if sim >= SimDedup {
-			return ActionReinforced, a.reinforce(ctx, repo, userID, slot.ID, c, expires, now)
+			return a.reinforced(ctx, repo, userID, slot.ID, c, expires, now)
 		}
-		return ActionSuperseded, a.supersede(ctx, repo, userID, slot.ID, c, expires, now)
+		return a.superseded(ctx, repo, userID, slot.ID, c, expires, now)
 	}
 
 	near, err := repo.FindNearestActive(ctx, userID, c.Category, c.Embedding)
 	if err != nil {
-		return "", fmt.Errorf("memory: nearest: %w", err)
+		return Outcome{}, fmt.Errorf("memory: nearest: %w", err)
 	}
 	if near != nil && near.Similarity >= SimDedup {
 		if c.Category == CategoryEpisodic {
-			return ActionSuperseded, a.supersede(ctx, repo, userID, near.ID, c, expires, now)
+			return a.superseded(ctx, repo, userID, near.ID, c, expires, now)
 		}
-		return ActionReinforced, a.reinforce(ctx, repo, userID, near.ID, c, expires, now) // the old key stays
+		return a.reinforced(ctx, repo, userID, near.ID, c, expires, now) // the old key stays
 	}
 
-	if err := repo.Insert(ctx, userID, newMemory(a.ids.New(), userID, c, expires, now)); err != nil {
-		return "", fmt.Errorf("memory: insert: %w", err)
+	id := a.ids.New()
+	if err := repo.Insert(ctx, userID, newMemory(id, userID, c, expires, now)); err != nil {
+		return Outcome{}, fmt.Errorf("memory: insert: %w", err)
 	}
-	return ActionCreated, nil
+	return Outcome{Action: ActionCreated, Category: c.Category, ID: id}, nil
+}
+
+func (a *Applier) reinforced(ctx context.Context, repo Repository, userID, id uuid.UUID, c Candidate, expires, now time.Time) (Outcome, error) {
+	if err := a.reinforce(ctx, repo, userID, id, c, expires, now); err != nil {
+		return Outcome{}, err
+	}
+	return Outcome{Action: ActionReinforced, Category: c.Category, ID: id}, nil
+}
+
+func (a *Applier) superseded(ctx context.Context, repo Repository, userID, oldID uuid.UUID, c Candidate, expires, now time.Time) (Outcome, error) {
+	newID, err := a.supersede(ctx, repo, userID, oldID, c, expires, now)
+	if err != nil {
+		return Outcome{}, err
+	}
+	return Outcome{Action: ActionSuperseded, Category: c.Category, ID: newID, SupersededID: oldID}, nil
 }
 
 func (a *Applier) reinforce(ctx context.Context, repo Repository, userID, id uuid.UUID, c Candidate, expires, now time.Time) error {
@@ -166,15 +198,15 @@ func (a *Applier) reinforce(ctx context.Context, repo Repository, userID, id uui
 
 // supersede retires old and inserts the candidate. The UPDATE goes first so the unique index of
 // the ACTIVE slot is free for the INSERT.
-func (a *Applier) supersede(ctx context.Context, repo Repository, userID, oldID uuid.UUID, c Candidate, expires, now time.Time) error {
+func (a *Applier) supersede(ctx context.Context, repo Repository, userID, oldID uuid.UUID, c Candidate, expires, now time.Time) (uuid.UUID, error) {
 	newID := a.ids.New()
 	if err := repo.Supersede(ctx, userID, oldID, newID, now.Add(SupersededTTL), now); err != nil {
-		return fmt.Errorf("memory: supersede: %w", err)
+		return uuid.Nil, fmt.Errorf("memory: supersede: %w", err)
 	}
 	if err := repo.Insert(ctx, userID, newMemory(newID, userID, c, expires, now)); err != nil {
-		return fmt.Errorf("memory: insert: %w", err)
+		return uuid.Nil, fmt.Errorf("memory: insert: %w", err)
 	}
-	return nil
+	return newID, nil
 }
 
 func newMemory(id, userID uuid.UUID, c Candidate, expires, now time.Time) Memory {
@@ -197,6 +229,19 @@ func newMemory(id, userID uuid.UUID, c Candidate, expires, now time.Time) Memory
 // PREFERENCE, LEARNING_PATTERN, EPISODIC; confidence descending within a category) under the user
 // lock, then enforces the caps. It returns the outcome per candidate in that order.
 func (a *Applier) ApplyAll(ctx context.Context, tx Tx, userID uuid.UUID, cands []Candidate) ([]Action, error) {
+	outs, err := a.ApplyAllOutcomes(ctx, tx, userID, cands)
+	if err != nil {
+		return nil, err
+	}
+	acts := make([]Action, len(outs))
+	for i, o := range outs {
+		acts[i] = o.Action
+	}
+	return acts, nil
+}
+
+// ApplyAllOutcomes is ApplyAll that also reports the rows each candidate touched.
+func (a *Applier) ApplyAllOutcomes(ctx context.Context, tx Tx, userID uuid.UUID, cands []Candidate) ([]Outcome, error) {
 	if err := tx.Memories().LockUser(ctx, userID); err != nil {
 		return nil, fmt.Errorf("memory: lock user: %w", err)
 	}
@@ -207,13 +252,13 @@ func (a *Applier) ApplyAll(ctx context.Context, tx Tx, userID uuid.UUID, cands [
 		}
 		return cmp.Compare(y.Confidence, x.Confidence)
 	})
-	out := make([]Action, 0, len(ordered))
+	out := make([]Outcome, 0, len(ordered))
 	for _, c := range ordered {
-		act, err := a.Apply(ctx, tx, userID, c)
+		o, err := a.ApplyOutcome(ctx, tx, userID, c)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, act)
+		out = append(out, o)
 	}
 	if err := a.EnforceCaps(ctx, tx, userID); err != nil {
 		return nil, err

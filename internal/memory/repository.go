@@ -120,6 +120,10 @@ type Reader interface {
 	// ordered (category, last_observed_at DESC, id), strictly after the cursor. The embedding is
 	// not loaded (Memory.Embedding is nil).
 	List(ctx context.Context, userID uuid.UUID, cat *Category, after *ListCursor, limit int, now time.Time) ([]Memory, error)
+	// ListExisting returns at most limit ACTIVE, unexpired PROFILE_FACT/PREFERENCE/LEARNING_PATTERN
+	// memories of the user as prompt lines (content sanitised), newest observation first, then id
+	// (spec 11.5.1 step 7).
+	ListExisting(ctx context.Context, userID uuid.UUID, limit int, now time.Time) ([]ExistingMemoryLine, error)
 }
 
 // Repository is the memory port; every method takes the user it acts for, and a row of another

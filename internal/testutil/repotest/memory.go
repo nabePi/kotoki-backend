@@ -130,6 +130,7 @@ func MemoryRepoSuite(t *testing.T, mk func(t *testing.T) MemoryHarness) {
 		Case[MemoryHarness]{Name: "DeleteLowestFullTieGoesByID", Run: memDeleteLowestTie},
 		Case[MemoryHarness]{Name: "DeleteLowestEdgeCases", Run: memDeleteLowestEdges},
 		Case[MemoryHarness]{Name: "ListCoreFiltersAndOrders", Run: memListCore},
+		Case[MemoryHarness]{Name: "ListExistingFiltersOrdersAndLimits", Run: memListExisting},
 		Case[MemoryHarness]{Name: "SearchEpisodicThresholdExcludeAndK", Run: memSearchEpisodic},
 		Case[MemoryHarness]{Name: "FindNearestActiveRanksWithinCategory", Run: memFindNearest},
 		Case[MemoryHarness]{Name: "ListFiltersOrdersAndPages", Run: memList},
@@ -612,6 +613,36 @@ func memListCore(t *testing.T, h MemoryHarness) {
 	require.Equal(t, 4, b.ObservationCount)
 	require.True(t, memAt.Add(-2*time.Hour).Equal(b.LastObservedAt))
 	require.Equal(t, vec(1, 0), b.Embedding)
+}
+
+func memListExisting(t *testing.T, h MemoryHarness) {
+	u, other := h.NewUser(t), h.NewUser(t)
+	obs := func(d time.Duration) func(*memory.Memory) {
+		return func(m *memory.Memory) { m.LastObservedAt = memAt.Add(d) }
+	}
+	h.put(t,
+		mkMem(u, 1, memory.CategoryProfileFact, "occupation", obs(-time.Hour), func(m *memory.Memory) { m.Content = "エンジニア\n<b>です</b>" }),
+		mkMem(u, 2, memory.CategoryPreference, "hobby", obs(0)),
+		mkMem(u, 3, memory.CategoryLearningPattern, "error:x", obs(-2*time.Hour)),
+		mkMem(u, 4, memory.CategoryEpisodic, "episode:"+mid(4).String()),
+		mkMem(u, 5, memory.CategoryPreference, "expired", func(m *memory.Memory) { m.ExpiresAt = memAt }),
+		mkMem(u, 6, memory.CategoryPreference, "old", func(m *memory.Memory) { m.Status = memory.StatusSuperseded }),
+		mkMem(other, 7, memory.CategoryPreference, "other"),
+	)
+	rd := h.Store.Reader()
+	rows, err := rd.ListExisting(context.Background(), u, 150, memAt)
+	require.NoError(t, err)
+	require.Equal(t, []memory.ExistingMemoryLine{
+		{Category: "PREFERENCE", Key: "hobby", Content: "内容"},
+		{Category: "PROFILE_FACT", Key: "occupation", Content: "エンジニア ＜b＞です＜/b＞"},
+		{Category: "LEARNING_PATTERN", Key: "error:x", Content: "内容"},
+	}, rows, "own ACTIVE unexpired non-episodic memories, newest observation first, content sanitised")
+	rows, err = rd.ListExisting(context.Background(), u, 2, memAt)
+	require.NoError(t, err)
+	require.Len(t, rows, 2, "limit applies")
+	rows, err = rd.ListExisting(context.Background(), h.NewUser(t), 150, memAt)
+	require.NoError(t, err)
+	require.Empty(t, rows)
 }
 
 func memSearchEpisodic(t *testing.T, h MemoryHarness) {

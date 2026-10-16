@@ -169,6 +169,12 @@ func (r memoryReader) List(ctx context.Context, userID uuid.UUID, cat *memory.Ca
 	return (&memoryRepo{s: r.s}).List(ctx, userID, cat, after, limit, now)
 }
 
+func (r memoryReader) ListExisting(ctx context.Context, userID uuid.UUID, limit int, now time.Time) ([]memory.ExistingMemoryLine, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	return (&memoryRepo{s: r.s}).ListExisting(ctx, userID, limit, now)
+}
+
 // memoryRepo implements memory.Repository; it runs with the store lock held.
 type memoryRepo struct{ s *MemoryStore }
 
@@ -443,6 +449,29 @@ func (r *memoryRepo) ListCore(_ context.Context, userID uuid.UUID, now time.Time
 			Importance: m.Importance, ObservationCount: m.ObservationCount, LastObservedAt: m.LastObservedAt,
 			Embedding: slices.Clone(m.Embedding),
 		})
+	}
+	return out, nil
+}
+
+func (r *memoryRepo) ListExisting(_ context.Context, userID uuid.UUID, limit int, now time.Time) ([]memory.ExistingMemoryLine, error) {
+	if err := r.s.Take("ListExisting"); err != nil {
+		return nil, err
+	}
+	var rows []memory.Memory
+	for _, m := range r.userRows(userID) {
+		if m.Status == memory.StatusActive && m.Category != memory.CategoryEpisodic && m.ExpiresAt.After(now) {
+			rows = append(rows, m)
+		}
+	}
+	slices.SortFunc(rows, func(a, b memory.Memory) int {
+		if c := b.LastObservedAt.Compare(a.LastObservedAt); c != 0 {
+			return c
+		}
+		return compareUUID(a.ID, b.ID)
+	})
+	out := make([]memory.ExistingMemoryLine, 0, max(0, min(len(rows), limit)))
+	for _, m := range rows[:max(0, min(len(rows), limit))] {
+		out = append(out, memory.NewExistingMemoryLine(m.Category, m.Key, m.Content))
 	}
 	return out, nil
 }

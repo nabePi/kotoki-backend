@@ -300,6 +300,23 @@ func (r *memoryRepo) ListCore(ctx context.Context, userID uuid.UUID, now time.Ti
 	return out, nil
 }
 
+func (r *memoryRepo) ListExisting(ctx context.Context, userID uuid.UUID, limit int, now time.Time) ([]memory.ExistingMemoryLine, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.q.ListExistingForPrompt(ctx, sqlcgen.ListExistingForPromptParams{
+		UserID: userID, Now: tsz(now), MaxRows: int32(limit), //nolint:gosec // limit is a small count
+	})
+	if err != nil {
+		return nil, internalErr(err, "list existing memories failed")
+	}
+	out := make([]memory.ExistingMemoryLine, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, memory.NewExistingMemoryLine(memory.Category(m.Category), m.MemoryKey, m.Content))
+	}
+	return out, nil
+}
+
 func (r *memoryRepo) SearchEpisodic(ctx context.Context, userID uuid.UUID, qvec []float32, minSim float64, k int, exclude *uuid.UUID, now time.Time) ([]memory.EpisodicRow, error) {
 	if k <= 0 {
 		return nil, nil
