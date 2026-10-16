@@ -192,7 +192,7 @@ func PromptFixtures() []any {
 			Formality:       content.FormalityKeigo,
 		},
 		SessionAdaptive: json.RawMessage(`{"formality":"KEIGO_LIGHT"}`),
-		RubricVersion:   "rubric-v99",
+		RubricVersion:   "rubric-v1",
 		Stats:           Stats{UserTurns: 400, UserSpeechSeconds: 3600, ActiveSeconds: 7200},
 		Transcript:      repeatRunes("[T1] USER (4.2 s, 5.0 chars/s): えっと、今日は会社に働いていました。\n", 60000),
 	})

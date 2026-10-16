@@ -568,3 +568,11 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`FindingTypesText` dibangun generik dari `specs`:** field dikelompokkan per kebutuhan (`required`, `optional`, `must be null`) dan digabung `; `; hanya STRENGTH memakai baris literal. Tiga contoh baris spec dicocokkan persis oleh tes.
 - **Fixture:** minimal memakai `Objectives`/`EvaluationFocus` nil (dikosongkan setelah `BuildPromptData`, yang selalu menambahkan `Goal`); maksimal memakai transcript 60.000 rune persis dan `KEIGO_LIGHT`. Tes tambahan `TestExampleOutputIsJSON`.
 - **Step 2 merah** dibuktikan dengan memindahkan `prompt.go` sementara (build gagal, `undefined`).
+
+## M7-T5 — Seed prompt EVALUATION, ApplySeed
+- **Seed dihasilkan dari spec dengan skrip, bukan diketik:** `system_template`/`user_template` disalin byte per byte dari blok kode §10.6.2, `output_schema` dari §10.7.1 tanpa `$schema`/`$id`, dipadatkan (`separators`) ke satu baris JSONB; `internal/evaluation/testdata/output_schema.json` adalah versi indent dari skema yang sama (`TestSchemaCopyMatchesSeed` memakai `JSONEq`). Baris `prompt_configs` 03/04 sudah ada di blok M3, tidak ditambah.
+- **Fixture maksimal memakai `RubricVersion = "rubric-v1"`** (bukan nilai lain) supaya kedua fixture bisa diverifikasi memuat `RUBRIC (rubric-v1)`; plan hanya menyebut "System berisi rubric-v1".
+- **Registrasi fixture di `m3_seed_test.go` lewat `init()`** (plan: "satu panggilan di setup test"): `RegisterFixtures` panik bila ganda dan banyak tes di paket yang sama memanggil `ValidateCatalog`; `init()` menjamin tepat sekali. Komentar konstanta `expectedPromptVersionCount` diperbarui (3 sekarang, SUMMARY menjadikan 4).
+- **`ApplySeed` memakai `testutil.ModuleRoot`** untuk lokasi `seed/` (tes M3 tetap memakai `runSeed` lokal berbasis path relatif; tidak diubah).
+- **Tes tambahan:** validasi skema negatif (skor 101, tipe finding tak dikenal ditolak) dan cek tiap field `EvaluationPromptData` muncul di user prompt hasil render seed.
+- **Step 2 merah:** seed dikembalikan ke versi lama sementara (`git stash`): `content: not found`.

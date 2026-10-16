@@ -17,14 +17,19 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/nabePi/kotoki-backend/internal/content"
+	"github.com/nabePi/kotoki-backend/internal/evaluation"
 	"github.com/nabePi/kotoki-backend/internal/postgres"
 	"github.com/nabePi/kotoki-backend/internal/prompt"
 	"github.com/nabePi/kotoki-backend/internal/testutil"
 )
 
-// expectedPromptVersionCount is the number of seeded prompt versions: CONVERSATION and OPENING.
-// M7 raises it to 3 and 4 (SUMMARY, EVALUATION) and M8 to 5 (MEMORY_EXTRACTION): one line each.
-const expectedPromptVersionCount = 2
+// expectedPromptVersionCount is the number of seeded prompt versions: CONVERSATION, OPENING and
+// EVALUATION. M7 raises it to 4 (SUMMARY) and M8 to 5 (MEMORY_EXTRACTION): one line each.
+const expectedPromptVersionCount = 3
+
+// The EVALUATION seed version is validated by ValidateCatalog, which needs its fixtures (spec
+// 6.10.1); production registers them in cmd/*/main.go.
+func init() { prompt.RegisterFixtures("EVALUATION", evaluation.PromptFixtures) }
 
 const (
 	harukaID  = "01920000-000a-7000-8000-000000000001"
