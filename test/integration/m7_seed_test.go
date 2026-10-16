@@ -21,6 +21,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/prompt"
 	"github.com/nabePi/kotoki-backend/internal/provider"
 	"github.com/nabePi/kotoki-backend/internal/provider/fake"
+	"github.com/nabePi/kotoki-backend/internal/summary"
 	"github.com/nabePi/kotoki-backend/internal/testutil"
 )
 
@@ -160,4 +161,50 @@ func TestFakeRubricFixtureMatchesSeedSchema(t *testing.T) {
 	require.Equal(t, 3, doc.Findings[0].TurnSeq)
 	require.Equal(t, 6, doc.Findings[1].TurnSeq)
 	require.Contains(t, data.Transcript, doc.Findings[0].Original)
+}
+
+func TestSummarySeedPrompt(t *testing.T) {
+	pool := testutil.NewPostgres(t)
+	testutil.ApplySeed(t, pool)
+	ctx := context.Background()
+
+	pv, err := postgres.NewContentRepo(pool).GetPublishedPromptVersion(ctx, content.PromptSummary)
+	require.NoError(t, err)
+	require.Equal(t, 1, pv.Version)
+	require.Equal(t, content.PromptSummary, pv.Key)
+	require.Equal(t, "01920000-000d-7000-8000-000000000003", pv.ID.String())
+	require.Equal(t, content.VersionPublished, pv.Status)
+	require.NotNil(t, pv.UserTemplate)
+	require.Empty(t, pv.OutputSchema)
+	require.NotNil(t, pv.LLMParams.Temperature)
+	require.InDelta(t, 0.3, *pv.LLMParams.Temperature, 1e-9)
+	require.NotNil(t, pv.LLMParams.MaxOutputTokens)
+	require.Equal(t, 400, *pv.LLMParams.MaxOutputTokens)
+	require.Nil(t, pv.LLMParams.TopP)
+	require.Nil(t, pv.LLMParams.Seed)
+
+	fixtures := summary.PromptFixtures()
+	require.Len(t, fixtures, 2)
+	for i, fx := range fixtures {
+		out, err := prompt.Render(pv.Template(), fx)
+		require.NoError(t, err, "fixture %d", i)
+		data := fx.(summary.SummaryPromptData)
+		require.Contains(t, out.System, "300文字以内", "fixture %d", i)
+		require.NotContains(t, out.System, "{{")
+		require.Contains(t, out.User, "話題: "+data.TopicName+"\n場面: "+data.ScenarioName+"\n")
+		require.Contains(t, out.User, "ユーザーの発話数: "+strconv.Itoa(data.UserTurnCount)+"\n")
+		require.True(t, strings.HasSuffix(out.User, "</transcript>"), "fixture %d", i)
+		require.Contains(t, out.User, "<transcript>\n"+data.Transcript+"\n</transcript>", "fixture %d", i)
+	}
+	custom := fixtures[0].(summary.SummaryPromptData)
+	custom.MaxChars = 120
+	out, err := prompt.Render(pv.Template(), custom)
+	require.NoError(t, err)
+	require.Contains(t, out.System, "120文字以内")
+
+	errs, _ := errorsAndWarnings(validatorFor(pool, false).ValidateCatalog(ctx))
+	require.Empty(t, errs)
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM prompt_versions pv JOIN prompt_configs pc ON pc.id = pv.prompt_config_id WHERE pc.key = 'SUMMARY'`).Scan(&n))
+	require.Equal(t, 1, n)
 }
