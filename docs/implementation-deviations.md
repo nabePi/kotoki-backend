@@ -806,3 +806,13 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`provider`/`model` di `memory.extracted` di-uppercase keduanya** (literal plan); evaluasi M7 menyimpan apa adanya.
 - **Postgres:** `NewMemoryProfileSettings` memakai `learnerRepo.Ensure` + `Get` (profil + skill state seperti §12.3); `Session` memakai ulang query `GetSessionForSummary`; turn lewat query baru `ListTurnsForMemory` (file `memory_source.sql`, bukan `memories.sql`, sehingga tes statis tabel `memories` tidak berubah). Prompt lewat `content` repo (`pv.Template()`).
 - **`Source.Session` tanpa `EndedAt` memakai `Envelope.OccurredAt`** untuk tanggal sesi di prompt.
+
+## M8-T16 — RetrievalService + memctx/memver
+- **`memory.MemoryContext` mendapat field `UserID` (`json:"user_id"`)**: `ReloadCoreIfChanged(ctx, mc)` tidak menerima user dan runtime di pod pengambil-alih (D-084) hanya memegang `memctx` dari Redis; tanpa pemilik, reload tidak mungkin. Field aditif; tes karakterisasi kunci JSON M5 (`TestMemoryContextJSONKeys`) diubah ke 9 kunci. Bila `UserID` kosong, pemilik diambil dari state in-memory sesi; bila tidak ada pula, reload = no-op.
+- **`ContextCache.SetContext` dengan `ttl <= 0` = pertahankan TTL dan hanya tulis key yang ada** (`SET XX KEEPTTL`), memenuhi "TTL dipertahankan" §11.7.5 tanpa menambah metode antarmuka dan tanpa menghidupkan lagi memctx yang kedaluwarsa. `ReloadCoreIfChanged` juga menulis memctx (best-effort) agar pod pengambil-alih tidak membaca core lama; spec tidak mewajibkan.
+- **Episodik yang tidak lagi ACTIVE dideteksi lewat `Reader.List` (kategori EPISODIC, limit 200 = cap ACTIVE episodik)**, tidak ada query by-id di port. Hanya dipanggil bila `mc.Episodic` tidak kosong.
+- **Greedy core melewati item yang tak muat dan lanjut ke item lebih kecil**; episodik memotong ke prefiks terpanjang yang muat (urutan similarity dipertahankan). Spec hanya menyebut "greedy"/"trim".
+- **`Core[].Content` = isi tersanitasi tanpa prefiks `（学習の傾向）`/tanggal** (`RenderItem` menambahkannya untuk menghitung `Tokens`; `conversation` context builder menambah prefiks sendiri dan tidak menggandakannya); urutan `Core` = prioritas, bukan per kategori (pengelompokan adalah tugas builder).
+- **`MemoryContext.SessionID` dan `UserID` diisi juga pada hasil kosong (memory off)** supaya runtime tetap punya identitas; semua kolom lain nol.
+- **Tes integrasi retrieval di `test/integration/m8_memory_retrieval_test.go`** (depguard, pola M8-T8); tes `memctx` Redis di `internal/redisstore/memctx_integration_test.go` sesuai plan.
+- **`memver` yang gagal dibaca di `BuildSessionContext` = `Degraded` dengan versi 0** (konteks tetap dibangun); di `ReloadCoreIfChanged` dikembalikan sebagai error (runtime M5 mencatatnya dan tidak mengganti konteks).

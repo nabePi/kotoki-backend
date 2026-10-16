@@ -15,10 +15,10 @@ func TestMemoryContextJSONKeys(t *testing.T) {
 	require.NoError(t, err)
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(b, &m))
-	for _, k := range []string{"session_id", "user_mem_ver", "core", "core_tokens", "episodic", "episodic_tokens", "built_at", "degraded"} {
+	for _, k := range []string{"session_id", "user_id", "user_mem_ver", "core", "core_tokens", "episodic", "episodic_tokens", "built_at", "degraded"} {
 		require.Contains(t, m, k)
 	}
-	require.Len(t, m, 8)
+	require.Len(t, m, 9) // spec 11.7.1 keys plus user_id (M8-T16: reload after takeover needs the owner)
 }
 
 func TestContextItemJSONKeys(t *testing.T) {

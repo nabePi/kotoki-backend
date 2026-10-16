@@ -23,6 +23,9 @@ import (
 // *memory.Consumer must satisfy amqp.Handler structurally (memory never imports amqp).
 var _ amqp.Handler = (*memory.Consumer)(nil)
 
+// *memory.Retriever must satisfy memory.RetrievalService (the port of the realtime runtime).
+var _ memory.RetrievalService = (*memory.Retriever)(nil)
+
 // TestMemoryConsumerClassification drives the real Consumer and feeds each outcome to
 // amqp.Classify, the way the AMQP consumer does after Handle (spec 9.7.3).
 func TestMemoryConsumerClassification(t *testing.T) {
