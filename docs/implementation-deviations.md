@@ -406,3 +406,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`IsOpen` benar bila koneksi sehat dan channel (bila ada) belum mati**; channel dibuat malas pada `Send` pertama, jadi publisher baru sudah `IsOpen` sebelum publish pertama.
 - **Backoff memakai jitter setelah batas 30 s** (sesuai rumus plan `min(2^n,30)s × (1+jitter)`), jadi penundaan nominal maks 30 s dan nyata hingga 36 s. `attempt` dijepit ke 6 agar `1<<attempt` tak overflow.
 - **Tes nack memakai queue classic `x-max-length=1`+`reject-publish`**: batas panjang quorum queue tidak tepat sehingga tidak andal memicu nack. Tes timeout confirm adalah unit test internal (`DeferredConfirmation` nol-nilai yang tak pernah selesai) karena broker nyata sulit dibuat bungkam.
+
+## M6-T6 — Outbox publisher: pembentukan message & trace propagation
+- **`TestCarrier_GetSetKeys` ada di `carrier_internal_test.go` (package `amqp`)**, bukan `outbox_message_test.go`, karena `amqpHeaderCarrier` tidak diekspor (plan/spec §9.7.5) dan tes eksternal tidak bisa mengaksesnya.
+- **Span dimulai dengan tracer `otel.GetTracerProvider()` langsung (bukan `platform/otel.Start`)** karena `Start` tidak menerima `SpanKindProducer`; paket `amqp` adalah adapter (seperti `postgres/outbox_writer.go`). Tak ada atribut span yang berisi data sensitif.
+- **Payload di body envelope dipadatkan (compact) oleh `json.Marshal`**; jsonb Postgres mengembalikan teks ber-spasi (`{"a": 1}`), jadi "byte-identik" berlaku untuk payload yang sudah compact. Isi semantik sama.
