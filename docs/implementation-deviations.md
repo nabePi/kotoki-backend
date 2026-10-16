@@ -859,3 +859,9 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 ## M8-T21 — Gerbang integrasi
 - Plan: "`memory_enabled=false`... `Retriever` + `ReloadCoreIfChanged` setelah DELETE". `memory_enabled=false` tidak mengubah `memver` dan `ReloadCoreIfChanged` tidak membaca saklar; spec §11.9 dan §5.9.7 menyatakan preferensi berlaku untuk sesi yang dibuat setelahnya, jadi tes memeriksa sesi baru (kosong) dan ekstraksi yang dilewati, bukan sesi yang sedang berjalan. Hapus memory diuji pada sesi berjalan lewat `ReloadCoreIfChanged`.
 - `POST /sessions` pada tes provider-embedding-mati memakai tumpukan `newLifecycle` terpisah (embedding tidak pernah dipanggil di jalur itu); tes membuktikan tidak ada ketergantungan, bukan injeksi kegagalan ke dalamnya.
+
+## M8-T22 — E2E dua sesi
+- Tag build `//go:build e2e` (konvensi seluruh `test/e2e` di repo), bukan `e2e && m5` seperti tertulis di plan; `main_test.go` tidak diubah: worker tetap dijalankan per tes lewat `env.startWorkerWith` (bukan proses kedua di TestMain) agar tidak ada sweeper hidup sepanjang suite.
+- `adaptive_difficulty` dibaca dari kolom `sessions.adaptive_difficulty` lewat pool e2e, bukan `GET /admin/sessions/{id}` (butuh admin; kolom itulah yang dibaca endpoint). User onboarding N5, bukan N4: dengan satu evaluasi (c_obs kecil) level N4 hanya bergerak 2,0 -> 2,13 dan `Stretch` membulatkan ke nilai yang sama, jadi dokumen sesi 2 tidak akan berbeda; prior N5 (1,0) melewati batas pembulatan.
+- Plan: "fixture fake deterministik, perpanjang fixture ucapan bila turn < 4". Selain itu perlu (a) ucapan panjang agar evaluasi punya bukti cukup, (b) rubrik skor tetap dan episode memory yang cocok dengan teks query skenario lewat `FAKE_EVAL_FIXTURE_DIR`; fixture bawaan tidak diubah (dipakai tes integrasi).
+- `TestE2E_PipelineWithin30s` menjalankan satu sesi sendiri (sekitar 70 s) alih-alih berbagi dengan tes pertama, karena tiap tes memiliki worker dan broker sendiri.
