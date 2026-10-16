@@ -33,6 +33,9 @@ func NewRouter(d Deps) http.Handler {
 		registerBalanceRoutes(user, &balanceHandler{svc: d.Balance, limiter: d.Limiter, log: d.Log})
 		registerContentRoutes(user, &contentHandler{svc: d.Content, limiter: d.Limiter, log: d.Log})
 		registerSessionRoutes(user, &sessionHandler{svc: d.Session, query: d.SessionQuery, tickets: d.Tickets, clk: d.Clock, limiter: d.Limiter, log: d.Log})
+		if d.Evaluation != nil {
+			registerEvaluationRoutes(user, &evaluationHandler{sessions: d.SessionQuery, query: d.Evaluation, limiter: d.Limiter, log: d.Log})
+		}
 		adminGroup := user.With(
 			RateLimit(d.Limiter, ratelimit.Get("admin_user"), UserSubject, d.Log),
 			RequireAdmin(d.AdminGate, d.Log))

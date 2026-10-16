@@ -13,6 +13,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/content"
+	"github.com/nabePi/kotoki-backend/internal/evaluation"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 	"github.com/nabePi/kotoki-backend/internal/platform/metrics"
 	"github.com/nabePi/kotoki-backend/internal/platform/ratelimit"
@@ -106,6 +107,17 @@ type sessionQueryService interface {
 	Turns(ctx context.Context, userID, id uuid.UUID, afterSeq *int, limit int) ([]session.TurnRecord, error)
 }
 
+// evaluationSessionGetter is the owner-scoped session read of the evaluation endpoint (a session of
+// another user does not exist for the caller); *session.QueryService satisfies it.
+type evaluationSessionGetter interface {
+	Get(ctx context.Context, userID, id uuid.UUID) (session.View, error)
+}
+
+// evaluationQuery is the evaluation read side; *evaluation.QueryService satisfies it.
+type evaluationQuery interface {
+	Get(ctx context.Context, ref evaluation.SessionRef) (evaluation.View, error)
+}
+
 // adminSessionService is the admin read side of sessions; *session.AdminQueryService satisfies it.
 type adminSessionService interface {
 	ListByUser(ctx context.Context, userID uuid.UUID, statuses []session.Status, after *uuid.UUID, limit int) ([]session.AdminView, error)
@@ -144,6 +156,9 @@ type Deps struct {
 	Session      sessionService
 	SessionQuery sessionQueryService
 	Tickets      ticketService
+
+	// Evaluation serves GET /sessions/{id}/evaluation; the route is registered only when it is set.
+	Evaluation evaluationQuery
 
 	AdminSessions adminSessionService
 	AdminAudit    transcriptAuditor
