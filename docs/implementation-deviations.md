@@ -557,3 +557,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`ComputeOverall` merata-ratakan dimensi yang berskor saja** (kasus plan `1,1,2` → 1.33 mensyaratkan ini; nil hanya bila tidak ada skor).
 - **Tes memakai literal `Stats` berkunci** (plan: posisional) agar lolos `govet composites`.
 - **Step 2 merah dibuktikan dengan memindahkan file implementasi sementara** (kode ditulis sebelum tes; tes lalu dijalankan tanpa implementasi: build gagal, `undefined`), kemudian dikembalikan.
+
+## M7-T3 — transcript, statistik, kelayakan turn
+- **Aturan transcript yang dipilih implementer (spec/plan diam):** turn tanpa timestamp (atau durasi negatif) dirender `(0.0 s, 0.0 chars/s)` karena `chars/s` tidak terdefinisi; durasi negatif di statistik dihitung 0; `chars/s` memakai rune non-spasi dari `user_text` apa adanya. Baris AI dihilangkan bila teksnya kosong setelah trim (kecuali `FAILED` → `(no reply: system error)`); fallback ke `assistant_text` hanya bila `assistant_spoken_text` NULL (string kosong tetap dianggap "tidak ada yang terdengar"). Penanda `interrupted the AI` mengikuti turn dirender sebelumnya yang `INTERRUPTED` (aturan teks §10.6.2, bukan contoh spec).
+- **Newline di teks turn diganti spasi** (`oneLine`) supaya satu turn tidak bisa memalsukan baris `[Tn] ...` lain (injeksi prompt lewat ucapan STT); tidak ada di plan.
+- **Pemotongan:** `maxChars` dihitung dalam rune; `…` hanya ditambahkan bila baris AI benar-benar dipotong; penanda `[earlier turns omitted]` hanya muncul bila ada turn yang dibuang (transcript <= 120 turn tetap utuh walau masih > `maxChars`); 120 turn terakhir tetap memakai baris AI yang sudah dipotong. `maxChars <= 0` = tanpa batas.
