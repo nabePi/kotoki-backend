@@ -111,11 +111,14 @@ func run(ctx context.Context, args []string, out, errw io.Writer, getenv func(st
 
 func (a *app) exitCode(err error) int {
 	var u *errUsage
+	var ex errExit
 	switch {
 	case err == nil, errors.Is(err, flag.ErrHelp):
 		return 0
 	case errors.Is(err, errPrinted):
 		return 2
+	case errors.As(err, &ex):
+		return int(ex)
 	case errors.As(err, &u):
 		_, _ = fmt.Fprintf(a.errw, "kotoki-cli: %s\n", u.msg)
 		return 2
@@ -158,6 +161,8 @@ func (a *app) dispatch(ctx context.Context, rest []string) error {
 		return a.cmdConverse(ctx, args)
 	case "evaluation":
 		return a.cmdEvaluation(ctx, args)
+	case "eval-golden":
+		return a.cmdEvalGolden(ctx, args)
 	default:
 		a.usage()
 		return usagef("unknown subcommand %q", cmd)
@@ -178,6 +183,8 @@ subcommands:
   ticket      --session   print a realtime ticket (debug)
   converse    (alias chat) play --wav files into a realtime session
   evaluation  get --session [--wait]
+  eval-golden --dataset [--runs 3] [--out report.json] [--baseline] [--export-findings] [--ratings]
+              calibrate the evaluation rubric on a golden set (DATABASE_URL, PROVIDER_MODE)
 
 global flags (also from the environment):
   --api-url   REST base URL            (KOTOKI_CLI_API_URL, default `+defaultAPIURL+`)

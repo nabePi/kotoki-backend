@@ -1,0 +1,11 @@
+{
+  "rubric_version": "rubric-v1",
+  "status": "EXAMPLE",
+  "expected": {
+    "samples": 80,
+    "per_level": 20,
+    "insufficient": 8,
+    "min_scenario_kinds": 4
+  },
+  "note": "Synthetic example set (9 hand-written samples; gold scores are illustrative, not rater labels). The real set is 80 + 8 samples labelled by two native raters (spec 10.12); set status to COMPLETE only then."
+}
