@@ -384,3 +384,43 @@ func TestSweeperLosingToTheOwnerIsANoop(t *testing.T) {
 	require.Zero(t, rep.Rule["a"].Error, "an already finished session is not a candidate any more")
 	require.Equal(t, 1, s.store.Outbox.Len())
 }
+
+func TestSweepReport_HeartbeatFlags(t *testing.T) {
+	s := newSweepEnv(t, 1800)
+	s.clk.Set(tenAM)
+	var ids []uuid.UUID
+	for i := 0; i < 40; i++ {
+		sess, _, _ := s.activeFor(t, 300)
+		ids = append(ids, sess.ID)
+	}
+	for _, id := range ids[:10] {
+		s.hb.Beat(id, at(10, 0, 55, 0))
+	}
+	rep := s.tick(t, at(10, 0, 50, 0))
+	require.True(t, rep.HeartbeatSuspended, "the guard has only just seen Redis")
+	require.False(t, rep.MassHeartbeatLoss)
+
+	rep = s.tick(t, at(10, 1, 40, 0))
+	require.True(t, rep.MassHeartbeatLoss)
+	require.False(t, rep.HeartbeatSuspended)
+	require.Equal(t, 30, rep.HeartbeatCandidates)
+	require.Equal(t, 40, rep.ActiveNonHandoff)
+
+	// Redis going away suspends (b) and clears the mass-loss flag of the previous tick
+	s.hb.SetDown(true)
+	rep = s.tick(t, at(10, 1, 50, 0))
+	require.True(t, rep.HeartbeatSuspended)
+	require.False(t, rep.MassHeartbeatLoss)
+}
+
+func TestSweepReport_HealthyTickHasNoFlags(t *testing.T) {
+	s := newSweepEnv(t, 1800)
+	sess, _ := s.active(t, 900)
+	s.hb.Beat(sess.ID, at(10, 1, 30, 0))
+	_ = s.tick(t, at(10, 0, 50, 0))
+	rep := s.tick(t, at(10, 1, 40, 0))
+	require.False(t, rep.HeartbeatSuspended)
+	require.False(t, rep.MassHeartbeatLoss)
+	require.Zero(t, rep.HeartbeatCandidates)
+	require.Equal(t, 1, rep.ActiveNonHandoff)
+}

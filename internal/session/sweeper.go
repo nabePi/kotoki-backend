@@ -31,8 +31,18 @@ type RuleResult struct {
 }
 
 // SweepReport is what one Tick did, per rule ("e", "a", "b", "c", "d").
+//
+// The heartbeat fields are what the M6 job turns into gauges and alerts: HeartbeatSuspended is
+// true when rule (b) was kept off by the Redis guard (Redis unreachable, or not yet healthy for
+// 45 s), MassHeartbeatLoss when (b) was skipped because most ACTIVE sessions looked dead at once.
+// HeartbeatCandidates and ActiveNonHandoff are the numerator and denominator of that ratio and are
+// set whenever (b) got as far as reading heartbeats.
 type SweepReport struct {
-	Rule map[string]RuleResult
+	Rule                map[string]RuleResult
+	HeartbeatSuspended  bool
+	MassHeartbeatLoss   bool
+	HeartbeatCandidates int
+	ActiveNonHandoff    int
 }
 
 // Sweeper closes sessions whose owner is gone or whose timers ran out (spec 5.6.4). Every session
@@ -63,11 +73,11 @@ func (w *Sweeper) Tick(ctx context.Context) (SweepReport, error) {
 	now := w.clk.Now()
 	for _, rule := range []struct {
 		name string
-		run  func(context.Context, time.Time) (RuleResult, error)
+		run  func(context.Context, time.Time, *SweepReport) (RuleResult, error)
 	}{
 		{"e", w.ruleHandoff}, {"a", w.ruleExpired}, {"b", w.ruleHeartbeat}, {"c", w.ruleEnding}, {"d", w.ruleStarting},
 	} {
-		res, err := rule.run(ctx, now)
+		res, err := rule.run(ctx, now, &rep)
 		rep.Rule[rule.name] = res
 		if err != nil {
 			w.log.ErrorContext(ctx, "sweeper rule failed", "rule", rule.name, "error", err.Error())
@@ -94,7 +104,7 @@ func (w *Sweeper) settle(ctx context.Context, rule string, id uuid.UUID, res *Ru
 }
 
 // ruleHandoff (e): the runtime handed the session off and nobody resumed it for 30 s.
-func (w *Sweeper) ruleHandoff(ctx context.Context, now time.Time) (RuleResult, error) {
+func (w *Sweeper) ruleHandoff(ctx context.Context, now time.Time, _ *SweepReport) (RuleResult, error) {
 	var res RuleResult
 	cutoff := now.Add(-handoffStaleAfter)
 	ids, err := w.repo.ListHandoffStale(ctx, cutoff, sweepBatch)
@@ -116,7 +126,7 @@ func (w *Sweeper) ruleHandoff(ctx context.Context, now time.Time) (RuleResult, e
 }
 
 // ruleExpired (a): ACTIVE well past expires_at, so the owner's timer did not fire.
-func (w *Sweeper) ruleExpired(ctx context.Context, now time.Time) (RuleResult, error) {
+func (w *Sweeper) ruleExpired(ctx context.Context, now time.Time, _ *SweepReport) (RuleResult, error) {
 	var res RuleResult
 	ids, err := w.repo.ListExpired(ctx, now.Add(-expiryGrace), sweepBatch)
 	if err != nil {
@@ -133,7 +143,7 @@ func (w *Sweeper) ruleExpired(ctx context.Context, now time.Time) (RuleResult, e
 }
 
 // ruleEnding (c): ENDING for over a minute, the runtime never finalized.
-func (w *Sweeper) ruleEnding(ctx context.Context, now time.Time) (RuleResult, error) {
+func (w *Sweeper) ruleEnding(ctx context.Context, now time.Time, _ *SweepReport) (RuleResult, error) {
 	var res RuleResult
 	ids, err := w.repo.ListStuckEnding(ctx, now.Add(-endingStuckAfter), sweepBatch)
 	if err != nil {
@@ -147,7 +157,7 @@ func (w *Sweeper) ruleEnding(ctx context.Context, now time.Time) (RuleResult, er
 }
 
 // ruleStarting (d): STARTING for over 30 s.
-func (w *Sweeper) ruleStarting(ctx context.Context, now time.Time) (RuleResult, error) {
+func (w *Sweeper) ruleStarting(ctx context.Context, now time.Time, _ *SweepReport) (RuleResult, error) {
 	var res RuleResult
 	ids, err := w.repo.ListStuckStarting(ctx, now.Add(-startingStuckAfter), sweepBatch)
 	if err != nil {
@@ -163,11 +173,12 @@ func (w *Sweeper) ruleStarting(ctx context.Context, now time.Time) (RuleResult, 
 // ruleHeartbeat (b): the owner's heartbeat is gone. It is the only rule that trusts Redis, so it has
 // two safeguards (spec 9.9.2): the HeartbeatGuard, and a skip when most ACTIVE sessions look dead at
 // once, which points at a Redis flush or failover rather than at crashed pods.
-func (w *Sweeper) ruleHeartbeat(ctx context.Context, now time.Time) (RuleResult, error) {
+func (w *Sweeper) ruleHeartbeat(ctx context.Context, now time.Time, rep *SweepReport) (RuleResult, error) {
 	var res RuleResult
 	_, probe := w.hb.Read(ctx, nil)
 	w.guard.Observe(probe == nil, now)
 	if !w.guard.Enabled(now) {
+		rep.HeartbeatSuspended = true
 		res.Skipped = true
 		return res, nil
 	}
@@ -185,6 +196,7 @@ func (w *Sweeper) ruleHeartbeat(ctx context.Context, now time.Time) (RuleResult,
 		got, err := w.hb.Read(ctx, ids)
 		if err != nil {
 			w.guard.Observe(false, now)
+			rep.HeartbeatSuspended = true
 			res.Skipped = true
 			return res, nil
 		}
@@ -215,7 +227,9 @@ func (w *Sweeper) ruleHeartbeat(ctx context.Context, now time.Time) (RuleResult,
 		}
 		cands = append(cands, candidate{a, last})
 	}
+	rep.HeartbeatCandidates, rep.ActiveNonHandoff = len(cands), len(active)
 	if len(cands) >= massLossMinCandidates && len(cands)*2 >= len(active) {
+		rep.MassHeartbeatLoss = true
 		w.log.ErrorContext(ctx, "sweeper.mass_heartbeat_loss", "candidates", len(cands), "active", len(active))
 		res.Skipped = true
 		return res, nil

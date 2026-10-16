@@ -40,11 +40,17 @@ func (e *sessEnv) countFor(t *testing.T, query string, id uuid.UUID) int {
 
 // TestFinalizeRuntimeVsSweeperRace: the runtime and the sweeper both finish the same ENDING session.
 // One of them settles, the other finds it done; minutes and the outbox are written exactly once.
+//
+// The clock is fake and moves 30 s between Activate and BeginEnding: on the system clock that gap is
+// under a millisecond, ComputeCharge then returns 0 and no CONSUME row is written at all, which
+// is correct behaviour but makes the exactly-once assertion on CONSUME fail.
 func TestFinalizeRuntimeVsSweeperRace(t *testing.T) {
-	e := newSessEnv(t, 3600, nil)
+	clk := clock.NewFake(time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC))
+	e := newSessEnvClock(t, 3600, clk, nil)
 	ctx := context.Background()
 	for i := range 100 {
 		s, fence := e.activate(t, "fin-race-"+uuid.NewString()[:8], 300)
+		clk.Advance(30 * time.Second)
 		_, err := e.svc.BeginEnding(ctx, s.ID, &fence, session.EndUserEnded, "", session.ActorRealtime)
 		require.NoError(t, err)
 
