@@ -76,9 +76,10 @@ UPDATE session_turns t
        used_fallback = $9,
        turn_end_to_first_audio_ms = $10, llm_first_token_ms = $11,
        tts_first_audio_ms = $12, input_tokens = $13, output_tokens = $14,
-       tts_characters = $15, error_code = $16, completed_at = $17
- WHERE t.id = $18 AND t.created_at = $19 AND t.status IS NULL
-   AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = t.session_id AND s.runtime_fence = $20
+       tts_characters = $15, error_code = $16, completed_at = $17,
+       generation = COALESCE($18::int, t.generation)
+ WHERE t.id = $19 AND t.created_at = $20 AND t.status IS NULL
+   AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = t.session_id AND s.runtime_fence = $21
                 AND s.status IN ('STARTING', 'ACTIVE', 'ENDING'))
 `
 
@@ -100,6 +101,7 @@ type FinalizeTurnFencedParams struct {
 	TtsCharacters         pgtype.Int4
 	ErrorCode             pgtype.Text
 	CompletedAt           pgtype.Timestamptz
+	Generation            pgtype.Int4
 	ID                    uuid.UUID
 	CreatedAt             pgtype.Timestamptz
 	Fence                 int64
@@ -124,6 +126,7 @@ func (q *Queries) FinalizeTurnFenced(ctx context.Context, arg FinalizeTurnFenced
 		arg.TtsCharacters,
 		arg.ErrorCode,
 		arg.CompletedAt,
+		arg.Generation,
 		arg.ID,
 		arg.CreatedAt,
 		arg.Fence,

@@ -312,6 +312,10 @@ type TurnFinal struct {
 	TTSCharacters         *int
 	ErrorCode             *string
 	CompletedAt           time.Time
+	// Generation is the highest generation number the runtime had issued when the turn ended. A
+	// takeover continues above it when Redis cannot say (spec 7.9.4: max(generation)+1). Nil leaves
+	// the column as the INSERT wrote it.
+	Generation *int
 }
 
 // TurnRecord is a turn as the runtime and REST read it back.

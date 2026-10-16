@@ -182,3 +182,31 @@ func TestServeShutsDown(t *testing.T) {
 		t.Fatal("timeout")
 	}
 }
+
+// A connection that never sent a request (an HTTP client's spare dial) keeps http.Server.Shutdown
+// waiting; Serve closes it after ShutdownTimeout and still reports a clean stop.
+func TestServeClosesAConnectionThatNeverSentARequest(t *testing.T) {
+	o := newOps(health.OpsOptions{ShutdownTimeout: 100 * time.Millisecond})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- o.Serve(ctx, ln) }()
+	idle, err := (&net.Dialer{}).DialContext(ctx, "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = idle.Close() }()
+	time.Sleep(50 * time.Millisecond) // let the server accept it
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout")
+	}
+}

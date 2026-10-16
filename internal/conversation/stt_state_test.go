@@ -238,3 +238,33 @@ func TestResumeTurnIgnoresOtherTurnsAndDiscards(t *testing.T) {
 	require.Equal(t, cur, r.Commit)
 	require.Equal(t, FinalTurnEndSuperseded, r.Outcome)
 }
+
+func TestMarkTurnFromKeepsTheWordsSinceTheOnset(t *testing.T) {
+	// A barge-in turn starts at the onset of the user's voice (§7.6.5): the echo of the AI before it
+	// is not turn text, the final segments since it are (MarkTurn would keep only the running
+	// partial).
+	clk := &sttClock{ms: 1000}
+	s := newSTTState(clk.now)
+	s.OnFinal(final("エコー。")) // the AI's own voice, heard at 1000 ms
+	clk.ms = 2000
+	s.OnFinal(final("ちょっと")) // the user, after the onset at 1900 ms
+	clk.ms = 2200
+	s.OnPartial(partial("待って"))
+	s.MarkTurnFrom(1900)
+	require.Equal(t, "ちょっと待って", s.TurnText())
+	require.Equal(t, int64(1900), s.TurnOnsetMs())
+
+	// Nothing since the onset: an empty turn text (the segments before it stay behind).
+	s2 := newSTTState(clk.now)
+	s2.OnFinal(final("エコー。"))
+	s2.MarkTurnFrom(clk.ms + 100)
+	require.Empty(t, s2.TurnText())
+
+	// What an answered commit already closed is never part of it, whatever its time.
+	s3 := newSTTState(clk.now)
+	s3.Commit(CommitDiscard)
+	s3.OnFinal(commitFinal("前の文。"))
+	s3.OnPartial(partial("あす"))
+	s3.MarkTurnFrom(0)
+	require.Equal(t, "あす", s3.TurnText())
+}

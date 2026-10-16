@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nabePi/kotoki-backend/internal/conversation/protocol"
+	"github.com/nabePi/kotoki-backend/internal/platform/clock"
 )
 
 // ErrWriteTimeout means one message was not written within WS_WRITE_TIMEOUT (§7.12.3): the
@@ -57,11 +58,15 @@ type Writer struct {
 	// WithTimeout derives the per-write context; context.WithTimeout by default.
 	WithTimeout TimeoutFunc
 
+	// Now is the clock that stamps lastAudio (the system clock by default).
+	Now func() time.Time
+
 	m *Metrics
-	// mu guards the sentence counter of the generation being played (sentGen, sentN).
-	mu      sync.Mutex
-	sentGen uint32
-	sentN   int
+	// mu guards the sentence counter of the generation being played (sentGen, sentN) and lastAudio.
+	mu        sync.Mutex
+	sentGen   uint32
+	sentN     int
+	lastAudio time.Time
 }
 
 // NewWriter creates a writer; timeout <= 0 means 5 s.
@@ -69,7 +74,7 @@ func NewWriter(timeout time.Duration, m *Metrics) *Writer {
 	if timeout <= 0 {
 		timeout = defaultWriteTimeout
 	}
-	return &Writer{Timeout: timeout, WithTimeout: context.WithTimeout, m: m}
+	return &Writer{Timeout: timeout, WithTimeout: context.WithTimeout, Now: clock.System{}.Now, m: m}
 }
 
 // SentencesWritten returns how many sentences of gen had their last frame written
@@ -81,6 +86,14 @@ func (w *Writer) SentencesWritten(gen uint32) int {
 		return 0
 	}
 	return w.sentN
+}
+
+// LastAudioWrite is when the last audio frame was written to the socket (zero before the first):
+// the end of the barge-in stop time (D-101, bargein_stop_seconds).
+func (w *Writer) LastAudioWrite() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lastAudio
 }
 
 func (w *Writer) bumpSentences(gen uint32) int {
@@ -130,6 +143,9 @@ func (w *Writer) handle(ctx context.Context, conn Conn, it OutItem, activeGen *a
 		return err
 	}
 	w.m.audioOut("written", 1)
+	w.mu.Lock()
+	w.lastAudio = w.Now()
+	w.mu.Unlock()
 	if f.LastOfSentence {
 		n := w.bumpSentences(f.Gen)
 		return w.ack(ctx, acks, WriterAck{Kind: AckSentenceWritten, Gen: f.Gen, SentenceIdx: f.SentenceIdx, Sentences: n})

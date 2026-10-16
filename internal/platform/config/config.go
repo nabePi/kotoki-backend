@@ -77,6 +77,9 @@ type Realtime struct {
 	ReadyMaxSessions   int      `env:"REALTIME_READY_MAX_SESSIONS"`
 	MaxSessions        int      `env:"REALTIME_MAX_SESSIONS"`
 	HardMaxSessions    int      `env:"REALTIME_HARD_MAX_SESSIONS"`
+	// TrustedProxyCIDRs is TRUSTED_PROXY_CIDRS (spec 13.2.2): the proxies whose X-Forwarded-For
+	// the ws_connect_ip subject honours. Empty → RemoteAddr.
+	TrustedProxyCIDRs []string `env:"TRUSTED_PROXY_CIDRS" envSeparator:","`
 	RealtimeTuning
 }
 

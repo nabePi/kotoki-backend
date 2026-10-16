@@ -41,6 +41,7 @@ func NewRedis(t testing.TB) *redis.Client {
 	if err != nil {
 		t.Fatalf("testutil: redis url: %v", err)
 	}
+	opt.ContextTimeoutEnabled = true // as redisstore.NewClient: context deadlines bound the socket
 	cl := redis.NewClient(opt)
 	if err := cl.FlushAll(context.Background()).Err(); err != nil {
 		t.Fatalf("testutil: flushall: %v", err)

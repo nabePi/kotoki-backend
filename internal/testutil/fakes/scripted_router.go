@@ -63,6 +63,14 @@ var _ provider.RealtimeRouter = (*ScriptedRouter)(nil)
 // NewScriptedRouter returns a router playing s.
 func NewScriptedRouter(s Script) *ScriptedRouter { return &ScriptedRouter{script: s} }
 
+// SetScript changes the script of the generations created from now on (a generation plays the
+// script it was created with), so a test can fail one turn and let the next one succeed.
+func (r *ScriptedRouter) SetScript(s Script) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.script = s
+}
+
 // SetOnMarkAudioSent installs a hook called (outside any lock) from every MarkAudioSent.
 func (r *ScriptedRouter) SetOnMarkAudioSent(f func()) {
 	r.mu.Lock()
@@ -82,8 +90,8 @@ func (r *ScriptedRouter) CompleteText(context.Context, provider.TextRequest) (pr
 
 // NewGeneration implements provider.RealtimeRouter.
 func (r *ScriptedRouter) NewGeneration(sessionID uuid.UUID, gen int64, voice provider.VoiceSelection) provider.Generation {
-	g := &ScriptedGeneration{SessionID: sessionID, Gen: gen, Voice: voice, r: r, epochCh: make(chan int, 1)}
 	r.mu.Lock()
+	g := &ScriptedGeneration{SessionID: sessionID, Gen: gen, Voice: voice, r: r, sc: r.script, epochCh: make(chan int, 1)}
 	r.gens = append(r.gens, g)
 	r.mu.Unlock()
 	return g
@@ -110,6 +118,7 @@ type ScriptedGeneration struct {
 	Voice     provider.VoiceSelection
 
 	r       *ScriptedRouter
+	sc      Script // the script of the router when the generation was created
 	epochCh chan int
 
 	mu           sync.Mutex
@@ -253,7 +262,7 @@ func (g *ScriptedGeneration) StreamLLM(ctx context.Context, req provider.LLMRequ
 
 func (g *ScriptedGeneration) playLLM(ctx context.Context, out chan<- provider.LLMEvent) {
 	defer close(out)
-	sc := g.r.script
+	sc := g.sc
 	send := func(ev provider.LLMEvent) bool {
 		select {
 		case out <- ev:
@@ -338,7 +347,7 @@ func sentenceIndex(requestID string) int {
 
 // Synthesize implements provider.Generation. VoiceID/Model are left as the runtime sent them.
 func (g *ScriptedGeneration) Synthesize(ctx context.Context, req provider.TTSRequest) (provider.TTSStream, error) {
-	sc := g.r.script
+	sc := g.sc
 	idx := sentenceIndex(req.RequestID)
 	g.mu.Lock()
 	p := ttsPlan{index: idx, epoch: g.epoch}
@@ -383,7 +392,7 @@ func (g *ScriptedGeneration) playTTS(ctx context.Context, out chan<- provider.TT
 			return false
 		}
 	}
-	ms := g.r.script.PCMPerSentenceMS
+	ms := g.sc.PCMPerSentenceMS
 	if ms <= 0 {
 		ms = 100
 	}

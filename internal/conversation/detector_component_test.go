@@ -9,7 +9,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/conversation/audio"
 	"github.com/nabePi/kotoki-backend/internal/provider"
 	"github.com/nabePi/kotoki-backend/internal/testutil/audiofx"
-	"github.com/nabePi/kotoki-backend/internal/testutil/replay"
+	sttreplay "github.com/nabePi/kotoki-backend/internal/testutil/replay"
 )
 
 // tailSilenceMs of digital silence is appended to every fixture: the synthetic speech ends
@@ -63,11 +63,11 @@ func loadFixture16k(t *testing.T, name string) []int16 {
 // the scripted STT and the detector, driving a mini Runtime.loop: LISTENING → USER_SPEAKING
 // (rows 1, 5, 6) → PROCESSING (rows 3, 4, 9). Detector events repeat every frame until the
 // state changes, so only the first event of a kind in a state is acted on.
-func runDetector(t *testing.T, pcm16 []int16, tl replay.Timeline) fixtureRun {
+func runDetector(t *testing.T, pcm16 []int16, tl sttreplay.Timeline) fixtureRun {
 	t.Helper()
 	vad, err := audio.NewVAD(2)
 	require.NoError(t, err)
-	stt := replay.NewScriptedSTT(tl)
+	stt := sttreplay.NewScriptedSTT(tl)
 	t.Cleanup(func() { _ = stt.Close() })
 	det := NewDetector(DetectorConfigFrom(defaultTuning()))
 	st := newSTTState(det.NowMs)
@@ -145,13 +145,13 @@ func fixtureEntry(t *testing.T, name string) audiofx.Entry {
 	return audiofx.Entry{}
 }
 
-func fixtureTimeline(t *testing.T, name string) replay.Timeline {
+func fixtureTimeline(t *testing.T, name string) sttreplay.Timeline {
 	t.Helper()
 	p := audiofx.PartialsPath(t, name)
 	if p == "" {
 		return nil
 	}
-	tl, err := replay.LoadTimeline(p)
+	tl, err := sttreplay.LoadTimeline(p)
 	require.NoError(t, err)
 	return tl
 }

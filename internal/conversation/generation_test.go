@@ -922,3 +922,17 @@ func TestSleepCtx(t *testing.T) {
 	require.ErrorIs(t, conversation.SleepCtx(ctx, time.Hour), context.Canceled)
 	require.ErrorIs(t, conversation.SleepCtx(ctx, 0), context.Canceled)
 }
+
+func TestSentenceTextIsRecordedBeforeTheLoopReadsIt(t *testing.T) {
+	// assistant_spoken_text is built from the text the Generation recorded, so it cannot lag behind
+	// the writer's count of sentences written while Runtime.loop has not yet read the EvSentence
+	// events: here nobody reads them at all.
+	h := newGenHarness(t, fakes.Script{Deltas: []string{"こんにちは。", "今日はいい天気ですね。"}, PCMPerSentenceMS: 100})
+	g := h.newGen(h.params(conversation.GenReply, 1))
+	g.StartLLM()
+	require.Eventually(t, func() bool { return g.SentenceText(1) != "" }, 5*time.Second, time.Millisecond)
+	require.Equal(t, "こんにちは。", g.SentenceText(0))
+	require.Equal(t, "今日はいい天気ですね。", g.SentenceText(1))
+	require.Empty(t, g.SentenceText(2))
+	require.NotEmpty(t, h.events, "the events are still waiting for the loop")
+}

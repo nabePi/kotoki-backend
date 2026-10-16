@@ -23,7 +23,8 @@ UPDATE session_turns t
        used_fallback = sqlc.arg(used_fallback),
        turn_end_to_first_audio_ms = sqlc.narg(turn_end_to_first_audio_ms), llm_first_token_ms = sqlc.narg(llm_first_token_ms),
        tts_first_audio_ms = sqlc.narg(tts_first_audio_ms), input_tokens = sqlc.narg(input_tokens), output_tokens = sqlc.narg(output_tokens),
-       tts_characters = sqlc.narg(tts_characters), error_code = sqlc.narg(error_code), completed_at = sqlc.arg(completed_at)
+       tts_characters = sqlc.narg(tts_characters), error_code = sqlc.narg(error_code), completed_at = sqlc.arg(completed_at),
+       generation = COALESCE(sqlc.narg(generation)::int, t.generation)
  WHERE t.id = sqlc.arg(id) AND t.created_at = sqlc.arg(created_at) AND t.status IS NULL
    AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = t.session_id AND s.runtime_fence = sqlc.arg(fence)
                 AND s.status IN ('STARTING', 'ACTIVE', 'ENDING'));

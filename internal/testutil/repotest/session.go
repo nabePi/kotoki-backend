@@ -254,7 +254,7 @@ func sessionTurnsFenced(t *testing.T, h SessionHarness) {
 		voice := "voice-actual"
 		reply := "はじめまして"
 		require.NoError(t, tx.Turns().Finalize(ctx, fence, t1.ID, session.TurnFinal{CreatedAt: t1.CreatedAt, Status: session.TurnCompleted, AssistantText: &reply,
-			AssistantSpokenText: &reply, TTSVoiceID: &voice, UsedFallback: true, CompletedAt: sessionNow()}))
+			AssistantSpokenText: &reply, TTSVoiceID: &voice, UsedFallback: true, CompletedAt: sessionNow(), Generation: ptr(5)}))
 		got, err := tx.Turns().ListRecent(ctx, s.ID, 10)
 		require.NoError(t, err)
 		require.Len(t, got, 1)
@@ -263,6 +263,10 @@ func sessionTurnsFenced(t *testing.T, h SessionHarness) {
 		require.Equal(t, "voice-actual", *got[0].TTSVoiceID, "tts_voice_id is stored by Finalize")
 		require.True(t, got[0].UsedFallback)
 		require.Equal(t, "こんにちは", *got[0].UserText)
+		require.Equal(t, 5, got[0].Generation, "Finalize stores the highest generation issued, which a takeover continues above (§7.9.4)")
+		_, maxGen, err := tx.Turns().MaxSeqAndGeneration(ctx, s.ID)
+		require.NoError(t, err)
+		require.Equal(t, 5, maxGen)
 		return nil
 	})
 
@@ -323,6 +327,7 @@ func sessionTurnsFailInProgress(t *testing.T, h SessionHarness) {
 		require.Len(t, got, 2)
 		require.Equal(t, session.TurnFailed, *got[1].Status)
 		require.Equal(t, "TAKEOVER", *got[1].ErrorCode)
+		require.Equal(t, 1, got[0].Generation, "a Finalize without Generation leaves the column as the INSERT wrote it")
 		turns, users, _, err := tx.Turns().Stats(ctx, s.ID, *s.StartingAt)
 		require.NoError(t, err)
 		require.Equal(t, 2, turns)

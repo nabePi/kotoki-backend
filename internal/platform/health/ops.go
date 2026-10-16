@@ -34,6 +34,11 @@ type OpsOptions struct {
 	// doubling up to 2 s).
 	StartupBackoff time.Duration
 	Logger         *slog.Logger
+	// Wrap, when set, wraps the handler Serve exposes (tracing, extra readiness gates). Handler()
+	// stays the plain mux so tests and other binaries are unaffected.
+	Wrap func(http.Handler) http.Handler
+	// ShutdownTimeout bounds the graceful stop of Serve (default 5 s).
+	ShutdownTimeout time.Duration
 }
 
 // Ops is the ops HTTP surface. /readyz is "starting" until all startup checks
@@ -146,10 +151,16 @@ func (o *Ops) Handler() http.Handler {
 	return mux
 }
 
-// Serve serves on ln until ctx is done, then shuts down within 5 s. Normal
-// shutdown returns nil.
+// Serve serves on ln until ctx is done, then shuts down within ShutdownTimeout (5 s). Normal
+// shutdown returns nil, and so does a shutdown that ran out of time: a probe connection that never
+// sent a request (an HTTP client's spare dial) holds Shutdown for 5 s, and it must not turn a clean
+// exit of the binary into a failure; the leftover connections are closed.
 func (o *Ops) Serve(ctx context.Context, ln net.Listener) error {
-	srv := &http.Server{Handler: o.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	h := o.Handler()
+	if o.opts.Wrap != nil {
+		h = o.opts.Wrap(h)
+	}
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	select {
@@ -160,10 +171,18 @@ func (o *Ops) Serve(ctx context.Context, ln net.Listener) error {
 		return err
 	case <-ctx.Done():
 	}
-	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	timeout := o.opts.ShutdownTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {
-		return err
+		_ = srv.Close()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		o.opts.Logger.Warn("ops listener: connections still open at shutdown, closed", "timeout", timeout.String())
 	}
 	if err := <-errc; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err

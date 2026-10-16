@@ -153,3 +153,27 @@ func TestEndDoesNotLeakErrorText(t *testing.T) {
 	assert.Contains(t, m, "code.file.path")
 	assert.Equal(t, "INTERNAL_ERROR", m["kotoki.error_code"].AsString())
 }
+
+func TestSetAttrsOnTheSpanOfTheContext(t *testing.T) {
+	rec := testutil.NewTraceRecorder(t)
+	ctx, sp := Start(context.Background(), "set")
+	SetString(ctx, "conn.id", "c1")
+	SetBool(ctx, "resume", true)
+	SetInt(ctx, "close.code", 1000)
+	SetString(ctx, "text", "halo") // redacted like Start's attributes
+	sp.End()
+
+	m := attrMap(rec.Find("set"))
+	assert.Equal(t, "c1", m["conn.id"].AsString())
+	assert.True(t, m["resume"].AsBool())
+	assert.EqualValues(t, 1000, m["close.code"].AsInt64())
+	assert.Equal(t, "[REDACTED]", m["text"].AsString())
+}
+
+func TestSetAttrsWithoutASpanIsANoop(t *testing.T) {
+	assert.NotPanics(t, func() {
+		SetString(context.Background(), "a", "b")
+		SetBool(context.Background(), "a", true)
+		SetInt(context.Background(), "a", 1)
+	})
+}

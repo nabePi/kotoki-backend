@@ -513,6 +513,9 @@ func applyFinal(t *session.Turn, f session.TurnFinal) {
 	t.UsedFallback = f.UsedFallback
 	t.TurnEndToFirstAudioMS, t.LLMFirstTokenMS, t.TTSFirstAudioMS = f.TurnEndToFirstAudioMS, f.LLMFirstTokenMS, f.TTSFirstAudioMS
 	t.InputTokens, t.OutputTokens, t.TTSCharacters, t.ErrorCode = f.InputTokens, f.OutputTokens, f.TTSCharacters, f.ErrorCode
+	if f.Generation != nil {
+		t.Generation = *f.Generation
+	}
 }
 
 func (r *turnRepoFake) Finalize(_ context.Context, fence int64, turnID uuid.UUID, f session.TurnFinal) error {
