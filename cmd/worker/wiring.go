@@ -21,6 +21,7 @@ import (
 
 	"github.com/nabePi/kotoki-backend/internal/amqp"
 	"github.com/nabePi/kotoki-backend/internal/balance"
+	"github.com/nabePi/kotoki-backend/internal/evaluation"
 	"github.com/nabePi/kotoki-backend/internal/jobs"
 	"github.com/nabePi/kotoki-backend/internal/platform/buildinfo"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
@@ -30,13 +31,15 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/platform/metrics"
 	"github.com/nabePi/kotoki-backend/internal/platform/otel"
 	"github.com/nabePi/kotoki-backend/internal/postgres"
+	"github.com/nabePi/kotoki-backend/internal/provider"
 	"github.com/nabePi/kotoki-backend/internal/redisstore"
 	"github.com/nabePi/kotoki-backend/internal/session"
+	"github.com/nabePi/kotoki-backend/internal/summary"
 )
 
 // errHandlerNotImplemented is what buildConsumers returns for a feature handler whose consumer does
-// not exist yet. M7 (evaluation, learner, summary) and M8 (memory) replace the case with a real
-// consumer; until then the process refuses to start rather than leave the queue unconsumed.
+// not exist yet (memory and learner until M8); the process refuses to start rather than leave the
+// queue unconsumed.
 var errHandlerNotImplemented = errors.New("worker handler not implemented yet")
 
 // consumerFlags are the --handlers values that run a queue consumer (spec 9.8).
@@ -69,43 +72,99 @@ func handlerSet(flags []string) HandlerSet {
 	return h
 }
 
-// consumerDeps are the collaborators a consumer is built from (spec 9.7). Nothing reads them while
-// the seam is empty; M7/M8 add their repositories and ports here.
+// consumerDeps are the collaborators a consumer is built from (spec 9.7). M8 adds the ports of
+// memory and learner here.
 type consumerDeps struct {
 	Conn      *amqp.Conn
 	Pub       amqp.Publisher
 	Processed amqp.ProcessedChecker
 	Metrics   *amqp.Metrics
 	Pool      *pgxpool.Pool
-	Redis     redis.UniversalClient
-	Log       *slog.Logger
-	Clock     clock.Clock
+	// Store is the transactional store of the handlers (configured with the worker lock and
+	// statement timeouts); built once in serve.
+	Store *postgres.Store
+	Redis redis.UniversalClient
+	Log   *slog.Logger
+	Clock clock.Clock
+	// Reg receives the feature metrics of the handlers (each is registered once per process).
+	Reg prometheus.Registerer
+	// Router is the provider router of the worker; evaluation and summary require it.
+	Router provider.AsyncRouter
+	// EvalCfg and SummaryCfg are config.Worker.Evaluation/Summary mapped by evaluationConfig/summaryConfig.
+	EvalCfg    evaluation.Config
+	SummaryCfg summary.Config
 }
 
-// buildConsumers is the seam for M7/M8: newConsumer builds the consumer of one feature flag. Flags
-// that are not consumers (outbox, sweeper, cleanup) are ignored.
+// buildConsumers builds the consumer of every feature flag in flags. Flags that are not consumers
+// (outbox, sweeper, cleanup) are ignored.
 func buildConsumers(flags []string, d consumerDeps) ([]*amqp.Consumer, error) {
 	var out []*amqp.Consumer
 	for _, f := range handlerSet(flags).Consumers {
-		c, err := newConsumer(f, d)
+		h, err := newHandler(f, d)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, c)
+		out = append(out, amqp.NewConsumer(h, d.Conn, d.Pub, d.Processed, d.Metrics, d.Log, d.Clock))
 	}
 	return out, nil
 }
 
-// consumerBuilders maps a feature flag to the constructor of its consumer. M7 (evaluation, learner,
-// summary) and M8 (memory) each add their entry; a flag without one is refused at startup.
-var consumerBuilders = map[string]func(consumerDeps) (*amqp.Consumer, error){}
+// handlerBuilders maps a feature flag to the constructor of its queue handler. M8 adds memory and
+// learner; a flag without an entry is refused at startup.
+var handlerBuilders = map[string]func(consumerDeps) (amqp.Handler, error){
+	"evaluation": newEvaluationHandler,
+	"summary":    newSummaryHandler,
+}
 
-func newConsumer(name string, d consumerDeps) (*amqp.Consumer, error) {
-	build, ok := consumerBuilders[name]
+func newHandler(name string, d consumerDeps) (amqp.Handler, error) {
+	build, ok := handlerBuilders[name]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", errHandlerNotImplemented, name)
 	}
 	return build(d)
+}
+
+// errRouterRequired is a startup error: a consumer that calls providers cannot run without one.
+var errRouterRequired = errors.New("worker handler needs the provider router")
+
+// evaluationConfig maps config.Worker.Evaluation; platform/config does not import the feature
+// packages, so the mapping lives here.
+func evaluationConfig(cfg config.Worker) evaluation.Config {
+	e := cfg.Evaluation
+	return evaluation.Config{
+		MinUserTurns: e.MinUserTurns, MinUserSpeechSeconds: e.MinUserSpeechSeconds, MinActiveSeconds: e.MinActiveSeconds,
+		MinFindingConfidence: e.MinFindingConfidence, TranscriptMaxChars: e.TranscriptMaxChars, HandlerTimeout: e.HandlerTimeout,
+	}
+}
+
+func summaryConfig(cfg config.Worker) summary.Config {
+	return summary.Config{MaxChars: cfg.Summary.MaxChars}
+}
+
+// newEvaluationHandler wires the evaluation consumer by hand (D-004): Postgres store and source,
+// the content repository, the evaluation provider of the router.
+func newEvaluationHandler(d consumerDeps) (amqp.Handler, error) {
+	if d.Router == nil {
+		return nil, fmt.Errorf("%w: evaluation", errRouterRequired)
+	}
+	svc := evaluation.NewService(evaluation.Deps{
+		Store: d.Store.EvaluationStore(), Source: postgres.NewEvaluationSource(d.Pool), Content: postgres.NewContentRepo(d.Pool),
+		Router: d.Router, Cfg: d.EvalCfg, Clock: d.Clock, IDs: idgen.NewV7(),
+		Metrics: evaluation.NewMetrics(d.Reg), Log: d.Log,
+	})
+	return evaluation.NewConsumer(svc, d.EvalCfg), nil
+}
+
+func newSummaryHandler(d consumerDeps) (amqp.Handler, error) {
+	if d.Router == nil {
+		return nil, fmt.Errorf("%w: summary", errRouterRequired)
+	}
+	svc := summary.NewService(summary.Deps{
+		Store: d.Store.SummaryStore(), Source: postgres.NewSummarySource(d.Pool),
+		Prompts: postgres.NewSummaryPromptSource(d.Pool), Router: d.Router, Cfg: d.SummaryCfg,
+		Metrics: summary.NewMetrics(d.Reg), Log: d.Log,
+	})
+	return summary.NewConsumer(svc), nil
 }
 
 // jobDeps are the collaborators of the scheduled jobs.
@@ -385,9 +444,20 @@ func serve(ctx context.Context, handlersFlag string, stdout io.Writer) (retErr e
 		pubClient = amqp.NewConfirmPublisher(pubConn, cfg.ConfirmTimeout)
 		retryPub = pubClient
 	}
+	// The router is built only for a worker that runs consumers, the only ones that call providers.
+	var router provider.AsyncRouter
+	if len(set.Consumers) > 0 {
+		r, err := buildRouter(clock.System{}, logger, provider.NewMetrics(reg))
+		if err != nil {
+			return err
+		}
+		router = r
+	}
 	consumers, err := buildConsumers(handlers, consumerDeps{
 		Conn: consConn, Pub: retryPub, Processed: postgres.NewProcessedEventsReader(pool),
-		Metrics: am, Pool: pool, Redis: rdb, Log: logger, Clock: clock.System{},
+		Metrics: am, Pool: pool, Redis: rdb,
+		Store: postgres.NewStore(pool, postgres.WithClock(clock.System{}), postgres.WithTimeouts(cfg.LockTimeout, cfg.StatementTimeout)), Log: logger, Clock: clock.System{}, Reg: reg,
+		Router: router, EvalCfg: evaluationConfig(cfg), SummaryCfg: summaryConfig(cfg),
 	})
 	if err != nil {
 		return err

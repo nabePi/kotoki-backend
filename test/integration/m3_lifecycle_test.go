@@ -25,6 +25,7 @@ import (
 	"github.com/nabePi/kotoki-backend/internal/auth"
 	"github.com/nabePi/kotoki-backend/internal/balance"
 	"github.com/nabePi/kotoki-backend/internal/content"
+	"github.com/nabePi/kotoki-backend/internal/evaluation"
 	"github.com/nabePi/kotoki-backend/internal/httpapi"
 	"github.com/nabePi/kotoki-backend/internal/mailer"
 	"github.com/nabePi/kotoki-backend/internal/platform/clock"
@@ -128,6 +129,7 @@ func newLifecycle(t *testing.T) *lifecycle {
 		Cfg:     httpapi.Config{CORSOrigins: []string{"http://localhost:3000"}, BodyLimit: 64 << 10, Cookie: httpapi.CookieConfig{Secure: false, MaxAge: 720 * time.Hour}},
 		Auth:    authSvc, Users: userSvc, Balance: balSvc, Admin: adminSvc, AdminGate: adminSvc,
 		Content: content.NewCatalogService(cached, rcfg), ContentAdmin: contentAdmin, Session: sessions, SessionQuery: query, Tickets: tickets,
+		Evaluation:    evaluation.NewQueryService(postgres.NewEvaluationReader(pool)),
 		AdminSessions: session.NewAdminQueryService(postgres.NewSessionAdminRepo(pool), clk, 180), AdminAudit: adminSvc,
 	})
 	srv := httptest.NewServer(router)

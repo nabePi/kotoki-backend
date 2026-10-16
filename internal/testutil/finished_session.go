@@ -25,8 +25,10 @@ type TurnSeed struct {
 
 // FinishedSessionOpts describes SeedFinishedSession. UserStatus defaults to ACTIVE and Status to
 // COMPLETED (FAILED sessions get a started_at as well: they were ACTIVE before they failed).
-// StartedSecondsAgo defaults to ActiveSeconds + 10.
+// StartedSecondsAgo defaults to ActiveSeconds + 10. UserID, when set, makes the session belong to
+// that existing user (UserStatus is then ignored) instead of a freshly seeded one.
 type FinishedSessionOpts struct {
+	UserID            uuid.UUID
 	UserStatus        string
 	Status            string
 	Turns             []TurnSeed
@@ -71,13 +73,16 @@ func SeedFinishedSession(t testing.TB, pool *pgxpool.Pool, o FinishedSessionOpts
 	if status == "FAILED" {
 		endReason = "PROVIDER_FAILURE"
 	}
-	var userRow Row
-	if o.UserStatus == "DELETED" {
-		userRow = Row{"status": "DELETED", "deleted_at": time.Now().UTC()}
-	} else if o.UserStatus != "" {
-		userRow = Row{"status": o.UserStatus}
+	userID := o.UserID
+	if userID == uuid.Nil {
+		var userRow Row
+		if o.UserStatus == "DELETED" {
+			userRow = Row{"status": "DELETED", "deleted_at": time.Now().UTC()}
+		} else if o.UserStatus != "" {
+			userRow = Row{"status": o.UserStatus}
+		}
+		userID = SeedUser(t, pool, userRow)
 	}
-	userID := SeedUser(t, pool, userRow)
 	c := seedFinishedContent(t, pool)
 
 	ago := o.StartedSecondsAgo
