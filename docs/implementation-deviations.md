@@ -587,3 +587,10 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Digit dihitung sebagai karakter yang dapat diterima** pada cek bahasa (plan hanya menyebut huruf Latin/spasi/tanda baca), supaya angka dalam komentar ("3 kali") tidak menurunkan rasio. `ー` (tanda panjang) diperlakukan sebagai karakter Jepang karena berskrip Common.
 - **`OutputError.Problems` berformat `<instance path>: <pesan skema>` (leaf error)**, mis. `/scores/GRAMMAR/score: ...`; field hilang muncul di path `/`. Pesan bahasa: `summary: not written in Indonesian`, `scores.<DIM>.comment: ...`, `findings[i].explanation: ...`. JSON rusak/non-object juga `*OutputError`. Tambahan `EvalOutput.Dimensions()`.
 - **Skema unit test dimuat lewat `SchemaCache.Get`** (sekaligus menguji cache); `TestSchemaCopyMatchesSeed` (T5) menjaga salinan sama dengan seed.
+
+## M7-T8 — Filter finding
+- **Urutan pemeriksaan:** validitas (dimensi, field wajib/null, turn, original, corrected) lebih dulu, lalu confidence, lalu duplikat, lalu batas jumlah. Finding yang gagal validitas dan juga low-confidence dihitung `Rejected` (alasan validitas). Duplikat dinilai setelah confidence, jadi kemunculan pertama berconfidence rendah tidak menutupi duplikat yang yakin.
+- **Alasan drop tambahan di luar plan:** `over_limit` (batas 15/3; tidak dihitung ke `Rejected`). Tipe tak dikenal dan dimensi STRENGTH di luar lima dimensi masuk `type_dimension_mismatch`.
+- **Original tanpa `turn_seq`** (hanya mungkin pada STRENGTH, kedua field optional) tidak dapat diverifikasi, jadi dibuang sebagai `original_not_found`; `original` yang kosong setelah normalisasi (hanya tanda baca) juga `original_not_found`. Field wajib berisi string kosong/whitespace = `missing_field`.
+- **Urutan `Kept` mengikuti urutan input** (batas jumlah hanya memilih siapa yang lolos); STRENGTH diurutkan berdasar confidence karena severity dipaksa INFO. Deduplikasi `OBJECTIVE_NOT_MET` ganda (semua field null) ikut berlaku karena kuncinya sama.
+- **`Finding.TurnID`** diisi dari `TurnRef` hanya bila `turn_seq` ada. Himpunan tanda baca normalisasi menyertakan `,` dan `.` ASCII (plan memakai `，．`; kedua versi ada).
