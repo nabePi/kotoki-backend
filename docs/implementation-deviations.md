@@ -625,3 +625,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 
 ## M7-T14 — `evaluation.Consumer`
 - **Pemeriksaan struktural `amqp.Handler` dan klasifikasi hidup di `internal/m7evaluation_test.go`**, bukan di `internal/evaluation`: depguard melarang `internal/amqp` dari paket fitur (juga file tes). Tes memakai `Consumer` dan `Service` nyata dengan fake store/provider, sehingga `amqp.Classify` menilai error sungguhan dari `Handle`. Skenario `SESSION_NOT_ENDED`/dll tidak berlaku di sini; kerja DLQ/retry nyata ada di integration Task 15.
+
+## M7-T15 — Integration consumer
+- **`SeedFinishedSession` tidak memakai `testutil.SeedContent`** (menyisipkan `prompt_configs` CONVERSATION yang bentrok dengan `ApplySeed`); ia menyisipkan topic/scenario/version/character sendiri dan memakai CONVERSATION v1 hasil seed. Struct `FinishedSession` ditambah field `Content` dan method `WithPayload` (membangun ulang envelope dengan event id yang sama) untuk skenario `TranscriptUnavailable` (payload `user_turn_count 3`, tanpa turn). Turn tersebar merata di jendela aktif; `StartedSecondsAgo` default `ActiveSeconds+10`.
+- **`DuplicateParallel`** menegaskan tepat satu `nil` dan sisanya `ErrAlreadyProcessed` (provider boleh dipanggil dua kali; yang dijamin satu evaluasi COMPLETED dan satu event).
+- **Kolom R-13** yang diuji: `listening_response_signal`, `interaction_complexity_signal`, `dimension_confidence` (ketiganya, sesuai spec §10.14) ditambah `dimension_comments`; plan menulis "4 kolom".
