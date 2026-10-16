@@ -581,3 +581,9 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Tanda baca `original` = tepat himpunan filter §10.7.2 (`、。，．,.！？!?「」…・`) + whitespace**, bukan `unicode.IsPunct`: tanda lain (mis. `『』`) tidak dibuang filter, sehingga membuangnya di fake akan membuat `original` bukan substring `user_text` ternormalisasi.
 - **Step 2 merah dibuktikan lewat mutasi hook** (hook dimatikan, tes merah); kode ditulis sebelum tes.
 - **Fixture memakai `{{score}}` juga untuk dua signal** (sama dengan lima dimensi); `pattern_key` finding turunan `null`; `explanation` kalimat Indonesia tetap. Baris USER diparse dengan `(?m)^\[T(\d+)\] USER[^:\n]*: (.+)$` pada pesan terakhir; tidak ada import `evaluation` dari `fake` (arch).
+
+## M7-T7 — EvalOutput, validasi schema + bahasa
+- **Normalisasi angka sebelum validasi lebih luas dari plan:** selain skor dimensi, skor `signals` dibulatkan (`math.Round`), dan `turn_seq` integral berbentuk float (`3.0`) diubah ke integer (skema menerimanya, decoder Go tidak); `turn_seq` pecahan tetap ditolak skema. Skor yang dibulatkan melewati 100 (mis. 100.6) tetap invalid.
+- **Digit dihitung sebagai karakter yang dapat diterima** pada cek bahasa (plan hanya menyebut huruf Latin/spasi/tanda baca), supaya angka dalam komentar ("3 kali") tidak menurunkan rasio. `ー` (tanda panjang) diperlakukan sebagai karakter Jepang karena berskrip Common.
+- **`OutputError.Problems` berformat `<instance path>: <pesan skema>` (leaf error)**, mis. `/scores/GRAMMAR/score: ...`; field hilang muncul di path `/`. Pesan bahasa: `summary: not written in Indonesian`, `scores.<DIM>.comment: ...`, `findings[i].explanation: ...`. JSON rusak/non-object juga `*OutputError`. Tambahan `EvalOutput.Dimensions()`.
+- **Skema unit test dimuat lewat `SchemaCache.Get`** (sekaligus menguji cache); `TestSchemaCopyMatchesSeed` (T5) menjaga salinan sama dengan seed.
