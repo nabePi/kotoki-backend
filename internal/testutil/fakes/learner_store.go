@@ -359,8 +359,12 @@ func (r *learnerRepo) Stats(_ context.Context, userID uuid.UUID) (learner.Profil
 	return r.s.stats[userID], nil
 }
 
-func (r *learnerRepo) List(_ context.Context, userID uuid.UUID, _ bool) ([]learner.StateRow, error) {
-	if err := r.s.Take("ListStates"); err != nil {
+func (r *learnerRepo) List(_ context.Context, userID uuid.UUID, forUpdate bool) ([]learner.StateRow, error) {
+	method := "ListStates"
+	if forUpdate {
+		method = "ListStatesForUpdate" // lets a test tell the locking read from the plain one
+	}
+	if err := r.s.Take(method); err != nil {
 		return nil, err
 	}
 	return r.s.sortedStates(userID), nil
