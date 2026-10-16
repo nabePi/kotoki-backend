@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -82,6 +83,9 @@ type Consumer struct {
 	m         *Metrics
 	log       *slog.Logger
 	clk       clock.Clock
+
+	lifeOnce sync.Once
+	lc       *lifecycle
 }
 
 // NewConsumer builds the consumer of h on conn; retries and dead letters go out through pub.

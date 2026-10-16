@@ -436,3 +436,9 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Dead-letter yang gagal dipublish tetap menaikkan metrik `dead`** (message di-`Nack(false,false)` dan jatuh ke `<Q>.dlq` lewat DLX level queue).
 - **Span: atribut `messaging.*`, `kotoki.user_id/session_id` hanya ada bila envelope terdecode**; `kotoki.session_id` hanya untuk `aggregate_type=SESSION`. Pre-check `IsProcessed` yang error diabaikan (lanjut ke handler; `MarkProcessed` tetap penjaga).
 - **Log memakai `buildinfo.Version`** untuk `worker_version`. `Consumer.conn` baru dipakai Task 10 (`Run`).
+
+## M6-T10 — Runtime consumer: `Run`, Qos, reconnect, graceful shutdown
+- **`Run(ctx)` tidak membatalkan handler saat `ctx` selesai**: ctx hanya menghentikan pengambilan delivery; handler berjalan di root ctx internal yang hanya dibatalkan `Shutdown` setelah grace (atau tak pernah, dibatasi `Handler.Timeout()`). `Run` kembali `nil` pada ctx/Shutdown, error hanya bila reconnect berhenti permanen (`Conn` ditutup).
+- **Satu channel per `Consumer`** (satu `Handler` = satu queue), bukan "per queue" dalam satu objek; konsisten dengan `NewConsumer(h, ...)`.
+- **Delivery yang di-nack saat shutdown (belum mulai) menaikkan `kotoki_consumer_messages_total{result="requeue"}`** (label yang sudah ada), tidak ada metrik baru.
+- **Tes memakai `publishToQueue` lewat `kotoki.requeue`** (key = nama queue) agar hanya queue yang diuji menerima pesan, bukan fan-out `session.completed` ke tiga queue.
