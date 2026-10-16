@@ -30,6 +30,8 @@ const (
 	sttCloseWait               = 500 * time.Millisecond
 	sttReadLimit               = 1 << 20
 	sttPath                    = "/v1/speech-to-text/realtime"
+	defaultKeepAliveAfter      = 5 * time.Second
+	sttKeepAliveBytes          = 3200 // 100 ms of silence
 )
 
 // STT streams audio to Scribe realtime with manual commits (spec 8.4.1).
@@ -179,6 +181,15 @@ func (s *STT) endpoint(cfg provider.STTSessionConfig) string {
 		"enable_logging":     {"false"},
 	}
 	return s.cfg.WSBaseURL + sttPath + "?" + q.Encode()
+}
+
+// keepAliveAfter is how long the session may stay silent before 100 ms of silence is sent
+// (the server closes after 15 s without client messages, spec 8.4.1).
+func (s *STT) keepAliveAfter() time.Duration {
+	if s.cfg.KeepAliveAfter > 0 {
+		return s.cfg.KeepAliveAfter
+	}
+	return defaultKeepAliveAfter
 }
 
 func (s *STT) tap(dir string, text bool, data []byte) {
@@ -373,10 +384,18 @@ func (se *sttSession) writeLoop() {
 		se.ops, se.queuedBytes = nil, 0
 		se.mu.Unlock()
 		if len(ops) == 0 {
+			ka := time.NewTimer(se.s.keepAliveAfter())
 			select {
 			case <-se.wake:
+				ka.Stop()
+				continue
+			case <-ka.C:
+				if !se.sendChunk(make([]byte, sttKeepAliveBytes), false, false) {
+					return
+				}
 				continue
 			case <-se.ctx.Done():
+				ka.Stop()
 				return
 			}
 		}
@@ -528,6 +547,10 @@ func (se *sttSession) handle(m rtMessage) *provider.Error {
 		se.mu.Lock()
 		se.committedLocked(m.Text)
 		se.mu.Unlock()
+	case m.MessageType == msgWarning:
+		// vendor warning: logged by identifiers only (the text may echo audio-derived content)
+		se.s.log.Warn("provider warning", "provider", string(provider.ElevenLabs), "capability", string(provider.CapSTT),
+			"model", se.s.cfg.STTModel, "vendor_code", msgWarning)
 	case errorTypes[m.MessageType]:
 		return sttError(m, se.s.scrub)
 	}

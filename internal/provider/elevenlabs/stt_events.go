@@ -13,6 +13,7 @@ const (
 	msgSessionStarted      = "session_started"
 	msgPartialTranscript   = "partial_transcript"
 	msgCommittedTranscript = "committed_transcript"
+	msgWarning             = "warning"
 )
 
 type rtMessage struct {
@@ -29,11 +30,23 @@ var errorTypes = map[string]bool{
 	"chunk_size_exceeded": true, "insufficient_audio_activity": true, "transcriber_error": true,
 }
 
-// sttError normalises an error message; VendorCode is message_type verbatim.
+// sttError normalises an error message (spec 8.4.1 table); VendorCode is message_type verbatim.
 func sttError(m rtMessage, scrub func(string) string) *provider.Error {
 	e := provider.NewError(provider.ElevenLabs, provider.CapSTT, provider.KindUnavailable, httpx.Redact(scrub(m.Error)))
 	e.VendorCode = httpx.Redact(scrub(m.MessageType))
 	e.Retryable = true
+	switch m.MessageType {
+	case "auth_error", "unaccepted_terms":
+		e.Kind, e.Retryable = provider.KindAuth, false
+	case "quota_exceeded":
+		e.Kind, e.Retryable = provider.KindRateLimited, false
+	case "rate_limited", "queue_overflow", "resource_exhausted", "commit_throttled":
+		e.Kind = provider.KindRateLimited
+	case "input_error", "invalid_request", "chunk_size_exceeded":
+		e.Kind, e.Retryable = provider.KindInvalidRequest, false
+	}
+	// "session_time_limit_exceeded" and "insufficient_audio_activity" stay UNAVAILABLE with the
+	// exact vendor code: rotatingSTT reconnects to the same vendor on them (spec 8.5.8).
 	return e
 }
 

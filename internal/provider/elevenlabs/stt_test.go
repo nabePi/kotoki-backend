@@ -21,7 +21,7 @@ import (
 
 func newSTT(t *testing.T, srv *replay.Server, mod func(*elevenlabs.Config)) *elevenlabs.STT {
 	t.Helper()
-	cfg := elevenlabs.Config{APIKey: "k", WSBaseURL: srv.URL, STTModel: "m_stt"}
+	cfg := elevenlabs.Config{APIKey: "xi-test-key", WSBaseURL: srv.URL, STTModel: "m_stt"}
 	if mod != nil {
 		mod(&cfg)
 	}
@@ -147,7 +147,7 @@ func TestELSTTOpenQueryAndAuth(t *testing.T) {
 	u := srv.UpgradeRequest()
 	require.Equal(t, "/v1/speech-to-text/realtime", u.Path)
 	require.Equal(t, url.Values{"model_id": {"m_stt"}, "language_code": {"ja"}, "audio_format": {"pcm_16000"}, "commit_strategy": {"manual"}, "include_timestamps": {"false"}, "enable_logging": {"false"}}, u.Query)
-	require.Equal(t, "k", u.Header.Get("xi-api-key"))
+	require.Equal(t, "xi-test-key", u.Header.Get("xi-api-key"))
 }
 
 func TestELSTTBatchesTwoFramesAndFinalizeCommits(t *testing.T) {
