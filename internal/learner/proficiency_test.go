@@ -53,9 +53,17 @@ func TestProficiencyGolden_Grammar(t *testing.T) { // spec 12.5.4, N4: L=2.00 c=
 	require.Equal(t, e3.AssessedAt, *st.LastEvidenceAt)
 }
 
-// The IMPROVING assertion of the golden sequence needs the OLS trend of Task 3.
+// The IMPROVING trend of the third golden session (spec 12.5.4): points [2.16, 2.27, 2.35].
 func TestProficiencyGolden_GrammarTrendImproving(t *testing.T) {
-	t.Skip("task 3")
+	st := learner.SkillState{Level: 2.00, Confidence: 0.100}
+	t0 := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	e1 := learner.Estimate{AssessedAt: t0, RawScore: 82, DEff: intp(2), LObs: 2.40, CObs: 0.800}
+	e2 := learner.Estimate{AssessedAt: t0.AddDate(0, 0, 3), RawScore: 91, DEff: intp(2), LObs: 2.70, CObs: 0.638}
+	e3 := learner.Estimate{AssessedAt: t0.AddDate(0, 0, 7), RawScore: 58, DEff: intp(3), LObs: 2.66, CObs: 0.800}
+	st, _ = learner.Step(st, e1, nil)
+	st, _ = learner.Step(st, e2, []learner.TrendPoint{{At: t0, Level: 2.16}})
+	_, a := learner.Step(st, e3, []learner.TrendPoint{{At: t0, Level: 2.16}, {At: e2.AssessedAt, Level: 2.27}})
+	require.Equal(t, learner.TrendImproving, a.Trend)
 }
 
 func TestStepRiseCap(t *testing.T) { // alpha 0.50, raw delta 0.50 -> +0.40

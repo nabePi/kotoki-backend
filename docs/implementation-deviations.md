@@ -688,3 +688,7 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`EvidenceLevel(skill, ...)` mengabaikan `skill`** (`_ Skill`): §12.5.1 langkah 1 identik untuk semua skill; signature plan dipertahankan.
 - **`L_obs` dibulatkan 2 desimal dan `c_obs` 3 desimal sebelum dipakai** (keputusan plan; menyamakan jalur normal dengan replay dari kolom `NUMERIC(3,2)/(4,3)`). Angka golden spec tidak berubah (`c_obs` sesi 2 = 0,638 bukan 0,6375; hasil `Level 2.27`, `c 0.389` tetap cocok). Hari decay dihitung pecahan (`jam/24`), tidak dibulatkan; tidak negatif.
 - **Konstanta tambahan** `AlgorithmVersion = 1` dan `MinEvidenceConfidence = 0.05` di `params.go` (angka 0,05 ada di spec langkah 2 tetapi tidak di tabel konstanta).
+
+## M8-T3 — Trend dan Replay
+- **`ComputeTrend` memakai toleransi `1e-9` pada ambang slope ±0,05** agar slope yang secara matematis tepat 0,05 tidak jatuh ke STABLE karena derau floating point; spec membandingkan `>= +0.05` / `<= -0.05`.
+- **`Replay` mengabaikan `Count`, `Ceiling`, `LastEvidenceAt` dari `prior`** (hanya `Level` dan `Confidence`), sesuai §12.5.5 (`n := 0; ceiling := nil; last := nil`). Untuk daftar kosong mengembalikan state yang dinormalkan itu dan `rows` nil.

@@ -35,26 +35,6 @@ type Applied struct {
 	Trend                       Trend
 }
 
-// Trend is the direction of the recent estimates of a skill.
-type Trend string
-
-// Trend values.
-const (
-	TrendInsufficient Trend = "INSUFFICIENT_DATA"
-	TrendImproving    Trend = "IMPROVING"
-	TrendStable       Trend = "STABLE"
-	TrendDeclining    Trend = "DECLINING"
-)
-
-// TrendPoint is one historical estimated level.
-type TrendPoint struct {
-	At    time.Time
-	Level float64
-}
-
-// computeTrend is a stub replaced by the OLS implementation of Task 3.
-func computeTrend(_ []TrendPoint, _ TrendPoint, _ int) Trend { return TrendInsufficient }
-
 // round2 rounds half away from zero to 2 decimals.
 func round2(x float64) float64 { return math.Round(x*100) / 100 }
 
@@ -118,6 +98,6 @@ func Step(st SkillState, e Estimate, hist []TrendPoint) (SkillState, Applied) {
 		Confidence: cNew,
 		Count:      nNew,
 		Ceiling:    ceiling,
-		Trend:      computeTrend(hist, TrendPoint{At: e.AssessedAt, Level: lNew}, nNew),
+		Trend:      ComputeTrend(hist, TrendPoint{At: e.AssessedAt, Level: lNew}, nNew),
 	}
 }
