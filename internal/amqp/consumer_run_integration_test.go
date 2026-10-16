@@ -64,6 +64,11 @@ func (h *queueHandler) OnFailure(_ context.Context, _ events.Delivery, cause err
 	h.mu.Unlock()
 }
 func (h *queueHandler) handledCount() int { h.mu.Lock(); defer h.mu.Unlock(); return len(h.handled) }
+func (h *queueHandler) deliveries() []events.Delivery {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]events.Delivery(nil), h.handled...)
+}
 func (h *queueHandler) failureCalls() []failureCall {
 	h.mu.Lock()
 	defer h.mu.Unlock()

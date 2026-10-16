@@ -442,3 +442,9 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Satu channel per `Consumer`** (satu `Handler` = satu queue), bukan "per queue" dalam satu objek; konsisten dengan `NewConsumer(h, ...)`.
 - **Delivery yang di-nack saat shutdown (belum mulai) menaikkan `kotoki_consumer_messages_total{result="requeue"}`** (label yang sudah ada), tidak ada metrik baru.
 - **Tes memakai `publishToQueue` lewat `kotoki.requeue`** (key = nama queue) agar hanya queue yang diuji menerima pesan, bukan fan-out `session.completed` ke tiga queue.
+
+## M6-T11 — Suite integration consumer: retry nyata, poison, idempotensi, trace end-to-end
+- **`TestPoison_DeliveryLimit_DeadLettersToDLQ` menutup channel dengan delivery unacked (11 kali) alih-alih `Nack(false,true)` 11 kali** (Step 1 plan). Terhadap RabbitMQ 4 nyata, `basic.nack(requeue=true)` tidak menaikkan delivery count (tidak ada `x-delivery-count`; 13 nack tanpa dead-letter), hanya channel/koneksi yang mati dengan delivery unacked (crash pod) yang dihitung dan menghasilkan dead-letter di delivery ke-11. Itu skenario yang dilindungi `x-delivery-limit` (crash loop), jadi tes tetap membuktikan sifatnya. Perilaku nack-requeue dikunci `TestDeliveryLimit_NackRequeueDoesNotCount`.
+- **Komentar `Consumer.retry` dikoreksi**: tertulis "the broker's delivery limit counts it" untuk fallback `Nack(requeue)` saat publish retry gagal; ternyata tidak dihitung.
+- **Retry nyata hanya anak tangga 5 s** (30 s/2 m/10 m tidak dijalankan nyata; plan tidak menyediakan pemendek TTL, queue immutable); tangga penuh dikunci unit `TestProcess_RetryLadder_*` dan routing 5 s oleh `TestRetryQueue_5s_ReturnsOnlyToOriginQueue` (Task 4).
+- **`TestIdempotency_ForcedRedelivery_AfterCommitBeforeAck` memakai `CloseAllConnections()`** (koneksi consumer diputus broker) sebagai "kill" sebelum ack, bukan proses consumer kedua; handler baru dilepas setelah koneksi putus sehingga ack-nya gagal, dan `Run` yang reconnect menerima redelivery.

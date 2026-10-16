@@ -234,7 +234,8 @@ func (c *Consumer) onFailure(ctx context.Context, log *slog.Logger, d events.Del
 }
 
 // retry publishes a copy to the retry queue of the current level, then acks the original. A failed
-// publish nacks with requeue so the message is not lost (the broker's delivery limit counts it).
+// publish nacks with requeue so the message is not lost (RabbitMQ 4 does not count a nack requeue
+// toward x-delivery-limit, so the loop ends only when the publish works again).
 func (c *Consumer) retry(ctx context.Context, log *slog.Logger, msg amqp091.Delivery, d events.Delivery, cause error) {
 	lvl := RetryLevels[d.RetryCount]
 	h := cloneHeaders(msg.Headers)
