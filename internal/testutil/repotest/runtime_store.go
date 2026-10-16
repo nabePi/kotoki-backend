@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/nabePi/kotoki-backend/internal/conversation/rtstate"
+	"github.com/nabePi/kotoki-backend/internal/learner"
 )
 
 // RuntimeStoreSuite is the contract of rtstate.Store (spec 7.9), run against the in-memory fake
@@ -57,7 +58,11 @@ func RuntimeStoreSuite(t *testing.T, mk func(t *testing.T) rtstate.Store) {
 			require.False(t, found)
 			rt := rtstate.RT{Status: "ACTIVE", TurnState: "LISTENING", AcceptingTurns: true, ConnID: "c1", Connected: true, Generation: 2,
 				NextTurnSeq: 5, CurrentTurnID: uuid.New().String(), LastServerSeq: 9, LastDurableSeq: 8, ExpiresAtMS: 1_760_000_300_000,
-				PodID: "pod-a", Fence: 3, TurnsSinceAdjust: 1, UpdatedAtMS: 1_760_000_000_000}
+				PodID: "pod-a", Fence: 3, TurnsSinceAdjust: 1, UpdatedAtMS: 1_760_000_000_000,
+				// A computed difficulty always has FocusSkills set: learner.AdaptiveDifficulty writes a
+				// nil list as [], so only a non-nil one is identical after the JSON roundtrip of Redis.
+				Adaptive: learner.AdaptiveDifficulty{AlgorithmVersion: 1, ScenarioDifficulty: 3, GrammarComplexity: 2, Formality: "POLITE",
+					FocusSkills: []learner.Skill{learner.SkillGrammar}}}
 			require.NoError(t, s.WriteRT(ctx, sid, rt, ttl))
 			got, found, err := s.ReadRT(ctx, sid)
 			require.NoError(t, err)
