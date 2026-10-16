@@ -540,3 +540,8 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Tag build `e2e` saja, bukan `e2e && m5`:** harness M5 yang sudah merge memakai `//go:build e2e`; perintah gerbang `-tags 'e2e m5'` tetap menjalankannya.
 - **E5-varian memakai worker yang berjalan terus (`--handlers=sweeper,outbox`), bukan `worker run-job session_sweeper` berulang** (masalah terbuka T22): tiap `run-job` adalah proses baru dan `HeartbeatGuard` tidak pernah mencapai 45 s Redis sehat sehingga aturan (b) tidak jalan. `SWEEPER_INTERVAL=2s` agar tes tidak menunggu 10 s per tick; sesi harus menunggu ≥ 45 s sejak heartbeat terakhir (terukur 41 s setelah kill, sebab beat terakhir tertulis sebelum kill).
 - **Sesi pod-kill ditahan 70 s sebelum kill** supaya waktu sampai heartbeat terakhir melewati ambang 60 s (di bawah itu gangguan layanan gratis) dan kredit 30 s dapat diverifikasi; tes berdurasi ± 126 s.
+
+## M6 — Gerbang milestone
+- **`make test-cover-integration` diubah** (Makefile): menjalankan seluruh `./...` dengan `-coverpkg` ketiga adapter (sebelumnya hanya paket adapter tanpa `-coverpkg`, sehingga `internal/postgres` 38 % karena `sqlcgen` 0 % dan tes repository M6 di `internal/jobs`/`cmd/worker`/`test/integration` tak terhitung). Ambang `thresholds.integration.txt` tidak diubah; hasil amqp 89,0 %, postgres 80,2 %, redisstore 88,2 %.
+- **Tes M5 `TestContentRepoUpdateCharacterLockAndMerge` diperbaiki** (sumber waktu update = jam DB), asersi tidak dilonggarkan.
+- **Temuan pre-existing yang tidak diperbaiki (di luar M6):** `make test-cover` gagal pada `internal/session` 87,7 % < 90 % (sama di `main`); `make modelname-check` gagal (literal model M5); CI `integration` di `main` gagal pada `wsgateway.TestLimiterErrorFailsOpen`.

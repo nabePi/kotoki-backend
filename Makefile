@@ -99,9 +99,9 @@ test-cover:
 	$(GO) test -race -short -count=1 -coverprofile=coverage.out ./...
 	$(GO) run ./test/tools/covercheck -profile coverage.out -thresholds test/tools/covercheck/thresholds.txt
 
-test-cover-integration: ## cakupan adapter (postgres, redisstore, amqp) dari run integration, spec §14.8
-	@pkgs=""; for p in postgres redisstore amqp; do [ -d internal/$$p ] && pkgs="$$pkgs ./internal/$$p/..."; done; \
-	$(GO) test -race -count=1 -p 1 -tags=integration -timeout 20m -coverprofile=coverage.integration.out $$pkgs
+test-cover-integration: ## cakupan adapter (postgres, redisstore, amqp) dari seluruh run integration, spec §14.8
+	@pkgs=""; for p in postgres redisstore amqp; do [ -d internal/$$p ] && pkgs="$$pkgs,./internal/$$p/..."; done; \
+	$(GO) test -race -count=1 -p 1 -tags=integration -timeout 25m -coverpkg=$${pkgs#,} -coverprofile=coverage.integration.out ./...
 	$(GO) run ./test/tools/covercheck -profile coverage.integration.out -thresholds test/tools/covercheck/thresholds.integration.txt
 
 test-integration:
