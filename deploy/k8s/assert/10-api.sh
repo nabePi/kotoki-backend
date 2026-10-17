@@ -24,7 +24,7 @@ for ov in "${targets[@]}"; do
   expect "$ov" Deployment $D "$C.resources.limits.memory" 512Mi
   expect "$ov" Deployment $D "$C.env[] | select(.name == \"GOMEMLIMIT\") | .value" 450MiB
   expect "$ov" Deployment $D "$C.envFrom | map(.configMapRef.name // .secretRef.name) | join(\",\")" \
-    'kotoki-common-config,kotoki-api-config,kotoki-api-secrets'
+    'kotoki-common-config,kotoki-provider-config,kotoki-api-config,kotoki-api-secrets'
   expect "$ov" Deployment $D "$POD.priorityClassName" kotoki-default
   expect "$ov" Deployment $D "$POD.nodeSelector[\"kotoki.io/pool\"] // \"none\"" none
   expect "$ov" Deployment $D "$POD.tolerations // \"none\"" none

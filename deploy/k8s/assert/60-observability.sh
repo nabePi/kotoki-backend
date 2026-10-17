@@ -110,7 +110,9 @@ for ov in "${targets[@]}"; do
   for d in otel-collector-lb otel-collector-sampler; do
     comp="${d#otel-collector-}"
     expect "$ov" Deployment $d '.metadata.namespace' $NS
-    expect "$ov" Deployment $d '.spec.replicas' 2
+    # dev: 1 replika per Deployment (overlay dev, termasuk collector); overlay lain tetap 2
+    if [ "$ov" = dev ]; then REPL=1; else REPL=2; fi
+    expect "$ov" Deployment $d '.spec.replicas' "$REPL"
     expect "$ov" Deployment $d '.metadata.labels["app.kubernetes.io/name"]' otel-collector
     expect "$ov" Deployment $d '.metadata.labels["app.kubernetes.io/component"]' "$comp"
     expect "$ov" Deployment $d '.spec.selector.matchLabels["app.kubernetes.io/component"]' "$comp"

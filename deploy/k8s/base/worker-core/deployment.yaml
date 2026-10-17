@@ -43,6 +43,7 @@ spec:
             - {name: ops, containerPort: 9090}
           envFrom:
             - configMapRef: {name: kotoki-common-config}
+            - configMapRef: {name: kotoki-provider-config}
             - configMapRef: {name: kotoki-worker-core-config}
             - secretRef: {name: kotoki-worker-secrets}
           env:

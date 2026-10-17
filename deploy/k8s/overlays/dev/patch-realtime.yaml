@@ -1,0 +1,4 @@
+# Dev: tanpa node pool/toleration realtime; request kecil agar muat di laptop (limit tidak diubah).
+- {op: remove, path: /spec/template/spec/nodeSelector}
+- {op: remove, path: /spec/template/spec/tolerations}
+- {op: replace, path: /spec/template/spec/containers/0/resources/requests, value: {cpu: 250m, memory: 256Mi}}

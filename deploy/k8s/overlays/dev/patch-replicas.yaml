@@ -1,0 +1,3 @@
+# Semua Deployment: 1 replika; spread zona -> ScheduleAnyway (indeks 0 = zona; klaster dev tanpa zona).
+- {op: replace, path: /spec/replicas, value: 1}
+- {op: replace, path: /spec/template/spec/topologySpreadConstraints/0/whenUnsatisfiable, value: ScheduleAnyway}

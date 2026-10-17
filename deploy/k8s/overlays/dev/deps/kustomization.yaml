@@ -1,0 +1,24 @@
+# Dependency in-cluster dev. Semua objek di namespace kotoki-data (kecuali PodMonitor/PrometheusRule di
+# observability). Secret dummy; hanya overlay dev yang memasukkan direktori ini.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - redis.yaml
+  - rabbitmq.yaml
+  - observability.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+secretGenerator:
+  - name: postgres-credentials
+    namespace: kotoki-data
+    type: Opaque
+    literals:
+      - POSTGRES_PASSWORD=dev-only-password
+      - DATA_SOURCE_NAME=postgresql://kotoki:dev-only-password@localhost:5432/kotoki?sslmode=disable
+  - name: rabbitmq-definitions
+    namespace: kotoki-data
+    type: Opaque
+    files:
+      - definitions.json=rabbitmq-definitions.json

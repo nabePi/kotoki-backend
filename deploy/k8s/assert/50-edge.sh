@@ -50,9 +50,12 @@ np_peers() {
 
 for ov in "${targets[@]}"; do
   case "$ov" in
+    dev)     API_HOST=api.dev.kotoki.id;     RT_HOST=realtime.dev.kotoki.id;     SAN='*.dev.kotoki.id'     ;;
     staging) API_HOST=api.staging.kotoki.id; RT_HOST=realtime.staging.kotoki.id; SAN='*.staging.kotoki.id' ;;
-    *)       API_HOST=api.kotoki.id;         RT_HOST=realtime.kotoki.id;         SAN=''                  ;;
+    *)       API_HOST=api.kotoki.id;         RT_HOST=realtime.kotoki.id;         SAN=''                    ;;
   esac
+  # dev: RabbitMQ in-cluster tanpa TLS, sehingga worker juga boleh egress 5672 ke kotoki-data.
+  if [ "$ov" = dev ]; then WORKER_PORTS='53,443,4317,5432,5671,5672,6379,6380'; else WORKER_PORTS='53,443,4317,5432,5671,6379,6380'; fi
 
   # ---- Gateway: satu gateway, listener 80 (redirect) dan 443 (TLS terminate, satu secret SAN)
   expect "$ov" Gateway kotoki '.metadata.namespace' $GWNS
@@ -182,7 +185,7 @@ for ov in "${targets[@]}"; do
   np_ports "$ov" api       egress  "api egress"      '53,587,4317,5432,6379,6380'
   np_ports "$ov" realtime  egress  "realtime egress" '53,443,4317,5432,6379,6380'
   for w in worker-core worker-evaluation worker-memory worker-learner; do
-    np_ports "$ov" $w egress "$w egress" '53,443,4317,5432,5671,6379,6380'
+    np_ports "$ov" $w egress "$w egress" "$WORKER_PORTS"
   done
   # Job migrate/seed: hanya DNS + PostgreSQL
   np_ports "$ov" migrate egress "migrate egress" '53,4317,5432'
@@ -211,16 +214,19 @@ for ov in "${targets[@]}"; do
   np_peers "$ov" api      egress 587 "api SMTP ke internet (ipBlock)" 0.0.0.0/0
   np_peers "$ov" realtime egress 443 "realtime 443 ke internet (ipBlock)" 0.0.0.0/0
   np_peers "$ov" worker-evaluation egress 443 "worker 443 ke internet (ipBlock)" 0.0.0.0/0
-  # data store lewat ipBlock (CIDR dari overlay; base = TEST-NET placeholder); tidak ada namespaceSelector
-  if [ "$ov" = base ]; then
+  # data store lewat ipBlock (CIDR dari overlay; base = TEST-NET placeholder); tidak ada namespaceSelector.
+  # dev: dependency in-cluster di kotoki-data (namespaceSelector), RabbitMQ 5672 juga ke kotoki-data.
+  if [ "$ov" = base ]; then DS_PEER=192.0.2.0/24; elif [ "$ov" = dev ]; then DS_PEER=kotoki-data; else DS_PEER=''; fi
+  if [ -n "$DS_PEER" ]; then
     for c in api realtime worker-core migrate seed; do
-      np_peers "$ov" $c egress 5432 "$c PostgreSQL via ipBlock" 192.0.2.0/24
+      np_peers "$ov" $c egress 5432 "$c PostgreSQL data store" "$DS_PEER"
     done
     for c in api realtime worker-core; do
-      np_peers "$ov" $c egress 6379 "$c Redis via ipBlock" 192.0.2.0/24
-      np_peers "$ov" $c egress 6380 "$c Redis TLS via ipBlock" 192.0.2.0/24
+      np_peers "$ov" $c egress 6379 "$c Redis data store" "$DS_PEER"
+      np_peers "$ov" $c egress 6380 "$c Redis TLS data store" "$DS_PEER"
     done
   fi
+  if [ "$ov" = dev ]; then np_peers "$ov" worker-core egress 5672 "worker RabbitMQ dev (5672) ke kotoki-data" kotoki-data; fi
   # ipBlock internet mengecualikan RFC1918 (443 dan 587)
   CHECKS=$((CHECKS + 1))
   bad="$("$YQ" -r '[.[] | select(.kind == "NetworkPolicy") | .spec.egress // [] | .[] | select((.ports // []) | map(select(.port == 443 or .port == 587)) | length > 0) | .to[] | select(.ipBlock.cidr == "0.0.0.0/0") | select(((.ipBlock.except // []) | sort | join(",")) != "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16")] | length' "$(render "$ov")")" || bad=yq-gagal

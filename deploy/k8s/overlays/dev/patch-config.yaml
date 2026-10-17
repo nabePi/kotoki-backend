@@ -1,0 +1,24 @@
+# Konfigurasi non-rahasia dev. Nilai terlarang di staging/prod (APP_ENV=dev, WS_ALLOW_EMPTY_ORIGIN,
+# MAIL_MODE=log, origin http) hanya ada di sini.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kotoki-common-config
+data:
+  APP_ENV: dev
+  LOG_FORMAT: json
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kotoki-api-config
+data:
+  MAIL_MODE: log
+  REALTIME_PUBLIC_URL: wss://realtime.dev.kotoki.id
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kotoki-realtime-config
+data:
+  WS_ALLOW_EMPTY_ORIGIN: "true"

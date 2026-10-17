@@ -1,0 +1,16 @@
+# ConfigMap kotoki-provider-config: sakelar vendor, model, URL non-rahasia dan konkurensi provider
+# (spec §13.2.8, D-017). SATU ConfigMap dipakai api, realtime dan semua worker agar `*_LLM_ENABLED`
+# identik di realtime dan worker (§13.2.8, §13.5). Overlay menambahkan PROVIDER_MODE (dan knob fake)
+# lewat `behavior: merge`. Nama tanpa suffix hash karena Deployment merujuknya dengan nama tetap.
+# File provider.env harus berada di dalam direktori ini (kustomize menolak berkas di luar akar
+# dan symlink keluar).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: kotoki-provider-config
+    namespace: kotoki
+    envs: [provider.env]
+    options:
+      labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: config}

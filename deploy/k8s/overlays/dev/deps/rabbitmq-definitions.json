@@ -1,0 +1,22 @@
+{
+  "rabbit_version": "4.0.0",
+  "vhosts": [{"name": "/kotoki"}],
+  "users": [
+    {"name": "admin", "password": "dev-only-password", "tags": "administrator"},
+    {"name": "kotoki-worker", "password": "dev-only-password", "tags": ""},
+    {"name": "keda", "password": "dev-only-password", "tags": "monitoring"}
+  ],
+  "permissions": [
+    {"user": "admin", "vhost": "/kotoki", "configure": ".*", "write": ".*", "read": ".*"},
+    {"user": "kotoki-worker", "vhost": "/kotoki",
+     "configure": "^(kotoki\\.|evaluation\\.|memory\\.|learner\\.|summary\\.).*",
+     "write": "^(kotoki\\.|evaluation\\.|memory\\.|learner\\.|summary\\.).*",
+     "read": "^(kotoki\\.|evaluation\\.|memory\\.|learner\\.|summary\\.).*"}
+  ],
+  "topic_permissions": [],
+  "parameters": [],
+  "policies": [],
+  "queues": [],
+  "exchanges": [],
+  "bindings": []
+}

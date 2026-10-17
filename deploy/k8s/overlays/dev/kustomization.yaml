@@ -1,0 +1,127 @@
+# Overlay dev (spec §13.10.8): 1 replika per Deployment, tanpa ScaledObject, PROVIDER_MODE=fake,
+# Secret dev berisi NILAI DUMMY (hanya di overlay ini; staging/prod memakai ExternalSecret), dependency
+# in-cluster (deps/: PostgreSQL, Redis, RabbitMQ) di namespace kotoki-data. Image: tag `dev`
+# (build lokal `make docker-build`; sesuaikan `newName`/tag dengan registry klaster dev).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - deps
+patches:
+  # replika 1, zona -> ScheduleAnyway (klaster dev tanpa label zona), label versi `dev`
+  - target: {kind: Deployment}
+    path: patch-replicas.yaml
+  - target: {kind: (Deployment|Job)}
+    path: patch-version.yaml
+  # tanpa autoscaler: hapus semua ScaledObject
+  - target: {kind: ScaledObject, name: kotoki-api}
+    patch: |-
+      $patch: delete
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      metadata: {name: kotoki-api}
+  - target: {kind: ScaledObject, name: kotoki-realtime}
+    patch: |-
+      $patch: delete
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      metadata: {name: kotoki-realtime}
+  - target: {kind: ScaledObject, name: kotoki-worker-evaluation}
+    patch: |-
+      $patch: delete
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      metadata: {name: kotoki-worker-evaluation}
+  - target: {kind: ScaledObject, name: kotoki-worker-memory}
+    patch: |-
+      $patch: delete
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      metadata: {name: kotoki-worker-memory}
+  - target: {kind: ScaledObject, name: kotoki-worker-learner}
+    patch: |-
+      $patch: delete
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      metadata: {name: kotoki-worker-learner}
+  # realtime: tanpa node pool khusus, request CPU/memori kecil (limit tetap)
+  - target: {kind: Deployment, name: kotoki-realtime}
+    path: patch-realtime.yaml
+  # seed spesifik lingkungan
+  - target: {kind: Job, name: kotoki-seed}
+    patch: |-
+      - {op: replace, path: /spec/template/spec/containers/0/env/0/value, value: dev}
+  # data store lewat namespaceSelector kotoki-data (bukan ipBlock), dan RabbitMQ 5672 tanpa TLS
+  - path: patch-networkpolicy.yaml
+    target: {kind: NetworkPolicy, name: kotoki-api}
+  - path: patch-networkpolicy.yaml
+    target: {kind: NetworkPolicy, name: kotoki-realtime}
+  - path: patch-networkpolicy.yaml
+    target: {kind: NetworkPolicy, name: kotoki-jobs}
+  - path: patch-networkpolicy-worker.yaml
+    target: {kind: NetworkPolicy, name: kotoki-worker}
+  # host dan SAN dev
+  - path: patch-gateway.yaml
+    target: {kind: HTTPRoute, name: kotoki-api}
+  - target: {kind: HTTPRoute, name: kotoki-realtime}
+    patch: |-
+      - {op: replace, path: /spec/hostnames/0, value: realtime.dev.kotoki.id}
+  - target: {kind: Certificate, name: kotoki-edge}
+    patch: |-
+      - {op: replace, path: /spec/dnsNames, value: ["*.dev.kotoki.id"]}
+  - path: patch-config.yaml
+images:
+  - {name: ghcr.io/nabepi/kotoki-backend/api, newTag: dev}
+  - {name: ghcr.io/nabepi/kotoki-backend/realtime, newTag: dev}
+  - {name: ghcr.io/nabepi/kotoki-backend/worker, newTag: dev}
+  - {name: ghcr.io/nabepi/kotoki-backend/migrate, newTag: dev}
+  - {name: ghcr.io/nabepi/kotoki-backend/seed, newTag: dev}
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  # PROVIDER_MODE=fake + knob latensi fake (§13.12.2); sakelar vendor tidak dipakai di mode fake.
+  - name: kotoki-provider-config
+    namespace: kotoki
+    behavior: merge
+    literals:
+      - PROVIDER_MODE=fake
+      - FAKE_PRIMARY_STT_LATENCY_MS=250
+      - FAKE_PRIMARY_LLM_LATENCY_MS=500
+      - FAKE_LLM_TOKEN_INTERVAL_MS=30
+      - FAKE_PRIMARY_TTS_LATENCY_MS=300
+# Secret DEV: nilai dummy yang jelas ("dev-only"), menunjuk dependency in-cluster tanpa TLS.
+# Tidak pernah dipakai di staging/prod; dua-duanya memakai ExternalSecret.
+secretGenerator:
+  - name: kotoki-api-secrets
+    namespace: kotoki
+    type: Opaque
+    literals:
+      - DB_URL=postgres://kotoki:dev-only-password@postgres.kotoki-data:5432/kotoki?sslmode=disable
+      - REDIS_URL=redis://redis.kotoki-data:6379/0
+      # base64 dari "dev-only-not-a-secret-dev-only-not-a-secret-0123456789" (>= 32 byte)
+      - AUTH_JWT_SECRET=ZGV2LW9ubHktbm90LWEtc2VjcmV0LWRldi1vbmx5LW5vdC1hLXNlY3JldC0wMTIzNDU2Nzg5
+  - name: kotoki-realtime-secrets
+    namespace: kotoki
+    type: Opaque
+    literals:
+      - DB_URL=postgres://kotoki:dev-only-password@postgres.kotoki-data:5432/kotoki?sslmode=disable
+      - REDIS_URL=redis://redis.kotoki-data:6379/0
+  - name: kotoki-worker-secrets
+    namespace: kotoki
+    type: Opaque
+    literals:
+      - DB_URL=postgres://kotoki:dev-only-password@postgres.kotoki-data:5432/kotoki?sslmode=disable
+      - REDIS_URL=redis://redis.kotoki-data:6379/0
+      - RABBITMQ_URL=amqp://kotoki-worker:dev-only-password@rabbitmq.kotoki-data:5672/%2Fkotoki
+  - name: kotoki-migrate-secrets
+    namespace: kotoki
+    type: Opaque
+    literals:
+      - DB_MIGRATE_URL=postgres://kotoki:dev-only-password@postgres.kotoki-data:5432/kotoki?sslmode=disable
+  # URI amqp lengkap untuk TriggerAuthentication kotoki-keda-rabbitmq (ScaledObject dihapus di dev;
+  # Secret tetap ada agar TriggerAuthentication tidak menggantung).
+  - name: kotoki-keda-secrets
+    namespace: kotoki
+    type: Opaque
+    literals:
+      - host=amqp://keda:dev-only-password@rabbitmq.kotoki-data:5672/%2Fkotoki

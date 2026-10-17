@@ -38,7 +38,7 @@ for ov in "${targets[@]}"; do
     expect "$ov" Deployment $D "$C.env[] | select(.name == \"WORKER_HTTP_ADDR\") | .value" ':9090'
     expect "$ov" Deployment $D "$C.env | map(select(.name == \"HTTP_ADDR\" or .name == \"OPS_ADDR\")) | length" 0
     expect "$ov" Deployment $D "$C.envFrom | map(.configMapRef.name // .secretRef.name) | join(\",\")" \
-      "kotoki-common-config,$CM,kotoki-worker-secrets"
+      "kotoki-common-config,kotoki-provider-config,$CM,kotoki-worker-secrets"
     expect "$ov" Deployment $D "$POD.priorityClassName" kotoki-default
     expect "$ov" Deployment $D "$POD.nodeSelector[\"kotoki.io/pool\"] // \"none\"" none
     expect "$ov" Deployment $D "$POD.tolerations // \"none\"" none

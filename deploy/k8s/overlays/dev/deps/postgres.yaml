@@ -1,0 +1,79 @@
+# PostgreSQL 17 + pgvector, satu node, HANYA untuk dev (staging/prod = managed HA). Password dummy dari
+# Secret postgres-credentials (kustomization.yaml). Sidecar exporter menghasilkan pg_up (alert PostgresDown).
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: kotoki-data
+  labels: {app.kubernetes.io/name: postgres, app.kubernetes.io/part-of: kotoki-dev-deps}
+spec:
+  selector: {app.kubernetes.io/name: postgres}
+  ports:
+    - {name: postgres, port: 5432, targetPort: postgres}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: kotoki-data
+  labels: {app.kubernetes.io/name: postgres, app.kubernetes.io/part-of: kotoki-dev-deps}
+spec:
+  replicas: 1
+  serviceName: postgres
+  selector:
+    matchLabels: {app.kubernetes.io/name: postgres}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: postgres, app.kubernetes.io/part-of: kotoki-dev-deps}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg17
+          ports:
+            - {name: postgres, containerPort: 5432}
+          env:
+            - {name: POSTGRES_DB, value: kotoki}
+            - {name: POSTGRES_USER, value: kotoki}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          readinessProbe:
+            exec: {command: [pg_isready, -U, kotoki, -d, kotoki]}
+            periodSeconds: 5
+          livenessProbe:
+            exec: {command: [pg_isready, -U, kotoki, -d, kotoki]}
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+        - name: exporter
+          image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+          ports:
+            - {name: pg-metrics, containerPort: 9187}
+          env:
+            - name: DATA_SOURCE_NAME
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: DATA_SOURCE_NAME}}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities: {drop: [ALL]}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 5Gi}}

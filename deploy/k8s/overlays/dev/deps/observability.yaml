@@ -1,0 +1,38 @@
+# Observability dependency dev: scrape exporter/plugin dan recording rule per lingkungan
+# (kotoki:postgres_cpu_utilization:ratio, kotoki:redis_memory_utilization:ratio) yang dipakai alert
+# PostgresCPUHigh/RedisMemoryHigh (base/observability/prometheusrule.yaml). pg_up/redis_up datang dari
+# sidecar exporter. Staging/prod mendefinisikan rule yang sama di infra-recording-rules.yaml.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kotoki-data
+  namespace: observability
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames: [kotoki-data]
+  selector:
+    matchLabels: {app.kubernetes.io/part-of: kotoki-dev-deps}
+  podMetricsEndpoints:
+    - {port: pg-metrics, path: /metrics, interval: 15s}
+    - {port: redis-metrics, path: /metrics, interval: 15s}
+    - {port: rabbit-metrics, path: /metrics, interval: 15s}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kotoki-infra-recording
+  namespace: observability
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: kotoki.infra.recording
+      rules:
+        - record: kotoki:postgres_cpu_utilization:ratio
+          expr: |-
+            sum(rate(container_cpu_usage_seconds_total{namespace="kotoki-data",pod="postgres-0",container="postgres"}[5m]))
+            / sum(kube_pod_container_resource_limits{namespace="kotoki-data",pod="postgres-0",container="postgres",resource="cpu"})
+        - record: kotoki:redis_memory_utilization:ratio
+          expr: redis_memory_used_bytes / redis_memory_max_bytes

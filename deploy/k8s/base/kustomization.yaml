@@ -8,6 +8,7 @@ resources:
   - namespace.yaml
   - priorityclasses.yaml
   - configmap-common.yaml
+  - provider-config
   - api/configmap.yaml
   - api/deployment.yaml
   - api/service.yaml

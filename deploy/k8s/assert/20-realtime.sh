@@ -30,7 +30,7 @@ for ov in "${targets[@]}"; do
   expect "$ov" Deployment $D "$C.env[] | select(.name == \"OPS_ADDR\") | .value" ':9090'
   expect "$ov" Deployment $D "$C.env[] | select(.name == \"HTTP_ADDR\") | .value" ':8081'
   expect "$ov" Deployment $D "$C.envFrom | map(.configMapRef.name // .secretRef.name) | join(\",\")" \
-    'kotoki-common-config,kotoki-realtime-config,kotoki-realtime-secrets'
+    'kotoki-common-config,kotoki-provider-config,kotoki-realtime-config,kotoki-realtime-secrets'
   expect "$ov" Deployment $D "$POD.priorityClassName" kotoki-realtime-high
   expect "$ov" Deployment $D "$POD.nodeSelector[\"kotoki.io/pool\"]" realtime
   expect "$ov" Deployment $D "$POD.tolerations | length" 1
