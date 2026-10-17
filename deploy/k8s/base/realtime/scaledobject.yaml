@@ -1,0 +1,33 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kotoki-realtime
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: realtime}
+spec:
+  scaleTargetRef: {name: kotoki-realtime}
+  minReplicaCount: 3
+  maxReplicaCount: 20
+  fallback: {failureThreshold: 3, replicas: 15}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - {type: Pods, value: 4, periodSeconds: 60}
+            - {type: Percent, value: 100, periodSeconds: 60}
+          selectPolicy: Max
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          policies:
+            - {type: Pods, value: 1, periodSeconds: 300}
+  triggers:
+    - type: prometheus
+      metricType: AverageValue
+      metadata:
+        serverAddress: http://kube-prometheus-stack-prometheus.observability:9090
+        query: sum(kotoki_realtime_sessions_active{namespace="kotoki"})
+        threshold: "70"
+    - type: cpu
+      metricType: Utilization
+      metadata: {value: "70"}

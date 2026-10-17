@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -310,4 +311,38 @@ func TestTerms(t *testing.T) {
 	v, err := New(srv.URL).Terms(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "2026-10", v)
+}
+
+func TestWithClientIP_SetsForwardedForOnEveryCall(t *testing.T) {
+	var got []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/auth/terms", func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("X-Forwarded-For"))
+		writeJSON(w, 200, map[string]any{"terms_version": "2026-10"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	_, err := New(srv.URL, WithClientIP("10.7.0.9")).Terms(context.Background())
+	require.NoError(t, err)
+	_, err = New(srv.URL).Terms(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"10.7.0.9", ""}, got, "only a client built WithClientIP sends the header")
+	require.Equal(t, "10.7.0.9", New(srv.URL, WithClientIP("10.7.0.9")).ClientIP())
+}
+
+func TestAPIError_CarriesRetryAfter(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/auth/terms", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "7")
+		writeJSON(w, 429, map[string]any{"error": map[string]any{"code": "RATE_LIMITED", "message": "slow down", "request_id": "r"}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	_, err := New(srv.URL).Terms(context.Background())
+	var api *APIError
+	require.ErrorAs(t, err, &api)
+	require.Equal(t, 429, api.Status)
+	require.Equal(t, 7*time.Second, api.RetryAfter)
 }

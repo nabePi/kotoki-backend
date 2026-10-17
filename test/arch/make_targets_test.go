@@ -19,6 +19,10 @@ func TestMakeTargetsExist(t *testing.T) {
 		"cli", "docker-build", "load",
 		// M5 (fixture audio §14.5)
 		"fixtures", "fixtures16k",
+		// M10-T1 (perkakas validasi manifest & operasi)
+		"k8s-tools", "k8s-build", "k8s-validate", "k8s-assert", "prom-check", "k8s-test",
+		"dashboards", "dashboards-check", "load-local", "verify", "chaos-local", "capacity",
+		"readiness-check", "pins-check",
 	}
 	for _, tg := range targets {
 		t.Run(tg, func(t *testing.T) {

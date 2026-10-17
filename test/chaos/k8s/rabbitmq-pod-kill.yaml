@@ -1,0 +1,18 @@
+# F7 (spec 13.13.2): one of three RabbitMQ nodes dies. Chaos Mesh alternative to
+# `kubectl delete pod kotoki-rabbitmq-server-0 -n kotoki-data` (what `kotoki-chaos run F7` runs);
+# quorum queues keep their majority and publish/consume continue.
+# MANUAL GATE (Task 24): needs a cluster with the RabbitMQ Cluster Operator and Chaos Mesh.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: kotoki-f7-rabbitmq-pod-kill
+  namespace: kotoki-data
+  labels: {app.kubernetes.io/part-of: kotoki-chaos}
+spec:
+  action: pod-kill
+  mode: one
+  duration: 30s
+  selector:
+    namespaces: [kotoki-data]
+    labelSelectors:
+      app.kubernetes.io/name: kotoki-rabbitmq

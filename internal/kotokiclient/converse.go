@@ -409,7 +409,7 @@ func (r *runner) connect(ctx context.Context, resume bool) error {
 		return fmt.Errorf("kotokiclient: realtime ticket: %w", err)
 	}
 	t0 := r.clk.Now()
-	rc, err := Dial(ctx, r.spec.WSURL, ticket, r.spec.Origin, WithDialClock(r.clk), WithDialIDs(r.ids))
+	rc, err := Dial(ctx, r.spec.WSURL, ticket, r.spec.Origin, WithDialClock(r.clk), WithDialIDs(r.ids), WithDialClientIP(r.c.ClientIP()))
 	if err != nil {
 		return err
 	}

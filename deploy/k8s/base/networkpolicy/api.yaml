@@ -1,0 +1,29 @@
+# kotoki-api: ingress 8080 dari gateway; egress PostgreSQL, Redis, SMTP 587. TANPA egress 443 internet
+# dan TANPA RabbitMQ (spec §13.10.7). CIDR data store = placeholder TEST-NET-1 (192.0.2.0/24) di base;
+# overlay wajib menggantinya dengan subnet DB/Redis managed (pins-check menolak placeholder di prod).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kotoki-api
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: api}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: envoy-gateway-system}}
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    - to:
+        - ipBlock: {cidr: 192.0.2.0/24}
+      ports:
+        - {protocol: TCP, port: 5432}
+        - {protocol: TCP, port: 6379}
+        - {protocol: TCP, port: 6380}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+      ports:
+        - {protocol: TCP, port: 587}

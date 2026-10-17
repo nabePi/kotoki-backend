@@ -1,0 +1,141 @@
+# Tier 1 collector: menerima OTLP dari aplikasi (Service `otel-collector`, 4317/4318) dan meneruskan
+# per traceID ke tier sampler. Tail sampling di dua replika tanpa routing per trace akan memecah
+# trace (keputusan plan; spec §13.1 hanya menyebut "Deployment, 2 replika").
+# Tidak ada sampling, atribut, atau exporter debug di tier ini.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-lb-config
+  namespace: observability
+  labels: &labels
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: lb
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc: {endpoint: 0.0.0.0:4317}
+          http: {endpoint: 0.0.0.0:4318}
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 180
+        spike_limit_mib: 40
+      batch: {}
+    exporters:
+      loadbalancing:
+        routing_key: traceID
+        protocol:
+          otlp:
+            timeout: 5s
+            tls: {insecure: true}   # hop dalam cluster; NetworkPolicy namespace observability dikelola platform
+        resolver:
+          dns:
+            hostname: otel-collector-sampler-headless.observability
+            port: "4317"
+    extensions:
+      health_check: {endpoint: "0.0.0.0:13133"}
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [loadbalancing]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector-lb
+  namespace: observability
+  labels: &labels
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: lb
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 25%, maxUnavailable: 0}
+  selector:
+    matchLabels: *labels
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      priorityClassName: kotoki-default
+      terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: *labels}
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.120.0
+          args:
+            - --config=/etc/otelcol/config.yaml
+          ports:
+            - {name: otlp-grpc, containerPort: 4317}
+            - {name: otlp-http, containerPort: 4318}
+            - {name: health, containerPort: 13133}
+          env:
+            - {name: GOMEMLIMIT, value: 200MiB}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          livenessProbe:
+            httpGet: {path: /, port: health}
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /, port: health}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          volumeMounts:
+            - {name: config, mountPath: /etc/otelcol, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: otel-collector-lb-config}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels: &labels
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: lb
+spec:
+  selector: *labels
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: otlp-grpc}
+    - {name: otlp-http, port: 4318, targetPort: otlp-http}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: otel-collector-lb
+  namespace: observability
+  labels: &labels
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: lb
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: *labels

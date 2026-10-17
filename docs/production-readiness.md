@@ -1,0 +1,45 @@
+# Production readiness checklist (spec §13.14.1)
+
+Dokumen ini diperiksa mesin oleh `make readiness-check` (`test/tools/readinesscheck`): 29 butir (27 butir §13.14.1 + 2 butir turunan dari plan M10 Task 23), tiap butir tepat satu baris, status sah, bukti tidak kosong, dan path yang dikutip harus ada di repo.
+
+**Status.**
+- `DONE`: dibuktikan oleh tes atau dokumen di repo (bukti berupa path).
+- `LOCAL-VERIFIED`: dijalankan di mesin pengembang/CI lokal; perintahnya tertulis di kolom bukti. Bukan bukti untuk lingkungan staging atau produksi.
+- `MANUAL-GATE`: hanya dapat dibuktikan di klaster atau dengan vendor nyata; langkahnya adalah MG-n di MANUAL GATE M10 Task 24 (`docs/superpowers/plans/2026-10-13-kotoki-backend-M10-hardening.md`; daftar operator di `docs/pending-manual-tasks.md`).
+- `EXTERNAL`: butuh vendor atau tim infrastruktur/organisasi di luar repo.
+
+**Milestone dinyatakan siap produksi hanya bila semua butir `DONE`.** Saat ini gerbang kode M10 selesai, sedangkan butir `MANUAL-GATE` dan `EXTERNAL` di bawah belum dikerjakan: tidak ada butir yang ditandai `DONE` tanpa bukti.
+
+MG-1 staging bring-up dan gateway; MG-2 gate load G1-G4b dan soak; MG-3 gate Real (20 CCU); MG-4 chaos F1-F16 di staging; MG-5 ops go-live (a restore drill, b uji alert ke pager, c trace end-to-end, d sampel log Loki, e rollback, f ASVS dan privacy policy).
+
+| Butir | Status | Bukti |
+|---|---|---|
+| Database: Migration up/down teruji; Job migrate di pipeline | MANUAL-GATE | MG-1 (Job migrate di pipeline berjalan pertama kali di staging). Sudah ada: `migrations/migrations_integration_test.go` (up/down/up, bertahap, `TestFullDownLeavesNothing`), `deploy/k8s/base/migrate/job.yaml`, `deploy/k8s/hack/deploy.sh` (tahap migrate), `make migrations-check` |
+| Database: Managed PG HA + PITR aktif; restore drill pertama sukses dan tercatat | MANUAL-GATE | MG-5 (a): PITR ke instance sementara + `kotoki-verify`, waktu restore dicatat; HA/PITR managed PG disediakan tim infra. Prosedur: `docs/runbook/R5-postgres.md` |
+| Database: Role dan CONNECTION LIMIT (§13.3.2); REVOKE ledger/audit diterapkan | EXTERNAL | Pembuatan role DB per binary dan `CONNECTION LIMIT` dilakukan tim infra (prasyarat MG-1). `REVOKE UPDATE, DELETE` ledger dan audit sudah ada di migrasi: `migrations/000013_balance_ledger.up.sql`, `migrations/000018_admin_audit.up.sql` |
+| Database: pg_stat_statements aktif; 10 query teratas di-review | MANUAL-GATE | MG-5 (f): review 10 query teratas di staging; kueri ada di `docs/runbook/R5-postgres.md`; panel "Top 10 queries by P95 duration" di dashboard `Data stores` |
+| Database: balance_reconcile berjalan dan 0 pelanggaran | MANUAL-GATE | MG-2: `kotoki-verify` 0 pelanggaran setelah tiap gate dan `kotoki_balance_invariant_violations` = 0 di staging. Kode dan tes: `internal/jobs/balance_reconcile_integration_test.go`, `test/load/verify/queries.go`; penanganan: `docs/runbook/R7-balance-invariant.md` |
+| Realtime: Gate G1-G4b + soak lulus; laporan di docs/loadtest/ | MANUAL-GATE | MG-2. Yang ada hanya G1 lokal (100 VU, provider fake): `docs/loadtest/2026-10-17-g1-local.md`; model kapasitas tanpa angka terukur: `docs/loadtest/2026-10-17-capacity.md` |
+| Realtime: Skenario F1-F16 lulus | MANUAL-GATE | MG-4. Lokal (skala kecil, compose) F1-F6, F8, F13, F15, F16 sudah dijalankan: `docs/loadtest/2026-10-17-chaos-local.md`; F7, F9-F12 dan asersi alert hanya bisa di staging |
+| Realtime: WS 65 menit via gateway stabil; drain/rollout tanpa sesi FAILED | MANUAL-GATE | MG-1 (WS 65 menit, `rollout restart` saat ada sesi) dan MG-4 (F10). Manifest: `deploy/k8s/base/gateway/httproute-realtime.yaml`, `docs/runbook/R11-gateway-certificate.md` |
+| Messaging: RabbitMQ 3 node quorum, TLS, alarm memori/disk termonitor | MANUAL-GATE | MG-1. Manifest dan serah-terima: `deploy/k8s/overlays/prod/rabbitmq.yaml`, `docs/ops/rabbitmq.md`; alert `RabbitMQNodeDown`/`RabbitMQAlarm` di `deploy/k8s/base/observability/prometheusrule.yaml` (diuji `promtool`, belum menyala di klaster) |
+| Messaging: Retry dan DLQ teruji; prosedur replay DLQ terdokumentasi | LOCAL-VERIFIED | `go test -race -count=1 -tags=integration ./internal/amqp/...` (retry, DLQ, `ReplayDLQ`); `internal/amqp/dlq_replay_integration_test.go`; reconnect broker: `internal/amqp/conn_integration_test.go` (`TestConfirmPublisher_IsOpenAfterReconnect_WithoutSendDuringOutage`); prosedur: `docs/runbook/R3-async-pipeline.md`, `docs/ops/rabbitmq.md` |
+| Providers: Benchmark provider (D-041) selesai; model diisi di config prod | EXTERNAL | M9 Task 21-22 belum dikerjakan (butuh penutur asli, kunci vendor, harga resmi); lihat `docs/pending-manual-tasks.md`. `deploy/config/provider.env` belum ada; staging/prod memakai default spec di `deploy/k8s/base/provider-config/provider.env` |
+| Providers: Voice TTS Jepang per karakter terverifikasi | EXTERNAL | M9 Task 23 + MG-3: `seed/env/{staging,prod}/0900_voice_ids.sql` dan penilaian Kansai belum ada; lihat `docs/pending-manual-tasks.md` |
+| Providers: Kuota tertulis dari vendor | EXTERNAL | Kuota STT >= 1.100 stream, LLM >= 5.000 RPM dan 12 juta TPM, TTS >= 200 stream dari vendor; prasyarat MG-3. Daftar: `docs/pending-manual-tasks.md` |
+| Providers: Zero-retention / no-training diaktifkan di akun vendor | EXTERNAL | Pengaturan akun vendor (termasuk DeepSeek bila dipakai); prasyarat MG-3. Daftar: `docs/pending-manual-tasks.md` |
+| Providers: Sakelar vendor produksi terverifikasi (tepat satu STT, satu LLM, minimal satu TTS) | MANUAL-GATE | MG-3: keputusan vendor aktif oleh pemilik produk; `make pins-check ARGS=--prod` menolak anotasi `kotoki.io/provider-selection=REPLACE_PRODUCT_OWNER_DECISION`. Validasi startup sudah dites (`config.Validate`); prosedur ganti vendor: `docs/runbook/R10-vendor-switch.md` |
+| Providers: Gate Real lulus K1 | MANUAL-GATE | MG-3 (M9 selesai, kunci vendor, `kotoki-load run --gate real`); K1 P95 <= 1,5 s nyata belum diukur |
+| Security: ASVS L2 checklist direview | MANUAL-GATE | MG-5 (f): review dan tanda tangan butir MANUAL. Checklist (butir AUTO berbukti tes): `docs/security/asvs-l2.md` |
+| Security: Secret via ESO; tidak ada secret di Git/image (gitleaks di CI) | MANUAL-GATE | MG-1 (ESO `SecretSynced` di klaster, secret/variabel GitHub, gitleaks di CI GitHub). Manifest: `deploy/k8s/overlays/prod/externalsecrets.yaml`; aturan: `.gitleaks.toml` |
+| Security: Rate limit aktif; uji authz (resource user lain ditolak) | LOCAL-VERIFIED | `go test -race -count=1 -tags=e2e -run 'TestSecurity_(HorizontalAuthz\|LoginRateLimit)' ./test/e2e/`; `test/e2e/security_e2e_test.go` |
+| Security: Rotasi refresh token dan reuse detection teruji | DONE | Tes unit M2 pada service auth: `internal/auth/service_refresh_test.go` (`TestRefreshRotates`, `TestRefreshReuseOutsideGrace`, `TestRefreshWithinGrace`, `TestRefreshConcurrent`) |
+| Security: Consent registrasi dan delete account end-to-end teruji | LOCAL-VERIFIED | `go test -race -count=1 -tags=e2e -run 'TestPrivacy_(TermsGate\|AccountDeletion_EndToEnd)' ./test/e2e/`; `test/e2e/privacy_e2e_test.go` |
+| Security: Privacy policy menyebut provider pihak ketiga, retensi, backup 14 hari | EXTERNAL | Naskah kebijakan privasi ditulis pemilik produk/legal; kode hanya membawa versinya (`PRIVACY_POLICY_VERSION` di `deploy/k8s/base/configmap-common.yaml`); tinjau di MG-5 (f) |
+| Operations: Dashboard (§13.7.4) dan alert (§13.7.5) aktif; uji alert ke pager | MANUAL-GATE | MG-5 (b). Artefak: `deploy/k8s/base/observability/prometheusrule.yaml` (34 alert), `deploy/k8s/base/observability/alerts_test.yaml` (`promtool test rules`), enam dashboard di `deploy/k8s/base/observability/dashboards/` |
+| Operations: Trace end-to-end realtime ke RabbitMQ ke worker terlihat di Tempo | MANUAL-GATE | MG-5 (c); collector dua tier: `deploy/k8s/base/observability/otel-collector-sampler.yaml` |
+| Operations: Log bebas PII/transcript (sampling 1 jam log staging di-review) | MANUAL-GATE | MG-5 (d). Pemeriksaan otomatis lokal: `test/e2e/privacy_e2e_test.go` (`TestPrivacy_LogsContainNoPII`) |
+| Operations: Runbook (§13.14.2) tersedia; on-call rotation ditetapkan | EXTERNAL | Runbook R1-R11 sudah ada (`docs/runbook/R1-turn-latency.md` sampai `docs/runbook/R11-gateway-certificate.md`, dicek `go test ./test/tools/readinesscheck/...`); rotasi on-call adalah keputusan organisasi |
+| Operations: Prosedur rollback: kubectl rollout undo + migration expand-only | MANUAL-GATE | MG-5 (e): `kubectl rollout undo deployment/kotoki-api` di staging. Pemeriksaan expand-only: `make migrations-check` (`test/tools/migcheck/main.go`); prosedur ada di `docs/runbook/R1-turn-latency.md` |
+| Turunan: Restore drill bulanan terjadwal | EXTERNAL | Penjadwalan dan pemilik latihan restore bulanan ditetapkan tim ops; prosedur: `docs/runbook/R5-postgres.md` (MG-5 a untuk latihan pertama) |
+| Turunan: Gate Real mengukur biaya per menit | MANUAL-GATE | MG-3. Sumber: `kotoki_provider_cost_usd_total` dan `kotoki_session_cost_per_minute_usd`; harness `test/load` belum menuliskan biaya per menit ke laporan (dicatat di `docs/implementation-deviations.md`, M10-T23) sehingga dibaca manual dari Prometheus/dashboard `Providers` |

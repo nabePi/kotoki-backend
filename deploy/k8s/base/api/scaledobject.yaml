@@ -1,0 +1,18 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kotoki-api
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: api}
+spec:
+  scaleTargetRef: {name: kotoki-api}
+  minReplicaCount: 2
+  maxReplicaCount: 6
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+  triggers:
+    - type: cpu
+      metricType: Utilization
+      metadata: {value: "65"}

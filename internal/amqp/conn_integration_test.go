@@ -115,6 +115,31 @@ func TestConn_ReconnectsAfterForcedClose(t *testing.T) {
 	assert.Equal(t, 2, adm.QueueMessages(events.QueueLearner))
 }
 
+// The outbox publisher gates every batch on IsOpen and never calls Send while the broker is down,
+// so a channel that died with the connection is still held when the connection is back. IsOpen
+// must then be true (Send recreates the channel); the F8 chaos run showed the publisher stuck
+// forever, spinning on ErrBrokerUnavailable, when IsOpen stayed false for a dead channel.
+func TestConfirmPublisher_IsOpenAfterReconnect_WithoutSendDuringOutage(t *testing.T) {
+	url := testutil.NewRabbitMQ(t)
+	adm := testutil.RabbitMQAdmin(t, url)
+	conn := dial(t, url)
+	pub := amqp.NewConfirmPublisher(conn, 5*time.Second)
+	require.NoError(t, pub.PublishConfirmed(context.Background(), amqp.ExchangeEvents, "evaluation.completed", msg()))
+
+	adm.CloseAllConnections()
+	require.Eventually(t, func() bool { return !conn.Healthy() }, 5*time.Second, 50*time.Millisecond)
+	assert.False(t, pub.IsOpen(), "no connection, nothing to publish on")
+	// deliberately no Send here: that is what the outbox publisher does during an outage
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, conn.Reconnect(ctx))
+
+	assert.True(t, pub.IsOpen(), "healthy connection: the dead channel is recreated by the next Send")
+	require.NoError(t, pub.PublishConfirmed(context.Background(), amqp.ExchangeEvents, "evaluation.completed", msg()))
+	assert.Equal(t, 2, adm.QueueMessages(events.QueueLearner))
+}
+
 // syncBuf is a goroutine-safe log sink.
 type syncBuf struct {
 	mu sync.Mutex

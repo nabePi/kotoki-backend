@@ -1,0 +1,17 @@
+# Sisi klien Gateway: TLS minimal 1.2, ALPN h2 + http/1.1 (WebSocket upgrade butuh HTTP/1.1),
+# idle 120 s. Harus berada di namespace yang sama dengan Gateway.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: kotoki
+  namespace: envoy-gateway-system
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: gateway}
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: Gateway, name: kotoki}
+  tls:
+    minVersion: "1.2"
+    alpnProtocols: [h2, http/1.1]
+  timeout:
+    http:
+      idleTimeout: 120s

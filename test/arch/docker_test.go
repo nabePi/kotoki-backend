@@ -36,7 +36,7 @@ func run(t *testing.T, name string, args ...string) (string, string, error) {
 func TestDockerImagesBuild(t *testing.T) {
 	engine := containerEngine(t)
 	root := testutil.ModuleRoot(t)
-	for _, b := range []string{"api", "realtime", "worker", "migrate"} {
+	for _, b := range []string{"api", "realtime", "worker", "migrate", "seed"} {
 		t.Run("build "+b, func(t *testing.T) {
 			_, stderr, err := run(t, engine, "build", "-f", root+"/deploy/docker/"+b+".Dockerfile",
 				"--build-arg", "VERSION=test", "--build-arg", "GIT_COMMIT=test", "-t", "kotoki/"+b+":test", root)

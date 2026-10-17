@@ -19,11 +19,19 @@ GOLANGCI_LINT_VERSION := v2.14.0
 VERSION         ?= $(shell git describe --tags --always --dirty)
 GIT_COMMIT      ?= $(shell git rev-parse --short HEAD)
 N               ?= 1
+K8S_ENVS        ?= dev staging prod
+K8S_TOOLS       := $(CURDIR)/bin/tools
+# base selalu dibangun (assert Task 2-9 membaca out/k8s/base.yaml). Sejak Task 11 ketiga overlay (K8S_ENVS) wajib
+# ada: overlay yang hilang menggagalkan `make k8s-build` (K8S_REQUIRE_OVERLAYS=0 hanya untuk pengembangan lokal).
+K8S_REQUIRE_OVERLAYS ?= 1
+K8S_BUILT       := base $(foreach e,$(K8S_ENVS),$(if $(wildcard deploy/k8s/overlays/$(e)/kustomization.yaml),$(e)))
 
 .PHONY: env up up-obs down reset migrate-up migrate-down migrate-create seed promote-admin \
         sqlc sqlc-check tidy-check migrations-check modelname-check arch-check assets-apology fixtures fixtures16k \
-        test test-cover test-cover-integration test-integration test-e2e test-live e2e-real lint vuln \
-        run-api run-realtime run-worker build cli docker-build load
+        test test-cover test-cover-integration test-integration test-e2e test-live e2e-real lint vuln sec-check \
+        run-api run-realtime run-worker build cli docker-build load \
+        k8s-tools k8s-build k8s-validate k8s-assert prom-check k8s-test dashboards dashboards-check \
+        load-local verify chaos-local capacity readiness-check pins-check
 
 env:            ## salin .env.example → .env (tidak menimpa)
 	@test -f .env || cp .env.example .env
@@ -122,6 +130,15 @@ lint:           ## golangci-lint $(GOLANGCI_LINT_VERSION); pasang: GOBIN=$$PWD/b
 vuln:
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
+# gitleaks >= v8.25 (the [[allowlists]] tables of .gitleaks.toml) and trivy are not Go tools: install them
+# on PATH or in bin/tools. A missing tool fails the target (exit 2); it is never skipped silently.
+sec-check:      ## govulncheck + gitleaks (repo + history, .gitleaks.toml) + trivy fs (CRITICAL,HIGH dengan fix)
+	$(MAKE) vuln
+	@PATH="$(CURDIR)/bin/tools:$$PATH"; command -v gitleaks >/dev/null || { echo "sec-check: gitleaks tidak terpasang (butuh >= v8.25)" >&2; exit 2; }; \
+	  gitleaks detect --config .gitleaks.toml --redact --no-banner
+	@PATH="$(CURDIR)/bin/tools:$$PATH"; command -v trivy >/dev/null || { echo "sec-check: trivy tidak terpasang" >&2; exit 2; }; \
+	  trivy fs --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 .
+
 run-api:
 	$(GO) run ./cmd/api
 
@@ -140,9 +157,83 @@ cli:
 	CGO_ENABLED=1 $(GO) build -o bin/kotoki-cli ./cmd/kotoki-cli
 
 docker-build:
-	for b in api realtime worker migrate; do \
+	for b in api realtime worker migrate seed; do \
 	  $(CONTAINER_ENGINE) build -f deploy/docker/$$b.Dockerfile --build-arg VERSION=$(VERSION) \
 	    --build-arg GIT_COMMIT=$(GIT_COMMIT) -t kotoki/$$b:$(VERSION) . || exit 1; done
 
 load:           ## make load ARGS="--vus 20 --hold 5m"
 	CGO_ENABLED=1 $(GO) run ./test/load/cmd/kotoki-load $(ARGS)
+
+# ---- M10: manifest Kubernetes (validasi offline; tidak butuh cluster) ----
+k8s-tools:      ## unduh kustomize/kubeconform/promtool/yq/actionlint (versi: deploy/k8s/hack/tools.env) ke bin/tools
+	deploy/k8s/hack/install-tools.sh
+
+k8s-build:      ## kustomize build base + tiap overlay -> out/k8s/<nama>.yaml
+	@mkdir -p out/k8s
+	@echo "kustomize build base"
+	@$(K8S_TOOLS)/kustomize build deploy/k8s/base > out/k8s/base.yaml.tmp || { rm -f out/k8s/base.yaml.tmp; exit 1; }
+	@mv out/k8s/base.yaml.tmp out/k8s/base.yaml
+	@for e in $(K8S_ENVS); do \
+	  if [ ! -f deploy/k8s/overlays/$$e/kustomization.yaml ]; then \
+	    [ "$(K8S_REQUIRE_OVERLAYS)" != 1 ] || { echo "k8s-build: overlay deploy/k8s/overlays/$$e belum ada"; exit 1; }; \
+	    echo "k8s-build: SKIP overlay $$e (K8S_REQUIRE_OVERLAYS=0)"; continue; \
+	  fi; \
+	  echo "kustomize build overlays/$$e"; \
+	  $(K8S_TOOLS)/kustomize build deploy/k8s/overlays/$$e > out/k8s/$$e.yaml.tmp || { rm -f out/k8s/$$e.yaml.tmp; exit 1; }; \
+	  mv out/k8s/$$e.yaml.tmp out/k8s/$$e.yaml; \
+	done
+
+k8s-validate: k8s-build  ## kubeconform strict (skema default + katalog CRD datreeio)
+	deploy/k8s/hack/validate.sh $(K8S_BUILT)
+
+k8s-assert: k8s-build  ## deploy/k8s/assert/*.sh (berbasis yq); tanpa skrip = gagal, bukan lulus
+	@set -e; n=0; for s in deploy/k8s/assert/*.sh; do \
+	  [ -e "$$s" ] || break; n=$$((n+1)); echo "== $$s"; bash "$$s"; done; \
+	  [ "$$n" -gt 0 ] || { echo "k8s-assert: tidak ada skrip di deploy/k8s/assert/"; exit 1; }
+
+prom-check:     ## promtool check rules + test rules (alert, Task 8)
+	@[ -f deploy/k8s/base/observability/prometheusrule.yaml ] || { echo "prom-check: prometheusrule.yaml belum ada (Task 8)"; exit 1; }
+	@[ -x deploy/k8s/hack/extract-rules.sh ] || { echo "prom-check: deploy/k8s/hack/extract-rules.sh belum ada (Task 8)"; exit 1; }
+	deploy/k8s/hack/extract-rules.sh
+	$(K8S_TOOLS)/promtool check rules out/rules.yaml
+	$(K8S_TOOLS)/promtool test rules deploy/k8s/base/observability/alerts_test.yaml
+	@for f in deploy/k8s/overlays/staging/infra-recording-rules.yaml deploy/k8s/overlays/prod/infra-recording-rules.yaml deploy/k8s/overlays/dev/deps/observability.yaml; do \
+	  $(K8S_TOOLS)/yq e 'select(.kind == "PrometheusRule") | .spec' $$f > out/rules-infra.yaml && $(K8S_TOOLS)/promtool check rules out/rules-infra.yaml || exit 1; done
+
+k8s-test: k8s-build k8s-validate k8s-assert prom-check  ## build + validate + assert + prom-check + test Go render overlay
+	$(GO) test -race -count=1 -tags k8s ./deploy/...
+
+DASHBOARD_DIR := deploy/k8s/base/observability/dashboards
+dashboards:     ## render 6 dashboard Grafana dari test/tools/dashgen (Task 9)
+	@[ -d test/tools/dashgen ] || { echo "dashboards: test/tools/dashgen belum ada (Task 9)"; exit 1; }
+	$(GO) run ./test/tools/dashgen -out $(DASHBOARD_DIR)
+
+dashboards-check: dashboards  ## gagal bila JSON di repo berbeda dari hasil render
+	@git diff --exit-code -- $(DASHBOARD_DIR) && [ -z "$$(git ls-files --others --exclude-standard -- $(DASHBOARD_DIR))" ] \
+	  || { echo "dashboards-check: $(DASHBOARD_DIR) tidak sinkron; jalankan make dashboards dan commit"; exit 1; }
+
+# ---- M10: harness load / verify / chaos / kapasitas (diisi Task 15-22) ----
+load-local:     ## G1 lokal terhadap compose (Task 19)
+	@[ -x test/load/local/run.sh ] || { echo "load-local: test/load/local/run.sh belum ada (Task 19)"; exit 1; }
+	test/load/local/run.sh $(ARGS)
+
+verify:         ## invarian pasca-run §13.12.6; make verify ARGS="--db ..." (Task 18)
+	@[ -d test/load/cmd/kotoki-verify ] || { echo "verify: test/load/cmd/kotoki-verify belum ada (Task 18)"; exit 1; }
+	$(GO) run ./test/load/cmd/kotoki-verify $(ARGS)
+
+chaos-local:    ## make chaos-local SCEN=F1 ARGS="--vus 20 --time-scale 0.1"; SCEN="F1 F2" untuk beberapa (Task 21)
+	@[ -x test/chaos/local/run.sh ] || { echo "chaos-local: test/chaos/local/run.sh belum ada (Task 21)"; exit 1; }
+	@[ -n "$(SCEN)" ] || { echo "chaos-local: SCEN wajib, contoh: make chaos-local SCEN=F1"; exit 1; }
+	test/chaos/local/run.sh $(SCEN) $(ARGS)
+
+capacity:       ## tabel kapasitas §13.11; make capacity ARGS="--ccu 1000" (Task 22)
+	@[ -d test/load/capacity ] || { echo "capacity: test/load/capacity belum ada (Task 22)"; exit 1; }
+	$(GO) run ./test/load/cmd/kotoki-load capacity $(ARGS)
+
+readiness-check: ## validasi docs/production-readiness.md (Task 23)
+	@[ -d test/tools/readinesscheck ] || { echo "readiness-check: test/tools/readinesscheck belum ada (Task 23)"; exit 1; }
+	$(GO) run ./test/tools/readinesscheck
+
+pins-check:     ## gagal bila <PIN>/placeholder tertinggal; make pins-check ARGS=--prod (Task 11/23)
+	@[ -x deploy/k8s/hack/pins-check.sh ] || { echo "pins-check: deploy/k8s/hack/pins-check.sh belum ada (Task 11)"; exit 1; }
+	deploy/k8s/hack/pins-check.sh $(ARGS)

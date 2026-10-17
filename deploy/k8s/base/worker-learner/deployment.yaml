@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kotoki-worker-learner
+  labels: &labels
+    app.kubernetes.io/name: kotoki
+    app.kubernetes.io/component: worker-learner
+    app.kubernetes.io/version: REPLACE_SHA
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 25%, maxUnavailable: 0}
+  selector:
+    matchLabels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: worker-learner}
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      priorityClassName: kotoki-default
+      terminationGracePeriodSeconds: 70   # WORKER_SHUTDOWN_GRACE 60 + 10
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: {matchLabels: {app.kubernetes.io/component: worker-learner}}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: {app.kubernetes.io/component: worker-learner}}
+      containers:
+        - name: worker
+          image: ghcr.io/nabepi/kotoki-backend/worker:REPLACED_BY_KUSTOMIZE
+          command: [/usr/local/bin/worker]
+          args: ["--handlers=learner,summary"]
+          ports:
+            - {name: ops, containerPort: 9090}
+          envFrom:
+            - configMapRef: {name: kotoki-common-config}
+            - configMapRef: {name: kotoki-provider-config}
+            - configMapRef: {name: kotoki-worker-learner-config}
+            - secretRef: {name: kotoki-worker-secrets}
+          env:
+            - {name: GOMEMLIMIT, value: "220MiB"}
+            - {name: WORKER_HTTP_ADDR, value: ":9090"}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "500m", memory: 256Mi}
+          startupProbe:
+            httpGet: {path: /healthz, port: ops}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: ops}
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: ops}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              sleep: {seconds: 5}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

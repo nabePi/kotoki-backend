@@ -164,3 +164,50 @@ func TestParseWorkerHandlers(t *testing.T) {
 	_, err = ParseWorkerHandlers("outbox,bogus", "")
 	require.ErrorContains(t, err, "bogus")
 }
+
+// validStrictEnv is a configuration every binary accepts for APP_ENV=staging or prod (spec 13.2.13).
+func validStrictEnv(t testing.TB, appEnv string, overrides ...map[string]string) map[string]string {
+	t.Helper()
+	base := map[string]string{
+		"APP_ENV": appEnv,
+		"DB_URL":  "postgres://u:p@db:5432/kotoki?sslmode=verify-full",
+		// rediss:// and amqps:// are mandatory outside local/dev
+		"REDIS_URL":               "rediss://:p@redis:6380/0",
+		"RABBITMQ_URL":            "amqps://u:p@mq:5671/%2Fkotoki",
+		"CORS_ALLOWED_ORIGINS":    "https://app.kotoki.id",
+		"WS_ALLOWED_ORIGINS":      "https://app.kotoki.id",
+		"MAIL_MODE":               "smtp",
+		"SMTP_HOST":               "smtp.example.com",
+		"PASSWORD_RESET_URL_BASE": "https://app.kotoki.id/reset-password",
+		"PROVIDER_MODE":           "real",
+	}
+	return testutil.MinimalEnv(t, append([]map[string]string{base}, overrides...)...)
+}
+
+// TestProviderModeFakeRejectedInProd is spec 13.2.13: PROVIDER_MODE=fake (or PROVIDER_MODE_<CAP>=fake)
+// is refused when APP_ENV=prod in every binary, allowed in staging (load tests) and in dev.
+func TestProviderModeFakeRejectedInProd(t *testing.T) {
+	load := map[string]func(map[string]string) error{
+		"api":      func(e map[string]string) error { _, err := loadAPI(e); return err },
+		"realtime": func(e map[string]string) error { _, err := loadRealtime(e); return err },
+		"worker":   func(e map[string]string) error { _, err := loadWorker(e); return err },
+	}
+	for bin, fn := range load {
+		t.Run(bin+"/prod real ok", func(t *testing.T) {
+			require.NoError(t, fn(validStrictEnv(t, "prod")))
+		})
+		for _, name := range []string{"PROVIDER_MODE", "PROVIDER_MODE_STT", "PROVIDER_MODE_LLM", "PROVIDER_MODE_TTS", "PROVIDER_MODE_EVALUATION", "PROVIDER_MODE_EMBEDDING"} {
+			t.Run(bin+"/prod "+name+"=fake", func(t *testing.T) {
+				err := fn(validStrictEnv(t, "prod", map[string]string{name: "fake"}))
+				require.ErrorContains(t, err, name)
+				require.NotContains(t, err.Error(), "p@db", "no credentials in the message")
+			})
+		}
+		t.Run(bin+"/staging fake ok (load test)", func(t *testing.T) {
+			require.NoError(t, fn(validStrictEnv(t, "staging", map[string]string{"PROVIDER_MODE": "fake"})))
+		})
+		t.Run(bin+"/dev fake ok", func(t *testing.T) {
+			require.NoError(t, fn(testutil.MinimalEnv(t, map[string]string{"APP_ENV": "dev", "PROVIDER_MODE": "fake"})))
+		})
+	}
+}

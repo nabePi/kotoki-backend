@@ -1,0 +1,1 @@
+- {op: replace, path: /spec/hostnames/0, value: api.dev.kotoki.id}

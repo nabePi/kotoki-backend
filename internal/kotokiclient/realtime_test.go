@@ -362,3 +362,19 @@ func TestAbortDropsTheTransportWithoutCloseHandshake(t *testing.T) {
 	require.NoError(t, rc.Abort())
 	require.NoError(t, rc.Close(websocket.StatusNormalClosure, ""))
 }
+
+func TestDialWithClientIP_SendsForwardedFor(t *testing.T) {
+	ch := make(chan string, 2)
+	url := wsServer(t, func(_ context.Context, c *websocket.Conn, r *http.Request) {
+		ch <- r.Header.Get("X-Forwarded-For")
+		_ = c.Close(websocket.StatusNormalClosure, "bye")
+	})
+	rc, err := Dial(context.Background(), url, "t", "", WithDialClientIP("10.7.0.9"))
+	require.NoError(t, err)
+	<-rc.Done()
+	require.Equal(t, "10.7.0.9", <-ch)
+	rc, err = Dial(context.Background(), url, "t", "")
+	require.NoError(t, err)
+	<-rc.Done()
+	require.Empty(t, <-ch)
+}

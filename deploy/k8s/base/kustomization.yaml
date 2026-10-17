@@ -1,0 +1,65 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Namespace kotoki lewat transformer unsetOnly (bukan field `namespace:`): objek gateway menetapkan
+# envoy-gateway-system sendiri dan tidak boleh ditimpa.
+transformers:
+  - namespace-transformer.yaml
+resources:
+  - namespace.yaml
+  - priorityclasses.yaml
+  - configmap-common.yaml
+  - provider-config
+  - api/configmap.yaml
+  - api/deployment.yaml
+  - api/service.yaml
+  - api/pdb.yaml
+  - api/scaledobject.yaml
+  - realtime/configmap.yaml
+  - realtime/deployment.yaml
+  - realtime/service.yaml
+  - realtime/pdb.yaml
+  - realtime/scaledobject.yaml
+  - worker-core/configmap.yaml
+  - worker-core/deployment.yaml
+  - worker-core/pdb.yaml
+  - worker-evaluation/configmap.yaml
+  - worker-evaluation/deployment.yaml
+  - worker-evaluation/pdb.yaml
+  - worker-evaluation/scaledobject.yaml
+  - worker-memory/configmap.yaml
+  - worker-memory/deployment.yaml
+  - worker-memory/pdb.yaml
+  - worker-memory/scaledobject.yaml
+  - worker-learner/configmap.yaml
+  - worker-learner/deployment.yaml
+  - worker-learner/pdb.yaml
+  - worker-learner/scaledobject.yaml
+  - worker-keda-auth.yaml
+  - migrate/job.yaml
+  - seed/job.yaml
+  - gateway/gateway.yaml
+  - gateway/httproute-api.yaml
+  - gateway/httproute-realtime.yaml
+  - gateway/httproute-redirect.yaml
+  - gateway/backendtrafficpolicy.yaml
+  - gateway/clienttrafficpolicy.yaml
+  - gateway/certificate.yaml
+  - networkpolicy/default-deny.yaml
+  - networkpolicy/common.yaml
+  - networkpolicy/api.yaml
+  - networkpolicy/realtime.yaml
+  - networkpolicy/worker.yaml
+  - observability
+# Tag diganti overlay (tag = git SHA; prod = digest). REPLACE_SHA sengaja tidak valid agar
+# base mentah tidak pernah ter-deploy.
+images:
+  - name: ghcr.io/nabepi/kotoki-backend/api
+    newTag: REPLACE_SHA
+  - name: ghcr.io/nabepi/kotoki-backend/realtime
+    newTag: REPLACE_SHA
+  - name: ghcr.io/nabepi/kotoki-backend/worker
+    newTag: REPLACE_SHA
+  - name: ghcr.io/nabepi/kotoki-backend/migrate
+    newTag: REPLACE_SHA
+  - name: ghcr.io/nabepi/kotoki-backend/seed
+    newTag: REPLACE_SHA

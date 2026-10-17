@@ -1,0 +1,4 @@
+# Peer data store (ipBlock TEST-NET-1 di base) -> placeholder subnet managed DB/Redis. Bukan CIDR sah
+# sehingga `kubectl apply` menolaknya (gagal tertutup) sampai MANUAL GATE mengisi CIDR nyata; pins-check
+# --prod juga menolaknya. Aturan 0 di tiap policy selalu peer data store (api/realtime/worker/jobs).
+- {op: replace, path: /spec/egress/0/to/0/ipBlock/cidr, value: REPLACE_DATA_STORE_CIDR}

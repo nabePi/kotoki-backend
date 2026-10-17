@@ -1,0 +1,8 @@
+# Worker: data store -> kotoki-data; RabbitMQ dev tanpa TLS (5672) selain 5671 di kotoki-data.
+- op: replace
+  path: /spec/egress/0/to/0
+  value:
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kotoki-data}}
+- op: add
+  path: /spec/egress/1/ports/-
+  value: {protocol: TCP, port: 5672}

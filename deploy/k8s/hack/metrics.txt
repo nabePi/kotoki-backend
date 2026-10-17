@@ -1,0 +1,133 @@
+# Daftar metrik kanonik kotoki_* (nama dasar; histogram tanpa _bucket/_sum/_count).
+# Sumber kebenaran adalah kode: TestMetricsFileMatchesCode membandingkan berkas ini dengan metrik yang
+# benar-benar didaftarkan di internal/ dan cmd/ (go run ./test/tools/metricref/cmd/metricref), dalam
+# dua arah. Metrik baru di kode wajib ditambahkan di sini (dan alert/dashboard hanya boleh memakai
+# nama dari daftar ini).
+# Awalan '?' = terdaftar di kode tetapi tidak punya deret sampai suatu jalur terjadi: jalur gagal
+# (counter kegagalan/fallback), job terjadwal berinterval jam/hari dengan jitter awal acak 0..interval
+# (balance_reconcile, partition_maintenance), atau perilaku yang tidak ada di PROVIDER_MODE=fake
+# (biaya vendor, header rate limit vendor, rotasi stream STT). Kontrak metrik lokal (Task 19,
+# `kotoki-load run --metrics-file`) tidak menuntut deretnya muncul; alasan tiap nama yang ditandai
+# saat Task 19 ada di docs/implementation-deviations.md (M10-T19).
+# Metrik eksternal (pg_up, redis_up, rabbitmq_*, kube_*, certmanager_*) bukan kotoki_* dan tidak di sini.
+
+
+# API, auth, sesi, konten (M2, M3)
+kotoki_auth_events_total
+?kotoki_content_opening_fallback_total
+?kotoki_content_resolve_errors_total
+kotoki_content_validation_issues
+?kotoki_content_voice_fallback_missing_total
+kotoki_http_request_duration_seconds
+kotoki_http_requests_total
+?kotoki_ratelimit_backend_errors_total
+kotoki_ratelimit_rejected_total
+kotoki_session_cost_per_minute_usd
+kotoki_session_cost_usd
+kotoki_sessions_created_total
+kotoki_sessions_ended_total
+
+# Realtime (M5, spec §7.14)
+?kotoki_llm_content_filtered_total
+kotoki_realtime_ai_sentence_limit_total
+kotoki_realtime_audio_frames_in_total
+kotoki_realtime_audio_frames_out_total
+kotoki_realtime_bargein_stop_seconds
+kotoki_realtime_bargein_total
+kotoki_realtime_connections_total
+kotoki_realtime_difficulty_adjustments_total
+kotoki_realtime_drain_duration_seconds
+kotoki_realtime_draining
+?kotoki_realtime_fence_lost_total
+kotoki_realtime_frame_processing_seconds
+kotoki_realtime_generation_cancelled_total
+kotoki_realtime_generation_goroutine_exit_seconds
+kotoki_realtime_llm_first_sentence_seconds
+kotoki_realtime_llm_first_token_seconds
+kotoki_realtime_llm_truncated_total
+kotoki_realtime_outbound_queue_depth
+?kotoki_realtime_outbound_transient_dropped_total
+kotoki_realtime_playback_finished_missing_total
+kotoki_realtime_prompt_token_estimate_ratio
+kotoki_realtime_prompt_tokens
+?kotoki_realtime_protocol_violations_total
+?kotoki_realtime_provider_fallback_total
+kotoki_realtime_reconnect_gap_seconds
+kotoki_realtime_reconnect_total
+kotoki_realtime_rolling_summary_total
+kotoki_realtime_server_overhead_seconds
+kotoki_realtime_session_capacity
+kotoki_realtime_sessions_active
+?kotoki_realtime_slow_consumer_total
+kotoki_realtime_stt_discarded_commits_total
+kotoki_realtime_stt_final_seconds
+kotoki_realtime_tts_first_audio_seconds
+kotoki_realtime_turn_end_reason_total
+kotoki_realtime_turn_end_to_first_audio_seconds
+kotoki_realtime_turn_resumed_total
+kotoki_realtime_turns_total
+kotoki_realtime_ws_close_total
+
+# Provider (M4, spec §8.8)
+kotoki_provider_active
+kotoki_provider_circuit_state
+?kotoki_provider_circuit_transitions_total
+?kotoki_provider_concurrency_rejected_total
+kotoki_provider_concurrency_wait_seconds
+?kotoki_provider_cost_usd_total
+?kotoki_provider_errors_total
+?kotoki_provider_fallback_total
+kotoki_provider_latency_seconds
+?kotoki_provider_ratelimit_remaining
+kotoki_provider_requests_total
+?kotoki_provider_stream_disconnects_total
+kotoki_provider_usage_total
+?kotoki_stt_replay_seconds
+?kotoki_stt_rotations_total
+?kotoki_tts_epoch_restarts_total
+
+# Worker: outbox, consumer, job, sweeper, partisi (M6, spec §9.7.9, §9.9.10)
+?kotoki_balance_invariant_violations
+kotoki_consumer_inflight
+kotoki_consumer_messages_total
+kotoki_consumer_processing_seconds
+kotoki_job_duration_seconds
+kotoki_job_items_total
+kotoki_job_last_success_timestamp_seconds
+kotoki_job_runs_total
+kotoki_outbox_failed
+kotoki_outbox_oldest_pending_age_seconds
+kotoki_outbox_pending
+?kotoki_outbox_publish_failures_total
+kotoki_outbox_published_total
+?kotoki_partition_months_ahead
+?kotoki_partitions_created_total
+?kotoki_partitions_dropped_total
+kotoki_rabbitmq_queue_messages
+kotoki_sweeper_actions_total
+kotoki_sweeper_heartbeat_checks_suspended
+?kotoki_sweeper_mass_heartbeat_loss_total
+
+# Evaluasi, memory, learner, summary (M7, M8)
+?kotoki_evaluation_findings_dropped_total
+kotoki_evaluation_latency_seconds
+kotoki_evaluation_llm_calls_total
+?kotoki_learner_replays_total
+kotoki_memory_apply_total
+?kotoki_memory_candidates_rejected_total
+kotoki_memory_candidates_total
+kotoki_memory_cleanup_deleted_total
+kotoki_memory_context_tokens
+kotoki_memory_extraction_duration_seconds
+?kotoki_memory_retrieval_degraded_total
+kotoki_memory_retrieval_duration_seconds
+?kotoki_summary_failures_total
+
+# Infrastruktur klien (M1, spec §13.7.3)
+kotoki_db_pool_acquire_wait_seconds
+kotoki_db_pool_acquired_conns
+kotoki_db_pool_idle_conns
+kotoki_db_pool_max_conns
+kotoki_db_query_duration_seconds
+?kotoki_redis_command_errors_total
+?kotoki_redis_pool_timeouts_total

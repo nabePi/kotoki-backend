@@ -48,6 +48,17 @@ func (c Common) validate(v *validator) {
 	if c.LogTranscripts && c.strict() {
 		v.fail("LOG_TRANSCRIPTS", "true is rejected when APP_ENV is staging or prod")
 	}
+	if c.AppEnv == "prod" {
+		for _, m := range []struct{ name, val string }{
+			{"PROVIDER_MODE", c.ProviderMode}, {"PROVIDER_MODE_STT", c.ProviderModeSTT}, {"PROVIDER_MODE_LLM", c.ProviderModeLLM},
+			{"PROVIDER_MODE_TTS", c.ProviderModeTTS}, {"PROVIDER_MODE_EVALUATION", c.ProviderModeEvaluation},
+			{"PROVIDER_MODE_EMBEDDING", c.ProviderModeEmbedding},
+		} {
+			if m.val == "fake" {
+				v.fail(m.name, "fake is rejected when APP_ENV is prod")
+			}
+		}
+	}
 }
 
 // strict reports whether APP_ENV is staging or prod.

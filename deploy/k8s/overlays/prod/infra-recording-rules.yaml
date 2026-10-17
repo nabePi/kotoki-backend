@@ -1,0 +1,46 @@
+# Recording rule infra prod (dipakai alert PostgresCPUHigh/RedisMemoryHigh di base) dan penjaga agar alert
+# pg_up/redis_up/recording rule tidak diam-diam buta. Data store prod = managed service: ekspresi
+# REPLACE_CLOUD_METRIC HARUS dipetakan ke metrik cloud (MANUAL GATE, Task 24); pins-check --prod menolak
+# placeholder. Exporter pg_up/redis_up (postgres_exporter/redis_exporter atau integrasi cloud) dipasang
+# platform; penjaga `absent(...)` menyala bila deret tidak ada.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kotoki-infra-recording
+  namespace: observability
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: kotoki.infra.recording
+      rules:
+        - record: kotoki:postgres_cpu_utilization:ratio
+          expr: REPLACE_CLOUD_METRIC   # CPU utilization PostgreSQL managed, rasio 0..1
+        - record: kotoki:redis_memory_utilization:ratio
+          expr: REPLACE_CLOUD_METRIC   # memory utilization Redis managed, rasio 0..1
+    - name: kotoki.infra.guards
+      rules:
+        - alert: PostgresExporterMissing
+          expr: absent(pg_up)
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "pg_up tidak ada: alert PostgresDown buta (exporter PostgreSQL belum terpasang)"
+            runbook: R5
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R5-postgres.md
+        - alert: RedisExporterMissing
+          expr: absent(redis_up)
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "redis_up tidak ada: alert RedisDown buta (exporter Redis belum terpasang)"
+            runbook: R4
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R4-redis.md
+        - alert: InfraRecordingRuleMissing
+          expr: absent(kotoki:postgres_cpu_utilization:ratio) or absent(kotoki:redis_memory_utilization:ratio)
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "recording rule CPU PostgreSQL / memori Redis tidak menghasilkan deret: alert saturasi data store buta"
+            runbook: R5
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R5-postgres.md

@@ -1,0 +1,5 @@
+# Peer data store (ipBlock placeholder TEST-NET) -> namespace kotoki-data (dependency in-cluster).
+- op: replace
+  path: /spec/egress/0/to/0
+  value:
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kotoki-data}}

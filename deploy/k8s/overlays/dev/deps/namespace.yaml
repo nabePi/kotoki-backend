@@ -1,0 +1,10 @@
+# Namespace dependency in-cluster dev. NetworkPolicy namespace kotoki mengizinkan egress ke sini lewat
+# namespaceSelector kubernetes.io/metadata.name=kotoki-data (staging/prod: Rabbitmq di namespace yang sama).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kotoki-data
+  labels:
+    app.kubernetes.io/name: kotoki
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest

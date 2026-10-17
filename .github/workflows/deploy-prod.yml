@@ -1,0 +1,91 @@
+name: deploy-prod
+# Deploy produksi pada tag v* (spec §14.12.2). Image dirujuk lewat digest dari artifact digests-* run ci untuk tag itu.
+# Rollback = jalankan ulang lewat workflow_dispatch dengan tag rilis sebelumnya. Environment `production` wajib
+# punya required reviewers (pengaturan repository, MG-1): job deploy menunggu persetujuan.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag rilis yang di-deploy ulang (rollback), mis. v1.4.2
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.ci.outputs.sha }}
+      run_id: ${{ steps.ci.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - id: ci
+        name: Find the successful ci run for the tag commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]] || { echo "tag tidak valid" >&2; exit 1; }
+          sha="$(git rev-parse HEAD)"
+          for _ in $(seq 1 100); do
+            row="$(gh run list --repo "$REPO" --workflow ci.yml --commit "$sha" --json databaseId,status,conclusion --jq '.[0] // empty | "\(.databaseId) \(.status) \(.conclusion)"')"
+            read -r id status conclusion <<<"${row:-"- none -"}"
+            if [ "$status" = completed ]; then
+              [ "$conclusion" = success ] || { echo "ci run $id berakhir $conclusion" >&2; exit 1; }
+              echo "sha=$sha" >> "$GITHUB_OUTPUT"
+              echo "run_id=$id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "ci tidak selesai dalam batas waktu" >&2
+          exit 1
+  deploy:
+    needs: [resolve]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: production
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+    env:
+      DEPLOY_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digests-*
+          merge-multiple: true
+          path: digests
+          run-id: ${{ needs.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5.2.0
+        with: {version: v1.31.4}
+      - run: make k8s-tools
+      - name: Configure cluster access
+        env:
+          KUBECONFIG_B64: ${{ secrets.PROD_KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$KUBECONFIG_B64" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+      - name: Deploy by digest (migrate, seed, apply, rollout)
+        run: deploy/k8s/hack/deploy.sh prod "$DEPLOY_SHA" digests

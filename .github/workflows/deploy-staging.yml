@@ -1,0 +1,47 @@
+name: deploy-staging
+# Deploy otomatis ke staging setelah ci sukses di main (spec §14.12.2). Image bertag git SHA.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: staging
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with: {go-version: "1.27", cache: true}
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libopus-dev libopusfile-dev
+      - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5.2.0
+        with: {version: v1.31.4}
+      - run: make k8s-tools cli
+      - name: Configure cluster access
+        env:
+          KUBECONFIG_B64: ${{ secrets.STAGING_KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$KUBECONFIG_B64" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+      - name: Deploy (migrate, seed, apply, rollout, smoke)
+        env:
+          SMOKE_EMAIL: ${{ secrets.STAGING_SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
+          SMOKE_API_URL: https://api.staging.kotoki.id
+          SMOKE_WS_URL: wss://realtime.staging.kotoki.id/api/v1/realtime
+          SMOKE_ORIGIN: ${{ vars.STAGING_ORIGIN }}
+        run: deploy/k8s/hack/deploy.sh staging "$DEPLOY_SHA"

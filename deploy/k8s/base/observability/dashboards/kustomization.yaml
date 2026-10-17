@@ -1,0 +1,19 @@
+# Dashboard Grafana (spec §13.7.4) sebagai ConfigMap; sidecar kube-prometheus-stack memuat setiap
+# ConfigMap berlabel grafana_dashboard=1. JSON dihasilkan oleh `make dashboards` (jangan edit tangan;
+# `make dashboards-check` gagal bila berbeda). Nama tanpa hash agar tautan/provisioning stabil.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+configMapGenerator:
+  - name: kotoki-dashboards
+    namespace: observability
+    files:
+      - kotoki-overview.json
+      - realtime-latency.json
+      - providers.json
+      - async.json
+      - data-stores.json
+      - business-integrity.json
+    options:
+      disableNameSuffixHash: true
+      labels:
+        grafana_dashboard: "1"

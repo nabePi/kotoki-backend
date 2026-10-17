@@ -53,7 +53,11 @@ type DialOption func(*dialConfig)
 type dialConfig struct {
 	clk clock.Clock
 	ids idgen.Generator
+	ip  string
 }
+
+// WithDialClientIP sends X-Forwarded-For: ip on the handshake (see WithClientIP).
+func WithDialClientIP(ip string) DialOption { return func(d *dialConfig) { d.ip = ip } }
 
 // WithDialClock sets the clock for receive times (AudioFrame.At, Received.At) and for the ts
 // of sent events.
@@ -109,6 +113,9 @@ func Dial(ctx context.Context, wsURL, ticket, origin string, opts ...DialOption)
 	hdr := http.Header{}
 	if origin != "" {
 		hdr.Set("Origin", origin)
+	}
+	if cfg.ip != "" {
+		hdr.Set("X-Forwarded-For", cfg.ip)
 	}
 	ws, resp, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{
 		HTTPHeader:      hdr,

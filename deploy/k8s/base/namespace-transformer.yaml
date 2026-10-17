@@ -1,0 +1,9 @@
+apiVersion: builtin
+kind: NamespaceTransformer
+metadata:
+  name: kotoki-namespace
+  namespace: kotoki
+unsetOnly: true
+fieldSpecs:
+  - path: metadata/namespace
+    create: true

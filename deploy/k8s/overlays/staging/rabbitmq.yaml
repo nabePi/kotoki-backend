@@ -1,0 +1,59 @@
+# RabbitMQ staging: RabbitmqCluster (Cluster Operator) 3 node di namespace kotoki-data, queue quorum, TLS 5671
+# (spec §13.1, §13.8). Vhost /kotoki, pengguna kotoki-worker/keda/admin dan izinnya mengikuti
+# docs/ops/rabbitmq.md (milik M6) dan TIDAK didefinisikan di sini. MANUAL GATE: ClusterIssuer
+# `kotoki-internal-ca` (platform) dan kepercayaan CA di pod worker untuk amqps.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kotoki-data
+  labels:
+    app.kubernetes.io/name: kotoki
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kotoki-rabbitmq
+  namespace: kotoki-data
+  labels: {app.kubernetes.io/name: kotoki-rabbitmq, app.kubernetes.io/part-of: kotoki}
+spec:
+  secretName: kotoki-rabbitmq-tls
+  dnsNames:
+    - kotoki-rabbitmq.kotoki-data.svc
+    - kotoki-rabbitmq.kotoki-data.svc.cluster.local
+    - "*.kotoki-rabbitmq-nodes.kotoki-data"
+  issuerRef: {name: kotoki-internal-ca, kind: ClusterIssuer}
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+---
+apiVersion: rabbitmq.com/v1beta1
+kind: RabbitmqCluster
+metadata:
+  name: kotoki-rabbitmq
+  namespace: kotoki-data
+  labels: {app.kubernetes.io/name: kotoki-rabbitmq, app.kubernetes.io/part-of: kotoki}
+  annotations:
+    kotoki.io/ops-doc: docs/ops/rabbitmq.md
+spec:
+  replicas: 3
+  image: rabbitmq:4-management
+  resources:
+    requests: {cpu: "1", memory: 2Gi}
+    limits: {cpu: "2", memory: 2Gi}
+  persistence:
+    storage: 20Gi
+  rabbitmq:
+    additionalConfig: |
+      vm_memory_high_watermark.relative = 0.6
+      disk_free_limit.absolute = 2GB
+    additionalPlugins:
+      - rabbitmq_prometheus
+  tls:
+    secretName: kotoki-rabbitmq-tls
+    disableNonTLSListeners: true
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - topologyKey: topology.kubernetes.io/zone
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: kotoki-rabbitmq}

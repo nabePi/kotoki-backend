@@ -57,12 +57,13 @@ func (p *ConfirmPublisher) channel() (*amqp091.Channel, error) {
 	return ch, nil
 }
 
-// IsOpen reports whether a publish can proceed: a healthy connection and no dead channel
-// (a missing channel is created on the next Send).
+// IsOpen reports whether a publish can be attempted: the connection is healthy. A missing or dead
+// channel does not count against it, because Send recreates the channel (channel()). A dead channel
+// must not make IsOpen false: the outbox publisher gates each batch on IsOpen and calls Send only
+// when it is true, so after a broker restart (the channel died with the old connection, nobody
+// called Send in between) the publisher would never get the chance to recreate it.
 func (p *ConfirmPublisher) IsOpen() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.conn.Healthy() && (p.ch == nil || !p.ch.IsClosed())
+	return p.conn.Healthy()
 }
 
 // Send publishes msg and returns a Confirmation to wait on. Several Sends can be in flight

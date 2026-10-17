@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kotoki-realtime
+  labels: &labels
+    app.kubernetes.io/name: kotoki
+    app.kubernetes.io/component: realtime
+    app.kubernetes.io/version: REPLACE_SHA
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 25%, maxUnavailable: 0}
+  selector:
+    matchLabels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: realtime}
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      priorityClassName: kotoki-realtime-high
+      terminationGracePeriodSeconds: 40   # R-22: preStop 5 + safepoint 20 + flush 5 + margin 10
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      tolerations:
+        - {key: workload, operator: Equal, value: realtime, effect: NoSchedule}
+      nodeSelector: {kotoki.io/pool: realtime}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: {matchLabels: {app.kubernetes.io/component: realtime}}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: {app.kubernetes.io/component: realtime}}
+      containers:
+        - name: realtime
+          image: ghcr.io/nabepi/kotoki-backend/realtime:REPLACED_BY_KUSTOMIZE
+          command: [/usr/local/bin/realtime]
+          ports:
+            - {name: http, containerPort: 8081}
+            - {name: ops, containerPort: 9090}
+          envFrom:
+            - configMapRef: {name: kotoki-common-config}
+            - configMapRef: {name: kotoki-provider-config}
+            - configMapRef: {name: kotoki-realtime-config}
+            - secretRef: {name: kotoki-realtime-secrets}
+          env:
+            - {name: OPS_ADDR, value: ":9090"}
+            - {name: HTTP_ADDR, value: ":8081"}
+            - {name: GOMEMLIMIT, value: "1800MiB"}
+          resources:
+            requests: {cpu: "2", memory: 1Gi}
+            limits: {cpu: "3", memory: 2Gi}
+          startupProbe:
+            httpGet: {path: /healthz, port: ops}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: ops}
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: ops}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              sleep: {seconds: 5}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

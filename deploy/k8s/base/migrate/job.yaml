@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kotoki-migrate
+  labels: &labels
+    app.kubernetes.io/name: kotoki
+    app.kubernetes.io/component: migrate
+    app.kubernetes.io/version: REPLACE_SHA
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      restartPolicy: Never
+      priorityClassName: kotoki-default
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          image: ghcr.io/nabepi/kotoki-backend/migrate:REPLACED_BY_KUSTOMIZE
+          args: ["-database", "$(DB_MIGRATE_URL)", "up"]
+          envFrom:
+            - secretRef: {name: kotoki-migrate-secrets}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

@@ -1,0 +1,18 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kotoki-worker-learner
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: worker-learner}
+spec:
+  scaleTargetRef: {name: kotoki-worker-learner}
+  minReplicaCount: 1
+  maxReplicaCount: 3
+  triggers:
+    - type: rabbitmq
+      metadata:
+        protocol: amqp
+        mode: QueueLength
+        value: "20"
+        queueName: learner.evaluation_completed
+        vhostName: /kotoki
+      authenticationRef: {name: kotoki-keda-rabbitmq}

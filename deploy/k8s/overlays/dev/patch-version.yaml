@@ -1,0 +1,3 @@
+# Label versi (REPLACE_SHA di base) = `dev` pada metadata dan template pod (Deployment dan Job).
+- {op: replace, path: /metadata/labels/app.kubernetes.io~1version, value: dev}
+- {op: replace, path: /spec/template/metadata/labels/app.kubernetes.io~1version, value: dev}

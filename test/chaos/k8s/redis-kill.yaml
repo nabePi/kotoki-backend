@@ -1,0 +1,18 @@
+# F6 (spec 13.13.2): Redis restart/failover. PodChaos kills the (dev/self-hosted) Redis pod once; the
+# StatefulSet brings it back. Managed Redis (staging/prod): trigger the provider's failover instead and
+# skip this manifest. Applied by `kotoki-chaos run F6 --env kube`, removed again at the revert.
+# MANUAL GATE (Task 24): needs a cluster with Chaos Mesh; never applied by the local run.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: kotoki-f6-redis-kill
+  namespace: kotoki-data
+  labels: {app.kubernetes.io/part-of: kotoki-chaos}
+spec:
+  action: pod-kill
+  mode: one
+  duration: 30s
+  selector:
+    namespaces: [kotoki-data]
+    labelSelectors:
+      app.kubernetes.io/name: redis

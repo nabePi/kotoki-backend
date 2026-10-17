@@ -1,0 +1,24 @@
+# Host realtime: hanya /api/v1/realtime (path lain -> 404). timeouts.request "0s" = tanpa batas durasi
+# request, wajib agar WebSocket tidak diputus gateway; idle 120 s dan afinitas cookie ada di
+# BackendTrafficPolicy kotoki-realtime.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kotoki-realtime
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: realtime}
+spec:
+  parentRefs:
+    - {name: kotoki, namespace: envoy-gateway-system, sectionName: https}
+  hostnames: [realtime.kotoki.id]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /api/v1/realtime}
+      timeouts:
+        request: 0s
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - {name: Strict-Transport-Security, value: "max-age=31536000; includeSubDomains"}
+      backendRefs:
+        - {name: kotoki-realtime, port: 8081}
