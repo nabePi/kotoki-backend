@@ -17,10 +17,11 @@ const usage = `kotoki-load: load generator and gate evaluation (spec 13.12)
 
 usage:
   kotoki-load run        --gate NAME --metrics-urls a,b | --prom-url URL [flags]
+  kotoki-load capacity   --ccu N [--measured file.json]
   kotoki-load seed-users --count N --admin-email E --admin-password P [flags]
 
 Exit status of run: 0 when every criterion of the gate passed or is skipped, 1 when the gate
-failed, 2 on a usage or setup error. Run "kotoki-load <command> -h" for the flags.
+failed, 2 on a usage or setup error. capacity exits 1 when a measured value is outside the model. Run "kotoki-load <command> -h" for the flags.
 `
 
 func main() {
@@ -38,6 +39,8 @@ func realMain(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	switch args[0] {
 	case "run":
 		return cmdRun(ctx, args[1:], stdout, stderr)
+	case "capacity":
+		return cmdCapacity(args[1:], stdout, stderr)
 	case "seed-users":
 		return cmdSeed(ctx, args[1:], stdout, stderr)
 	case "-h", "--help", "help":

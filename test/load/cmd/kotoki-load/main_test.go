@@ -539,7 +539,7 @@ func TestRealMain_Dispatch(t *testing.T) {
 	require.Equal(t, 2, realMain(context.Background(), nil, &out, &errb))
 	require.Contains(t, errb.String(), "usage")
 	errb.Reset()
-	require.Equal(t, 2, realMain(context.Background(), []string{"capacity"}, &out, &errb))
+	require.Equal(t, 2, realMain(context.Background(), []string{"bogus"}, &out, &errb))
 	require.Contains(t, errb.String(), "unknown command")
 	require.Equal(t, 0, realMain(context.Background(), []string{"help"}, &out, &errb))
 	errb.Reset()
@@ -826,4 +826,47 @@ func TestSeedUsers_AdminPasswordFromEnvNeverEchoedInHelp(t *testing.T) {
 	t.Setenv("KOTOKI_ADMIN_PASSWORD", "wrong")
 	rc = realMain(context.Background(), []string{"seed-users", "--api-url", api.srv.URL, "--count", "1", "--admin-password", "adminpw", "--out", out}, &stdout, &stderr)
 	require.Equal(t, 0, rc, stderr.String())
+}
+
+// ---- capacity ----
+
+func TestCapacity_PrintsTable(t *testing.T) {
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, realMain(context.Background(), []string{"capacity", "--ccu", "1000"}, &out, &errb), errb.String())
+	require.Regexp(t, `(?m)^realtime pods\s+15\b`, out.String())
+	require.Regexp(t, `(?m)^PG connections \(pool budget\)\s+187\b`, out.String())
+	require.NotContains(t, out.String(), "measured")
+}
+
+func TestCapacity_RejectsBadCCU(t *testing.T) {
+	for _, ccu := range []string{"0", "-5", "x"} {
+		var out, errb bytes.Buffer
+		require.Equal(t, 2, realMain(context.Background(), []string{"capacity", "--ccu", ccu}, &out, &errb), ccu)
+		require.Empty(t, out.String())
+	}
+	var out, errb bytes.Buffer
+	require.Equal(t, 2, realMain(context.Background(), []string{"capacity"}, &out, &errb), "ccu is required")
+	require.Equal(t, 2, realMain(context.Background(), []string{"capacity", "--ccu", "10", "extra"}, &out, &errb))
+}
+
+func TestCapacity_MeasuredExitCode(t *testing.T) {
+	dir := t.TempDir()
+	write := func(cpu string) string {
+		p := filepath.Join(dir, "m.json")
+		body := `{"cpu_cores_per_100_sessions":` + cpu + `,"mem_mb_per_100_sessions":280,"stt_egress_mbps":340,"pg_tx_per_sec":140,"redis_ops_per_sec":3600}`
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o600))
+		return p
+	}
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, realMain(context.Background(), []string{"capacity", "--ccu", "1000", "--measured", write("1.2")}, &out, &errb), errb.String())
+	require.Contains(t, out.String(), "OK")
+	require.NotContains(t, out.String(), "FAIL")
+
+	out.Reset()
+	require.Equal(t, 1, realMain(context.Background(), []string{"capacity", "--ccu", "1000", "--measured", write("1.6")}, &out, &errb))
+	require.Contains(t, out.String(), "FAIL")
+
+	errb.Reset()
+	require.Equal(t, 2, realMain(context.Background(), []string{"capacity", "--ccu", "1000", "--measured", filepath.Join(dir, "none.json")}, &out, &errb))
+	require.NotEmpty(t, errb.String())
 }
