@@ -221,10 +221,10 @@ verify:         ## invarian pasca-run §13.12.6; make verify ARGS="--db ..." (Ta
 	@[ -d test/load/cmd/kotoki-verify ] || { echo "verify: test/load/cmd/kotoki-verify belum ada (Task 18)"; exit 1; }
 	$(GO) run ./test/load/cmd/kotoki-verify $(ARGS)
 
-chaos-local:    ## make chaos-local SCEN=F1 ARGS="--vus 20 --time-scale 0.1" (Task 21)
-	@[ -d test/chaos/cmd/kotoki-chaos ] || { echo "chaos-local: test/chaos/cmd/kotoki-chaos belum ada (Task 21)"; exit 1; }
+chaos-local:    ## make chaos-local SCEN=F1 ARGS="--vus 20 --time-scale 0.1"; SCEN="F1 F2" untuk beberapa (Task 21)
+	@[ -x test/chaos/local/run.sh ] || { echo "chaos-local: test/chaos/local/run.sh belum ada (Task 21)"; exit 1; }
 	@[ -n "$(SCEN)" ] || { echo "chaos-local: SCEN wajib, contoh: make chaos-local SCEN=F1"; exit 1; }
-	CGO_ENABLED=1 $(GO) run ./test/chaos/cmd/kotoki-chaos --scenario $(SCEN) $(ARGS)
+	test/chaos/local/run.sh $(SCEN) $(ARGS)
 
 capacity:       ## tabel kapasitas §13.11; make capacity ARGS="--ccu 1000" (Task 22)
 	@[ -d test/load/capacity ] || { echo "capacity: test/load/capacity belum ada (Task 22)"; exit 1; }

@@ -1,0 +1,26 @@
+# F8 (spec 13.13.2): RabbitMQ unreachable for 10 minutes. NetworkChaos partitions the application pods
+# (namespace kotoki) from the broker pods (namespace kotoki-data) in both directions; the outbox piles
+# up and drains after the revert (`delete -f`). The alternative is scaling the RabbitmqCluster to 0.
+# `duration` equals the inject window of the scenario (T+5 m to T+15 m).
+# MANUAL GATE (Task 24): needs a cluster with Chaos Mesh.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: kotoki-f8-rabbitmq-block
+  namespace: kotoki
+  labels: {app.kubernetes.io/part-of: kotoki-chaos}
+spec:
+  action: partition
+  mode: all
+  duration: 10m
+  direction: both
+  selector:
+    namespaces: [kotoki]
+    labelSelectors:
+      app.kubernetes.io/name: kotoki
+  target:
+    mode: all
+    selector:
+      namespaces: [kotoki-data]
+      labelSelectors:
+        app.kubernetes.io/name: kotoki-rabbitmq
