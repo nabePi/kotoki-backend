@@ -1,0 +1,18 @@
+# Non-secret, dipakai semua workload. APP_ENV sengaja tidak ada (milik overlay).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kotoki-common-config
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: config}
+data:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  METRICS_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4317
+  OTEL_TRACES_SAMPLER: always_on
+  PRIVACY_POLICY_VERSION: "2026-10-01"
+  RETENTION_TRANSCRIPT_DAYS: "180"
+  RETENTION_SESSION_EVENTS_DAYS: "365"
+  RETENTION_OUTBOX_PUBLISHED_DAYS: "7"
+  RETENTION_PROCESSED_EVENTS_DAYS: "30"
+  RETENTION_EXPIRED_TOKENS_DAYS: "7"

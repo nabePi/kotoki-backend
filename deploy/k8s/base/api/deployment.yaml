@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kotoki-api
+  labels: &labels
+    app.kubernetes.io/name: kotoki
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: REPLACE_SHA
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 25%, maxUnavailable: 0}
+  selector:
+    matchLabels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: api}
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      priorityClassName: kotoki-default
+      terminationGracePeriodSeconds: 30   # preStop 5 + SHUTDOWN_TIMEOUT 20 + margin 5
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: {matchLabels: {app.kubernetes.io/component: api}}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: {app.kubernetes.io/component: api}}
+      containers:
+        - name: api
+          image: ghcr.io/nabepi/kotoki-backend/api:REPLACED_BY_KUSTOMIZE
+          command: [/usr/local/bin/api]
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: ops, containerPort: 9090}
+          envFrom:
+            - configMapRef: {name: kotoki-common-config}
+            - configMapRef: {name: kotoki-api-config}
+            - secretRef: {name: kotoki-api-secrets}
+          env:
+            - {name: GOMEMLIMIT, value: "450MiB"}
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          startupProbe:
+            httpGet: {path: /healthz, port: ops}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: ops}
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: ops}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              sleep: {seconds: 5}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

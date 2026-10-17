@@ -21,6 +21,10 @@ GIT_COMMIT      ?= $(shell git rev-parse --short HEAD)
 N               ?= 1
 K8S_ENVS        ?= dev staging prod
 K8S_TOOLS       := $(CURDIR)/bin/tools
+# base selalu dibangun (assert Task 2-9 membaca out/k8s/base.yaml); overlay yang belum ada dilewati
+# kecuali K8S_REQUIRE_OVERLAYS=1 (wajib dinyalakan di CI setelah Task 11).
+K8S_REQUIRE_OVERLAYS ?= 0
+K8S_BUILT       := base $(foreach e,$(K8S_ENVS),$(if $(wildcard deploy/k8s/overlays/$(e)/kustomization.yaml),$(e)))
 
 .PHONY: env up up-obs down reset migrate-up migrate-down migrate-create seed promote-admin \
         sqlc sqlc-check tidy-check migrations-check modelname-check arch-check assets-apology fixtures fixtures16k \
@@ -155,17 +159,23 @@ load:           ## make load ARGS="--vus 20 --hold 5m"
 k8s-tools:      ## unduh kustomize/kubeconform/promtool/yq/actionlint (versi: deploy/k8s/hack/tools.env) ke bin/tools
 	deploy/k8s/hack/install-tools.sh
 
-k8s-build:      ## kustomize build tiap overlay -> out/k8s/<env>.yaml
+k8s-build:      ## kustomize build base + tiap overlay -> out/k8s/<nama>.yaml
 	@mkdir -p out/k8s
+	@echo "kustomize build base"
+	@$(K8S_TOOLS)/kustomize build deploy/k8s/base > out/k8s/base.yaml.tmp || { rm -f out/k8s/base.yaml.tmp; exit 1; }
+	@mv out/k8s/base.yaml.tmp out/k8s/base.yaml
 	@for e in $(K8S_ENVS); do \
-	  [ -f deploy/k8s/overlays/$$e/kustomization.yaml ] || { echo "k8s-build: overlay deploy/k8s/overlays/$$e belum ada"; exit 1; }; \
+	  if [ ! -f deploy/k8s/overlays/$$e/kustomization.yaml ]; then \
+	    [ "$(K8S_REQUIRE_OVERLAYS)" != 1 ] || { echo "k8s-build: overlay deploy/k8s/overlays/$$e belum ada"; exit 1; }; \
+	    echo "k8s-build: SKIP overlay $$e (belum ada; Task 10/11)"; continue; \
+	  fi; \
 	  echo "kustomize build overlays/$$e"; \
 	  $(K8S_TOOLS)/kustomize build deploy/k8s/overlays/$$e > out/k8s/$$e.yaml.tmp || { rm -f out/k8s/$$e.yaml.tmp; exit 1; }; \
 	  mv out/k8s/$$e.yaml.tmp out/k8s/$$e.yaml; \
 	done
 
 k8s-validate: k8s-build  ## kubeconform strict (skema default + katalog CRD datreeio)
-	deploy/k8s/hack/validate.sh $(K8S_ENVS)
+	deploy/k8s/hack/validate.sh $(K8S_BUILT)
 
 k8s-assert: k8s-build  ## deploy/k8s/assert/*.sh (berbasis yq); tanpa skrip = gagal, bukan lulus
 	@set -e; n=0; for s in deploy/k8s/assert/*.sh; do \

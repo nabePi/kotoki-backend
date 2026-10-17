@@ -1064,3 +1064,13 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Kontrak Makefile yang belum didefinisikan plan ditentukan di sini (sementara, task pemilik boleh menyesuaikan):** `dashboards` memanggil `go run ./test/tools/dashgen -out deploy/k8s/base/observability/dashboards`; `verify` -> `kotoki-verify $(ARGS)`; `chaos-local` -> `kotoki-chaos --scenario $(SCEN) $(ARGS)`; `capacity` -> `kotoki-load capacity $(ARGS)`; `load-local` -> `test/load/local/run.sh $(ARGS)`; `pins-check` meneruskan `$(ARGS)` (mis. `--prod`). Target-target ini gagal eksplisit sampai task pemiliknya (8, 9, 11, 18, 19, 21, 22, 23) ada.
 - **`SKIP_KINDS` di `validate.sh` kosong** (belum ada manifest CRD); kind yang nanti tidak ada di katalog datreeio ditambahkan di sana dan dicatat di bagian task pemiliknya.
 - **`k8s-validate` dan `k8s-assert` bergantung pada `k8s-build`** (otomatis membangun ulang) dan `k8s-test` menyebut keempatnya berurutan; `go test -tags k8s ./deploy/...` menggunakan `-race -count=1`.
+
+## M10-T2 — Base inti + Deployment api
+- **`make k8s-build` kini membangun `deploy/k8s/base` ke `out/k8s/base.yaml` dan melewati overlay yang belum ada** (Task 1 menggagalkan build bila overlay tidak ada). Sebabnya: skrip assert plan memakai target `base` (`expect base ...`) dan overlay baru ada di Task 10/11. Pengaman: `K8S_REQUIRE_OVERLAYS=1` mengembalikan perilaku gagal-bila-hilang; **wajib dinyalakan (default dibalik atau di CI) saat Task 11 selesai**. `k8s-validate` memvalidasi `base` + overlay yang ada (`K8S_BUILT`).
+- **Skrip assert menerima daftar target (`00-common.sh [target...]`, default `base`)**; Task 10/11 menambah overlay ke loop tanpa mengubah isi pemeriksaan.
+- **PriorityClass:** nilai tidak ditentukan spec; dipakai `kotoki-realtime-high=1000000`, `kotoki-default=1000`, `globalDefault: false` (dites).
+- **Label `app.kubernetes.io/version`:** ada di metadata Deployment dan label pod dengan nilai placeholder `REPLACE_SHA` (spec §13.10.2 mewajibkan label, selector tidak memuatnya); overlay mengganti nilainya bersama tag image.
+- **Aritmetika `GOMEMLIMIT <= 90% limit` dihitung di shell, bukan yq:** perbandingan angka berbasis variabel `as $x` pada yq v4.45.1 memberi hasil salah (terbukti `true` untuk 4500 > 4608). Pemeriksaan ini tambahan di luar plan.
+- **`kotoki-api-secrets`** tidak ada di base (milik overlay); assert hanya mewajibkan `secretRef` bernama `kotoki-*-secrets` dan menolak objek `Secret` di manifest.
+- **CRD:** `ScaledObject` (keda.sh/v1alpha1) tersedia di katalog datreeio; `SKIP_KINDS` tetap kosong.
+- **Port ops:** `config.LoadAPI` default `OPS_ADDR=:9090`; ConfigMap/Deployment api mengeset eksplisit `:9090` (sesuai spec §13.10.2).
