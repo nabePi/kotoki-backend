@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Gagal bila placeholder tertinggal (M10 Task 11; dilengkapi Task 23).
 #   pins-check.sh          mode default: tidak ada `<PIN>` di deploy/ dan .github/ (lulus rc 0 sekarang).
+#   pins-check.sh --list   mencetak semua tag image dan versi alat yang dipin (compose, base, overlay, tools.env,
+#                          workflow CI) untuk dicatat di docs/implementation-log.md; tag mengambang (hanya jalur
+#                          mayor, mis. `redis:7.4`) ditandai. Tidak mengubah rc: selalu menjalankan pemeriksaan
+#                          default juga.
 #   pins-check.sh --prod   ditambah: render staging dan prod tidak boleh memuat placeholder MANUAL GATE:
 #                            REPLACE_*              (image tag/label versi, host SMTP, CIDR data store, ekspresi
 #                                                    metrik cloud, keputusan vendor provider, ...)
@@ -18,11 +22,33 @@ KUSTOMIZE="${KUSTOMIZE:-$ROOT/bin/tools/kustomize}"
 ENVS="${PINS_ENVS:-staging prod}"
 
 prod=0
+list=0
 case "${1:-}" in
   "") ;;
   --prod) prod=1 ;;
-  *) echo "pemakaian: pins-check.sh [--prod]" >&2; exit 2 ;;
+  --list) list=1 ;;
+  *) echo "pemakaian: pins-check.sh [--prod|--list]" >&2; exit 2 ;;
 esac
+
+# Daftar pin (--list): tag image di manifest/compose dan versi alat. Image aplikasi (REPLACED_BY_KUSTOMIZE)
+# dipin oleh pipeline (tag SHA, digest di prod), bukan di sini.
+list_pins() {
+  echo "## pins-check --list"
+  echo "alat (deploy/k8s/hack/tools.env):"
+  grep -E '^[A-Z_]+_VERSION=' "$HACK/tools.env" | sed 's/^/  /'
+  echo "image (docker-compose.yml, deploy/k8s):"
+  { grep -rIhE --exclude=selftest.sh --exclude=pins-check.sh '^[[:space:]]*-?[[:space:]]*image:[[:space:]]*[^[:space:]]+' "$ROOT/docker-compose.yml" "$ROOT/deploy/k8s" 2>/dev/null || true; } \
+    | sed -E 's/^[[:space:]]*-?[[:space:]]*image:[[:space:]]*//; s/[[:space:]]+#.*$//' | grep -v 'REPLACED_BY_KUSTOMIZE' | sort -u \
+    | while read -r img; do
+        case "$img" in
+          *@sha256:*) echo "  $img" ;;
+          *:[0-9]*.[0-9]*.[0-9]*|*:v[0-9]*.[0-9]*.[0-9]*) echo "  $img" ;;
+          *) echo "  $img   (tag mengambang/jalur mayor, bukan rilis tepat)" ;;
+        esac
+      done
+  echo "versi di workflow CI (.github/workflows):"
+  { grep -rIhoE '(GITLEAKS_VERSION|TRIVY_VERSION|version): *"?v?[0-9][0-9.]*"?' "$ROOT/.github/workflows" 2>/dev/null || true; } | sort -u | sed 's/^/  /'
+}
 
 rc=0
 
@@ -66,6 +92,8 @@ if [ "$prod" -eq 1 ]; then
     fi
   done
 fi
+
+[ "$list" -eq 0 ] || list_pins
 
 if [ "$rc" -eq 0 ]; then echo "pins-check: OK$([ "$prod" -eq 1 ] && echo ' (--prod)')"; fi
 exit "$rc"

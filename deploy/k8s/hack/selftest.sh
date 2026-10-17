@@ -61,5 +61,12 @@ if "$PINS" >/dev/null 2>&1; then echo "selftest: pins-check default harus gagal 
 rm -f "$PIN_FIX"
 if ! "$PINS" >/dev/null 2>&1; then echo "selftest: pins-check default harus lulus tanpa <PIN>"; bad=1; fi
 
+# --list: rc 0, mencantumkan versi alat dan tag image, menandai tag mengambang
+LIST_OUT="$("$PINS" --list 2>&1)"; LIST_RC=$?
+[ "$LIST_RC" -eq 0 ] || { echo "selftest: pins-check --list want rc 0, got $LIST_RC"; bad=1; }
+for want in "KUSTOMIZE_VERSION=" "image (docker-compose.yml, deploy/k8s):" "tag mengambang"; do
+  case "$LIST_OUT" in *"$want"*) ;; *) echo "selftest: pins-check --list tanpa '$want'"; bad=1 ;; esac
+done
+
 if [ "$bad" -ne 0 ]; then echo "selftest FAILED"; exit 1; fi
 echo "selftest OK"

@@ -1,0 +1,31 @@
+# Butir production readiness (spec §13.14.1: 27 butir + 2 butir turunan dari plan M10 Task 23).
+# Setiap baris harus sama persis dengan kolom "Butir" di docs/production-readiness.md, tepat satu kali.
+Database: Migration up/down teruji; Job migrate di pipeline
+Database: Managed PG HA + PITR aktif; restore drill pertama sukses dan tercatat
+Database: Role dan CONNECTION LIMIT (§13.3.2); REVOKE ledger/audit diterapkan
+Database: pg_stat_statements aktif; 10 query teratas di-review
+Database: balance_reconcile berjalan dan 0 pelanggaran
+Realtime: Gate G1-G4b + soak lulus; laporan di docs/loadtest/
+Realtime: Skenario F1-F16 lulus
+Realtime: WS 65 menit via gateway stabil; drain/rollout tanpa sesi FAILED
+Messaging: RabbitMQ 3 node quorum, TLS, alarm memori/disk termonitor
+Messaging: Retry dan DLQ teruji; prosedur replay DLQ terdokumentasi
+Providers: Benchmark provider (D-041) selesai; model diisi di config prod
+Providers: Voice TTS Jepang per karakter terverifikasi
+Providers: Kuota tertulis dari vendor
+Providers: Zero-retention / no-training diaktifkan di akun vendor
+Providers: Sakelar vendor produksi terverifikasi (tepat satu STT, satu LLM, minimal satu TTS)
+Providers: Gate Real lulus K1
+Security: ASVS L2 checklist direview
+Security: Secret via ESO; tidak ada secret di Git/image (gitleaks di CI)
+Security: Rate limit aktif; uji authz (resource user lain ditolak)
+Security: Rotasi refresh token dan reuse detection teruji
+Security: Consent registrasi dan delete account end-to-end teruji
+Security: Privacy policy menyebut provider pihak ketiga, retensi, backup 14 hari
+Operations: Dashboard (§13.7.4) dan alert (§13.7.5) aktif; uji alert ke pager
+Operations: Trace end-to-end realtime ke RabbitMQ ke worker terlihat di Tempo
+Operations: Log bebas PII/transcript (sampling 1 jam log staging di-review)
+Operations: Runbook (§13.14.2) tersedia; on-call rotation ditetapkan
+Operations: Prosedur rollback: kubectl rollout undo + migration expand-only
+Turunan: Restore drill bulanan terjadwal
+Turunan: Gate Real mengukur biaya per menit
