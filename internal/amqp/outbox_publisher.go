@@ -317,6 +317,12 @@ func (p *OutboxPublisher) Run(ctx context.Context) error {
 			p.log.Warn("outbox publisher: broker unavailable", "consecutive", unavailable+1)
 			p.waitReconnect(ctx, unavailable)
 			unavailable++
+			// WaitReconnect returns at once while the connection is healthy. If the publisher still
+			// reports the broker unavailable after a few such rounds, back off instead of spinning
+			// (a spin once wrote 2.6 million log lines in 14 minutes, see M10-T23).
+			if p.WaitReconnect != nil && unavailable >= reconnectSpinGuard {
+				p.Sleep(ctx, Backoff(unavailable-reconnectSpinGuard, rand.Float64))
+			}
 			continue
 		case err != nil:
 			p.log.Error("outbox publish batch failed", "err", err)
@@ -330,6 +336,10 @@ func (p *OutboxPublisher) Run(ctx context.Context) error {
 	}
 	return nil
 }
+
+// reconnectSpinGuard is the number of consecutive unavailable rounds after which Run adds a
+// backoff on top of WaitReconnect.
+const reconnectSpinGuard = 3
 
 func (p *OutboxPublisher) waitReconnect(ctx context.Context, attempt int) {
 	if p.WaitReconnect != nil {

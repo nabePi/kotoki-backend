@@ -196,6 +196,8 @@ func TestGitleaksConfigAllowsOnlyExamples(t *testing.T) {
 		`^deploy/k8s/overlays/dev/kustomization\.yaml$`: true,
 		`^internal/provider/httpx/httpx_test\.go$`:      true,
 		`^docs/superpowers/plans/[^/]+\.md$`:            true,
+		`^test/(load|chaos)/local/run\.sh$`:             true,
+		`^test/load/cmd/kotoki-load/main_test\.go$`:     true,
 	}
 
 	var pathRes, valueRes []*regexp.Regexp

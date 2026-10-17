@@ -681,6 +681,36 @@ func TestRun_BrokerDown_WaitsReconnect(t *testing.T) {
 	assert.Equal(t, []string{id.String()}, fp.ids())
 }
 
+// WaitReconnect returns at once while the connection is healthy. If the publisher nevertheless keeps
+// reporting the broker unavailable, Run must back off (not spin and flood the log).
+func TestRun_BrokerDown_ImmediateReconnectStillBacksOff(t *testing.T) {
+	pool := testutil.NewPostgres(t)
+	id := seedOutbox(t, pool, outboxSeed{offset: -time.Second})
+	fp := newFakePub()
+	fp.open.Store(false)
+	p, _ := newPublisher(pool, fp, cfg())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sl := &sleeper{after: func(n int) {
+		if n == 2 {
+			cancel()
+		}
+	}}
+	p.Sleep = sl.Sleep
+	var waits atomic.Int32
+	p.WaitReconnect = func(context.Context) { waits.Add(1) } // healthy connection: returns at once
+
+	require.NoError(t, p.Run(ctx))
+	assert.Equal(t, int32(4), waits.Load(), "two rounds without sleep, then one backoff sleep per round")
+	require.Equal(t, 2, sl.count())
+	// unavailable = 3 -> Backoff(0) = 1 s, unavailable = 4 -> Backoff(1) = 2 s, each within +-20%
+	for i, base := range []time.Duration{time.Second, 2 * time.Second} {
+		assert.GreaterOrEqual(t, sl.calls[i], time.Duration(float64(base)*0.8), "sleep %d", i)
+		assert.LessOrEqual(t, sl.calls[i], time.Duration(float64(base)*1.2), "sleep %d", i)
+	}
+	assert.Zero(t, rowState(t, pool, id).attempts, "outage did not burn attempts")
+}
+
 func TestRun_BrokerDown_DefaultWaitIsBackoffNotBusyLoop(t *testing.T) {
 	pool := testutil.NewPostgres(t)
 	seedOutbox(t, pool, outboxSeed{offset: -time.Second})

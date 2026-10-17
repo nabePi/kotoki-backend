@@ -2,7 +2,7 @@
 
 Dokumen ini mengumpulkan pekerjaan yang butuh kunci API, akun, perangkat nyata, atau penilaian manusia, sehingga tidak bisa dikerjakan secara otomatis. Tiap bagian menyebut apa yang sudah ada di kode, apa yang belum, dan langkah operator. Sumber rinci: plan milestone di `docs/superpowers/plans/` dan entri `docs/implementation-log.md`.
 
-Terakhir diperbarui: 2026-10-17 (setelah M9 merge, sebelum M10).
+Terakhir diperbarui: 2026-10-17 (setelah M9 merge; M10 Task 1-23 selesai di branch `feat/m10-hardening`, MANUAL GATE Task 24 di bawah).
 
 ## M9 — Real Providers & Benchmark
 
@@ -26,4 +26,62 @@ Catatan kecil: `PROVIDER_TTS_FALLBACK_ENABLED` ada di `config.go`/spec tetapi ti
 
 - M5: langkah manual §14.10.5 (clone → `kotoki-cli converse` pertama, catat waktu) belum dijalankan manual (alurnya tercakup e2e). Rekaman 4 fixture penutur asli untuk `testdata/audio/` = tugas pemilik produk (sintetis dipakai sementara; lihat deviations M5-T7).
 - M7: golden set sungguhan (80+8 sampel, 2 rater native) prasyarat manual sebelum prompt/model EVALUATION dipakai di produksi (`kotoki-cli eval-golden`; dataset contoh hanya `NOT_EVALUABLE_EXAMPLE_DATASET`).
-- M10 Task 24 (staging, load, chaos, go-live) akan ditambahkan di bawah bila ada.
+- M10 Task 24 (staging, load, chaos, go-live): lihat bagian berikut.
+
+## M10 — MANUAL GATE Task 24 (staging, load, chaos, go-live)
+
+Semua kode, manifest, runbook (`docs/runbook/R1`-`R11`), checklist (`docs/production-readiness.md`) dan harness M10 sudah ada; yang di bawah butuh klaster Kubernetes, akun GitHub/vendor, atau keputusan manusia. Sumber: plan `docs/superpowers/plans/2026-10-13-kotoki-backend-M10-hardening.md` (Task 24), `docs/implementation-deviations.md` (M10-T1 ... M10-T23) dan `docs/implementation-log.md`. **Jangan menandai butir `DONE` di `docs/production-readiness.md` tanpa keluaran perintah terlampir di laporan.** Setelah semua selesai: `make readiness-check` tetap `29/29` dan tidak ada butir `MANUAL-GATE`/`EXTERNAL`; `bash deploy/k8s/hack/pins-check.sh --prod` rc 0.
+
+Status saat ini: tidak ada MG yang dijalankan. Tidak ada angka terukur dari staging atau vendor nyata yang tercatat di repo (laporan lokal: `docs/loadtest/2026-10-17-g1-local.md`, `2026-10-17-chaos-local.md`, model `2026-10-17-capacity.md`).
+
+### MG-1 Staging bring-up dan gateway
+
+Prasyarat klaster >= 1.31 di 3 zona, komponen §13.10.1 (Envoy Gateway, KEDA, ESO, cert-manager, kube-prometheus-stack, RabbitMQ Cluster Operator), role DB §13.3.2 (`CONNECTION LIMIT`), vhost RabbitMQ `/kotoki` (`docs/ops/rabbitmq.md`).
+
+- [ ] **Reviewer environment `production` di GitHub (pengaturan repository, bukan YAML).** Settings -> Environments -> `production`: Required reviewers diisi; environment `staging` dibuat. Secret `STAGING_KUBECONFIG_B64`, `PROD_KUBECONFIG_B64`, `STAGING_SMOKE_EMAIL`, `STAGING_SMOKE_PASSWORD`; variabel `STAGING_ORIGIN`. Tanpa ini `deploy-prod.yml` tidak aman dijalankan (job sudah ber-`environment: production`, tetapi reviewer hanya bisa diset di GitHub). Nilai secret tidak boleh masuk repo/log.
+- [ ] **Bootstrap sebelum pipeline pertama:** namespace, ExternalSecret/Secret (`kotoki-api-secrets`, `kotoki-realtime-secrets`, `kotoki-worker-secrets`, `kotoki-migrate-secrets`, `kotoki-keda-secrets`), CRD. `deploy.sh` mengasumsikan ini sudah ada (Job migrate butuh `kotoki-migrate-secrets`).
+- [ ] **Isi semua `REPLACE_*` di overlay staging dan prod** (daftar di bawah) lalu `bash deploy/k8s/hack/pins-check.sh --prod` -> rc 0. Saat ini sengaja GAGAL untuk: `REPLACE_SHA`/digest nol (tag/digest image), `REPLACE_DATA_STORE_CIDR` (NetworkPolicy; juga `192.0.2.0/24` di base), `198.51.100.0/24` (`TRUSTED_PROXY_CIDRS`), `REPLACE_SMTP_HOST`/`REPLACE_SMTP_USERNAME`, `REPLACE_CLOUD_METRIC` (recording rule `kotoki:postgres_cpu_utilization:ratio` dan `kotoki:redis_memory_utilization:ratio`; sumber metrik DB/Redis terkelola per penyedia), dan anotasi `kotoki.io/provider-selection=REPLACE_PRODUCT_OWNER_DECISION`.
+- [ ] `kubectl apply -k deploy/k8s/overlays/staging` lewat workflow `deploy-staging`; `kubectl -n kotoki get pods` semua `Ready`; ESO `SecretSynced`; `curl -sI https://api.staging.<domain>/api/v1/auth/terms` (HSTS) dan `curl -sI http://...` (301); `testssl.sh api.staging.<domain>` -> TLS 1.0/1.1 mati.
+- [ ] **WS 65 menit tanpa putus lewat gateway** (`kotoki-cli converse --end wait-expiry` pada sesi 3.600 s) dan `kubectl rollout restart deployment/kotoki-realtime` saat ada sesi: reconnect mendarat di pod lain < 5 detik. Syarat infra: load balancer L4 idle >= 350 detik.
+- [ ] Hal yang hanya bisa dikonfirmasi di klaster (tercatat terbuka di deviasi M10-T3 ... T11): nama seri eksternal (`rabbitmq_*`, `pg_stat_activity_count`, `redis_*`, `certmanager_*`) terhadap exporter nyata; hak user RabbitMQ `keda` untuk trigger `protocol: amqp` dan kecocokan `queueName` KEDA dengan nama antrean topologi; kepercayaan CA internal (`kotoki-internal-ca`) di pod worker untuk `amqps`; CA privat Postgres bila `sslrootcert` dipakai (volume belum ada di Deployment); versi Envoy Gateway mendukung `consistentHash.cookie.attributes` dan `alpnProtocols`; label PodMonitor `release: kube-prometheus-stack`; `tempo.observability:4317`; NetworkPolicy namespace `observability`; anti-affinity zona RabbitMQ `required` butuh >= 3 zona.
+- [ ] **trivy dan pin gitleaks di `tools.env`.** `make sec-check` gagal tertutup (exit 2) bila `trivy` tidak terpasang; keduanya belum dipin di `deploy/k8s/hack/tools.env`/`install-tools.sh` (hanya versi minimum 8.25 di Makefile dan `GITLEAKS_VERSION=8.28.0` di `ci.yml`). Pasang ke `bin/tools`, pin versi, jalankan `make sec-check` penuh di runner.
+
+### MG-2 Load gate G1 -> G2 -> G3 -> G4a -> G4b -> Soak (dan K10-K12, K15)
+
+- [ ] **Artefak yang disebut plan Task 24 tetapi TIDAK ada di repo** (tidak ada Task M10 yang membuatnya, ditemukan saat Task 23): target `make load-fixtures16k` (yang ada: `make fixtures16k` -> `out/fixtures16k`), overlay `deploy/k8s/overlays/staging-load` (`PROVIDER_MODE=fake` + knob fake `FAKE_PRIMARY_STT_LATENCY_MS=250`, `FAKE_PRIMARY_LLM_LATENCY_MS=500`, `FAKE_LLM_TOKEN_INTERVAL_MS=30`, `FAKE_PRIMARY_TTS_LATENCY_MS=300`), serta image dan Job `kotoki-load` (namespace `kotoki-load`; biner memakai cgo, `CGO_ENABLED=1 go build ./test/load/cmd/kotoki-load`). Operator membuatnya (atau menjalankan `kotoki-load` dari host dengan akses jaringan ke gateway staging dan Prometheus) sebelum G2.
+- [ ] `make fixtures16k`; `kotoki-load seed-users --count 1200`; `kotoki-load run` per instance (<= 500 VU) dengan `--gate gN --prom-url http://prometheus.observability:9090`; `kotoki-verify --db $STAGING_DB_READONLY_URL --since <start> --await-evaluations 5m`. Lulus: `GATE <g>: PASS`, laporan `docs/loadtest/<tanggal>-<gate>.md` ter-commit; gate berikutnya hanya setelah sebelumnya lulus.
+- [ ] G4a: ScaledObject dinonaktifkan, realtime 10 pod, `REALTIME_READY_MAX_SESSIONS=101` hanya untuk gate ini; membuktikan +-100 sesi/pod (K10). Bila gagal, ubah `REALTIME_MAX_SESSIONS`/resource dan perbarui register D-103 dan §13.10.2 lebih dulu.
+- [ ] **K10-K12 dan K15 tidak bisa dipenuhi `run` sendiri.** K10 (CPU/memori < 80% limit, 0 restart) dan K12 (Redis CPU < 50%) butuh metrik `container_*`/`redis_*` dari Prometheus staging; K15 (drift RSS/goroutine < 10%) butuh `soak_*_drift` (`SoakDrift`, jendela awal vs akhir hold) yang harus dipasok pada G1-G4b nyata; `g1-local` mengabaikan K10-K12 dan K15.
+- [ ] **Sumber `pg_cpu_ratio` (K11, PG CPU < 60%).** `FromProm` tidak mengisinya karena tidak ada metrik PromQL untuk DB terkelola; K11 gagal "no data" sampai MG menetapkan sumbernya (metrik cloud, sama dengan `REPLACE_CLOUD_METRIC` di recording rule) atau gate meng-skip K11 secara eksplisit. Jangan mengarang nama metrik.
+- [ ] `make capacity` dengan `Measured` dari Prometheus staging -> semua `Finding.OK` (`docs/loadtest/2026-10-17-capacity.md` hanya model turunan, belum ada angka terukur); perbarui register spec §15.2 ("Kapasitas 100 sesi/pod") bila angka berubah.
+- [ ] Run dengan autoscaling harus memakai `PromAPI` (bukan `FromScrape`, yang mengasumsikan himpunan instance tetap antar dua scrape).
+
+### MG-3 Gate Real (20 CCU) dan keputusan vendor
+
+Prasyarat: M9 Task 16, 17, 21, 22, 23 selesai (lihat bagian M9 di atas), kunci vendor di secret manager, kuota tertulis (STT >= 1.100 stream, LLM >= 5.000 RPM dan 12 juta TPM, TTS >= 200 stream per vendor TTS yang dipakai karakter ACTIVE, limit konkurensi Cartesia dari M9), zero-retention/no-training aktif di akun vendor (termasuk DeepSeek bila dipakai).
+
+- [ ] **Vendor aktif (`deploy/config/provider.env`/ConfigMap prod) = keputusan pemilik produk.** `deploy/config/provider.env` belum ada (M9 Task 22); staging/prod saat ini memakai default spec §13.2.8 (`OPENAI_STT_ENABLED=true`, `OPENAI_LLM_ENABLED=true`, TTS ElevenLabs dan Cartesia) dari `deploy/k8s/base/provider-config/provider.env`, bukan hasil benchmark. Setelah diputuskan, ganti anotasi `kotoki.io/provider-selection` dan nilai model (nama model diverifikasi di dokumentasi vendor, jangan menebak); satu run gate Real per vendor STT/LLM backup bila diminta pemilik produk (ganti lewat `docs/runbook/R10-vendor-switch.md`).
+- [ ] Overlay staging `PROVIDER_MODE=real`, `kotoki-load run --gate real`. Lulus: K1 P95 <= 1,5 s nyata; laporan memuat biaya per menit dari `kotoki_provider_cost_usd_total`/`kotoki_session_cost_per_minute_usd`. **Harness belum menulis biaya per menit ke laporan** (butir turunan checklist): baca dari Prometheus/dashboard `Providers` dan lampirkan, atau tambahkan pembaca di `test/load`.
+- [ ] Tutup butir §15.2 (model, turn detection). `seed/env/prod/0900_voice_ids.sql` (`characters.voice_id`/`model_name`/`voice.fallback` tanpa awalan `PLACEHOLDER_`, D-014/D-015); startup `realtime`/`api` mode `real` lolos `content.ValidateVoices`; isi `internal/provider/pricing/prices.yaml` dari harga resmi (STT wildcard `model: "*"`, saat ini biaya STT 0).
+
+### MG-4 Chaos F1-F16 di staging
+
+Chaos Mesh terpasang; untuk tiap `n`: `test/chaos/f<nn>-*.sh --env kube --prom-url ...`; laporan `docs/loadtest/<tanggal>-chaos.md`.
+
+- [ ] **F7 (hapus pod RabbitMQ), F9, F10 (rollout realtime: 0 sesi `FAILED`), F11, F12 dan asersi alert** (F4: `ProviderUnavailable`/`ProviderCircuitOpen` menyala lalu padam; F5: `ProviderUnavailable`; F8: `OutboxLagCritical` menyala lalu `outbox_pending` kembali 0) hanya bisa di staging. Lokal sudah PASS pada skala kecil untuk F1-F6, F8, F13, F15, F16 (`docs/loadtest/2026-10-17-chaos-local.md`; 20 VU, skala waktu 0,1 kecuali F1/F4 waktu nyata); itu bukan 100 CCU dengan T+5/T+15 menit. Konfirmasi manual `Expect` (`kind: manual`) dicentang di laporan.
+- [ ] Manifest Chaos Mesh (`test/chaos/k8s/*.yaml`) tidak pernah di-`apply`; nama pod/label RabbitMQ (`kotoki-rabbitmq-server-0`, `app.kubernetes.io/name: kotoki-rabbitmq`) mengikuti overlay prod, sedangkan overlay dev memakai nama lain.
+- [ ] **Keputusan produk/spec yang menyentuh chaos:** (a) **F3**: tabel plan memakai `TTS fail_after_first_audio` rate 1,0 sehingga menurut spec §7.6.1 sesi dengan 3 turn gagal berturut-turut berakhir `PROVIDER_FAILURE`; kalimat tabel "0 sesi berakhir karena F3" tidak bisa benar untuk fault yang bertahan di setiap generation. Putuskan: ubah ekspektasi/rate tabel §13.13 atau pertahankan perilaku produk. (b) **Handshake 429 meninggalkan sesi `RESERVED` (D-035)**: produk memblokir `POST /sessions` pengguna itu 5 menit; klien (VU `kotoki-load`) membuat sesi baru tiap gagal alih-alih attach ulang/membatalkan. Putuskan apakah produk atau klien yang diubah (harness hanya mengisi ulang jatah limiter lewat `KindReset`). (c) `session.ready` memberi `server_seq` mulai 1 per koneksi, bertentangan dengan kalimat §7.4.3 "monotonik per sesi" (tidak berbahaya; kode tidak diubah, M5).
+
+### MG-5 Go-live ops
+
+- [ ] (a) **Restore drill**: PITR ke instance sementara + `kotoki-verify --db <url>` -> 0 pelanggaran, waktu restore <= 1 jam dicatat (prosedur `docs/runbook/R5-postgres.md`); jadwalkan latihan bulanan (butir turunan checklist, tim ops).
+- [ ] (b) **Uji alert ke pager**: `amtool alert add` atau paksa `BalanceInvariantViolation` di staging -> notifikasi diterima; konfirmasi alert menyala di klaster (saat ini hanya `promtool test rules`).
+- [ ] (c) Trace end-to-end di Tempo: `session.end` -> `outbox.publish` -> `rabbitmq.consume` -> `evaluation.run` -> `learner.update`.
+- [ ] (d) Sampel log 1 jam staging di Loki: `{service=~"kotoki-.*"} |~ "(?i)(@|user_text|assistant_text|password|bearer )"` -> 0 baris; retensi log app 30 hari dan `audit="true"` 400 hari terkonfigurasi.
+- [ ] (e) `kubectl rollout undo deployment/kotoki-api` berhasil dan migration expand-only terverifikasi.
+- [ ] (f) **ASVS** `docs/security/asvs-l2.md` butir MANUAL direview dan ditandatangani (pemetaan ASVS 4.0.x -> 5.0 yang disebut spec diserahkan ke reviewer); privacy policy menyebut provider pihak ketiga, retensi, backup 14 hari; on-call rotation ditetapkan; `pg_stat_statements` 10 query teratas direview; `make sec-check` penuh (trivy) di runner.
+- [ ] **Keputusan produk: `/auth/refresh` dan `/auth/logout` tanpa header Origin.** Kode mengizinkan (Bab 3 §5.9.1: CLI dan server-to-server tanpa Origin; `kotoki-cli` dan harness load menyegarkan tanpa Origin; `SameSite=Strict` jadi lapisan kedua), sedangkan spec §13.8.2 meminta Origin ada dan terdaftar (403 bila tidak). Plan Task 13 menulis 403. Pilih satu dan samakan spec, kode (`TestRefreshOriginCheck`) dan `TestSecurity_CSRFRefreshNeedsAllowedOrigin`.
+
+### Setelah semua MG selesai
+
+- [ ] Perbarui `docs/production-readiness.md` (status dan bukti), laporan `docs/loadtest/<tanggal>-*.md`, `docs/implementation-log.md` dan `docs/implementation-deviations.md`; `make readiness-check` -> `29/29`; `make pins-check ARGS=--prod` rc 0.

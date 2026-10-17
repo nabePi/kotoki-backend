@@ -43,6 +43,26 @@ regexes = [
   '''^(sk_live_ABCDEFGH12345|sk-live_ABCDEFGH12345|sk-proj-abcdef1234567890\.?|SECRETVALUE123|abcdef123456|tok_12345\.abc)$''',
 ]
 
+[[rules.allowlists]]
+description = "local load/chaos runners (make load-local, make chaos-local) export a dummy base64 JWT secret that decodes to the labelled string local-dev-only-..., for processes bound to localhost"
+condition = "AND"
+paths = [
+  '''^test/(load|chaos)/local/run\.sh$''',
+]
+regexes = [
+  '''^bG9jYWwtZGV2LW9ubHktMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=$''',
+]
+
+[[rules.allowlists]]
+description = "unit test of kotoki-load that proves the admin password from the environment is never echoed (synthetic value)"
+condition = "AND"
+paths = [
+  '''^test/load/cmd/kotoki-load/main_test\.go$''',
+]
+regexes = [
+  '''^s3cret-from-env$''',
+]
+
 [[rules]]
 id = "stripe-access-token"
 
