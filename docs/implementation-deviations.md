@@ -1190,3 +1190,10 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **Pindai log mencakup seluruh log subproses suite sejak awal (bukan hanya tes ini):** api dan pod realtime hidup sepanjang suite, sehingga tes lain (login palsu, token palsu, dll.) ikut diperiksa oleh pola umum JWT/Bearer/email; needle spesifik tes ini ditambahkan di atasnya. Akibatnya tes ini menjadi pengawas lalu lintas seluruh suite: kebocoran oleh tes mana pun akan menggagalkannya.
 - **`TestPrivacy_Meta_DetectsLeak` memeriksa pemindai, bukan stack:** plan menyuntik email ke stdout buatan; ini dilakukan pada log sintetis (tujuh jenis kebocoran dan pemindai metrik), bukan ke proses nyata.
 - **Nilai `PRIVACY_POLICY_VERSION` (`2026-10-01`) ditulis sebagai konstanta tes** (harness e2e memberikannya lewat `testutil.MinimalEnv` secara eksplisit); bila harness berubah, tes gagal dengan jelas pada `GET /auth/terms`.
+
+## M10-T15 — `test/load`: histogram, gate, evaluasi K1-K15
+- **`gate.Spec` mendapat field `PodBalance bool` (di luar daftar field plan):** plan meminta `g4a` menambah `sessions_per_pod_min >= 95` dan `sessions_per_pod_max <= 100` tetapi `Spec` tidak punya tempat untuk itu; tanpa field, `Evaluate` harus mencocokkan string nama gate. Field menyatakannya sebagai data; pemeriksaan menjadi bagian K10 (spec §13.12.4: "G4a: setiap pod +-100 sesi").
+- **Skip diwakili `Pass=false, Skipped=true`:** plan tidak menetapkan nilai `Pass` untuk kriteria Skip. `Pass` tidak pernah true tanpa pemeriksaan; `AllPass` memperlakukan `Skipped` sebagai tidak menghalangi.
+- **Alasan Skip `real`/K2 ditulis eksplisit** ("server_overhead is a fake-provider metric"), plan hanya menyebut "Skip K2".
+- **Pembanding strict vs inklusif mengikuti kata spec, bukan satu aturan:** K1-K8 `<=`/`>=`; K10-K13 dan K15 `<` ketat (cpu 0,8 gagal, drift 0,10 gagal, outbox 5 gagal), seperti kolom tes batas di plan.
+- **Tes tambahan di luar plan:** `TestSpecs_SkipsAreKnownAndExplained`, `TestEvaluate_NaNFails`, `TestEvaluate_OneMissingKeyOfManyFails`, `TestEvaluate_SkipDoesNotMaskOthers`, `TestEvaluate_G4aPodBalance`, dan tes histogram untuk non-finite, nol/negatif, batas q, konkurensi.
