@@ -63,6 +63,9 @@ type harness struct {
 	tickets map[int]string
 	issued  int
 	closeAt map[int]error // read error that ended each connection's server loop
+
+	clientIP string         // when set, the client is built WithClientIP
+	xff      map[int]string // X-Forwarded-For of each handshake
 }
 
 func newHarness(t *testing.T, script func(s *sconn)) *harness {
@@ -99,6 +102,10 @@ func (h *harness) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	h.tickets[idx] = r.URL.Query().Get("ticket")
+	if h.xff == nil {
+		h.xff = map[int]string{}
+	}
+	h.xff[idx] = r.Header.Get("X-Forwarded-For")
 	h.mu.Unlock()
 	assert.Equal(h.t, "http://localhost:3000", r.Header.Get("Origin"))
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{Subprotocol}, InsecureSkipVerify: true})
@@ -151,7 +158,11 @@ func (h *harness) run(steps []Step) (Report, error) {
 	h.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	c := New(h.srv.URL)
+	var opts []Option
+	if h.clientIP != "" {
+		opts = append(opts, WithClientIP(h.clientIP))
+	}
+	c := New(h.srv.URL, opts...)
 	rep, err := RunConversation(ctx, c, SessionSpec{
 		SessionID: testSession, WSURL: "ws" + strings.TrimPrefix(h.srv.URL, "http") + "/api/v1/realtime",
 		Origin: "http://localhost:3000", Clock: h.clk, Sleep: h.sleep, IDs: idgen.NewSequence(h.t),
@@ -909,4 +920,23 @@ func TestWaitAIDoneSeesTheAIFirstOpening(t *testing.T) {
 	rep, err := h.run([]Step{WaitAIDone{Timeout: 5 * time.Second}, End{}})
 	require.NoError(t, err)
 	require.Equal(t, "COMPLETED", rep.Status)
+}
+
+func TestRunConversationHandshakeCarriesTheClientIP(t *testing.T) {
+	h := newHarness(t, func(s *sconn) {
+		s.ready("session.start")
+		_ = s.command()
+		s.send("session.started", evo{}, protocol.SessionStarted{Status: "ACTIVE", TurnState: "LISTENING"})
+		_ = s.serve(func(int, frameRec) {}, func(ev protocol.ClientEvent) {
+			if ev.Type == "session.end" {
+				s.send("session.completed", evo{}, protocol.SessionCompleted{EndReason: "USER_ENDED", ChargedSeconds: 1})
+			}
+		})
+	})
+	h.clientIP = "10.7.0.9"
+	_, err := h.run([]Step{End{}})
+	require.NoError(t, err)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	require.Equal(t, map[int]string{0: "10.7.0.9"}, h.xff)
 }

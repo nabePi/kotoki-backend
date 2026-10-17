@@ -355,7 +355,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (provider) (rate(kotoki_stt_rotations_total[5m]))",
+          "expr": "sum by (provider) (rate(kotoki_stt_rotations_total[5m])) or vector(0)",
           "datasource": {
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
@@ -421,7 +421,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (provider, capability) (increase(kotoki_provider_cost_usd_total[1h]))",
+          "expr": "sum by (provider, capability) (increase(kotoki_provider_cost_usd_total[1h])) or vector(0)",
           "datasource": {
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"

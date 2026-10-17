@@ -47,7 +47,7 @@ type seedAPI struct {
 	keys   map[string]bool
 }
 
-func newSeedAPI(t *testing.T) *seedAPI {
+func newSeedAPI(t *testing.T, wrap ...func(http.Handler) http.Handler) *seedAPI {
 	t.Helper()
 	f := &seedAPI{grants: map[string]int64{}, keys: map[string]bool{}}
 	mux := http.NewServeMux()
@@ -92,7 +92,11 @@ func newSeedAPI(t *testing.T) *seedAPI {
 		f.mu.Unlock()
 		writeJSON(w, 201, map[string]any{"id": "x"})
 	})
-	f.srv = httptest.NewServer(mux)
+	var h http.Handler = mux
+	for _, w := range wrap {
+		h = w(h)
+	}
+	f.srv = httptest.NewServer(h)
 	t.Cleanup(f.srv.Close)
 	return f
 }
@@ -355,6 +359,11 @@ type resultFile struct {
 	Observation map[string]float64 `json:"observation"`
 	Client      vu.Summary         `json:"client"`
 	Errors      []string           `json:"errors"`
+	Contract    *struct {
+		Pass    bool     `json:"pass"`
+		Missing []string `json:"missing"`
+		Error   string   `json:"error"`
+	} `json:"metric_contract"`
 }
 
 func readResult(t *testing.T, p string) resultFile {
@@ -607,4 +616,214 @@ func TestBuild_VerifyDBSetsExtra(t *testing.T) {
 	cfg, err = build(o, io.Discard)
 	require.NoError(t, err)
 	require.NotNil(t, cfg.Extra)
+}
+
+// ---- metric contract ----
+
+func contractFile(t *testing.T, names ...string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "metrics.txt")
+	require.NoError(t, os.WriteFile(p, []byte(strings.Join(names, "\n")+"\n"), 0o600))
+	return p
+}
+
+func TestRun_MetricContractFailureFailsAnOtherwiseGreenGate(t *testing.T) {
+	src := &fakeSource{text: []string{turnBefore, turnAfter(100, 100)}} // every K passes (see ExitZero test)
+	cfg, out := testRunConfig(t, src, goodExtra)
+	cfg.MetricsFile = contractFile(t, "kotoki_realtime_turn_end_to_first_audio_seconds", "kotoki_does_not_exist", "?kotoki_optional_total")
+	var stdout, stderr bytes.Buffer
+	require.Equal(t, 1, execute(context.Background(), cfg, &stdout, &stderr), stdout.String()+stderr.String())
+
+	rf := readResult(t, out)
+	require.False(t, rf.Pass)
+	for _, r := range rf.Results {
+		require.True(t, r.Pass, "%s: the K criteria themselves are green", r.ID)
+	}
+	require.NotNil(t, rf.Contract)
+	require.False(t, rf.Contract.Pass)
+	require.Equal(t, []string{"kotoki_does_not_exist"}, rf.Contract.Missing)
+	require.Contains(t, stdout.String(), "metric-contract")
+	require.Contains(t, stdout.String(), "GATE g1: FAIL")
+}
+
+func TestRun_MetricContractPasses(t *testing.T) {
+	src := &fakeSource{text: []string{turnBefore, turnAfter(100, 100)}}
+	cfg, out := testRunConfig(t, src, goodExtra)
+	cfg.MetricsFile = contractFile(t, "kotoki_realtime_turn_end_to_first_audio_seconds")
+	var stdout, stderr bytes.Buffer
+	require.Equal(t, 0, execute(context.Background(), cfg, &stdout, &stderr), stdout.String()+stderr.String())
+	rf := readResult(t, out)
+	require.True(t, rf.Pass)
+	require.NotNil(t, rf.Contract)
+	require.True(t, rf.Contract.Pass)
+	require.Empty(t, rf.Contract.Missing)
+}
+
+func TestRun_NoMetricContractWithoutTheFlag(t *testing.T) {
+	src := &fakeSource{text: []string{turnBefore, turnAfter(100, 100)}}
+	cfg, out := testRunConfig(t, src, goodExtra)
+	var stdout, stderr bytes.Buffer
+	require.Equal(t, 0, execute(context.Background(), cfg, &stdout, &stderr))
+	require.Nil(t, readResult(t, out).Contract)
+	require.NotContains(t, stdout.String(), "metric-contract")
+}
+
+func TestRun_UnreadableMetricContractFileFailsTheGate(t *testing.T) {
+	src := &fakeSource{text: []string{turnBefore, turnAfter(100, 100)}}
+	cfg, out := testRunConfig(t, src, goodExtra)
+	cfg.MetricsFile = filepath.Join(t.TempDir(), "missing.txt")
+	var stdout, stderr bytes.Buffer
+	require.Equal(t, 1, execute(context.Background(), cfg, &stdout, &stderr))
+	rf := readResult(t, out)
+	require.NotNil(t, rf.Contract)
+	require.False(t, rf.Contract.Pass)
+	require.NotEmpty(t, rf.Contract.Error)
+}
+
+func TestParseRun_MetricsFile(t *testing.T) {
+	o, err := parseRun([]string{"--gate", "g1-local", "--metrics-urls", "http://a", "--metrics-file", "m.txt"})
+	require.NoError(t, err)
+	require.Equal(t, "m.txt", o.MetricsFile)
+	_, err = parseRun([]string{"--gate", "g1-local", "--prom-url", "http://p", "--metrics-file", "m.txt"})
+	require.ErrorContains(t, err, "metrics-file", "the contract reads a scrape: it needs --metrics-urls")
+}
+
+func TestParseRun_SpreadIPs(t *testing.T) {
+	o, err := parseRun([]string{"--gate", "g1-local", "--metrics-urls", "http://a", "--spread-ips"})
+	require.NoError(t, err)
+	require.True(t, o.SpreadIPs)
+	o, err = parseRun([]string{"--gate", "g1-local", "--metrics-urls", "http://a"})
+	require.NoError(t, err)
+	require.False(t, o.SpreadIPs, "off unless asked")
+}
+
+func TestBuild_SpreadIPsStartsAtTheInstancesFirstUser(t *testing.T) {
+	users := filepath.Join(t.TempDir(), "users.csv")
+	var sb strings.Builder
+	for i := 1; i <= 10; i++ {
+		sb.WriteString("load-" + itoa(i) + "@load.test,pw\n")
+	}
+	require.NoError(t, os.WriteFile(users, []byte(sb.String()), 0o600))
+	base := []string{"--gate", "g1-local", "--vus", "10", "--users-file", users, "--fixtures", filepath.Join("..", "..", "..", "..", "testdata", "audio"),
+		"--metrics-urls", "http://localhost:9090", "--instances", "3", "--spread-ips"}
+	for idx, want := range map[int]int{0: 0, 1: 4, 2: 7} { // 10 VUs over 3 instances: 4, 3, 3
+		o, err := parseRun(append(append([]string{}, base...), "--instance-index", itoa(idx)))
+		require.NoError(t, err)
+		cfg, err := build(o, io.Discard)
+		require.NoError(t, err)
+		require.True(t, cfg.Runner.SpreadIPs)
+		require.Equal(t, want, cfg.Runner.IPBase, "instance %d: its users' addresses never collide with another instance's", idx)
+	}
+}
+
+// ---- seed-users: rate limits ----
+
+func TestSeedUsers_RetriesRegisterWhileRateLimited(t *testing.T) {
+	var mu sync.Mutex
+	attempts := map[string]int{}
+	api := newSeedAPI(t, func(inner http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/auth/register" {
+				var in kotokiclient.RegisterRequest
+				raw, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(raw, &in)
+				r.Body = io.NopCloser(bytes.NewReader(raw))
+				mu.Lock()
+				attempts[in.Email]++
+				n := attempts[in.Email]
+				mu.Unlock()
+				if n <= 2 {
+					w.Header().Set("Retry-After", "3")
+					writeJSON(w, 429, map[string]any{"error": map[string]any{"code": "RATE_LIMITED", "message": "slow", "request_id": "q"}})
+					return
+				}
+			}
+			inner.ServeHTTP(w, r)
+		})
+	})
+	var slept []time.Duration
+	var smu sync.Mutex
+	o := seedOptions{APIURL: api.srv.URL, Count: 2, Balance: 100, AdminEmail: "admin@kotoki.test", AdminPassword: "adminpw", Concurrency: 1,
+		Out: filepath.Join(t.TempDir(), "users.csv"),
+		sleep: func(_ context.Context, d time.Duration) error {
+			smu.Lock()
+			slept = append(slept, d)
+			smu.Unlock()
+			return nil
+		}}
+	require.NoError(t, seedUsers(context.Background(), o, func(ip string) *kotokiclient.Client { return kotokiclient.New(o.APIURL, kotokiclient.WithClientIP(ip)) }, io.Discard))
+	require.Equal(t, map[string]int{"load-1@load.test": 3, "load-2@load.test": 3}, attempts)
+	require.Equal(t, []time.Duration{3 * time.Second, 3 * time.Second, 3 * time.Second, 3 * time.Second}, slept, "waits Retry-After before each retry")
+	require.Len(t, api.grants, 2)
+}
+
+func TestSeedUsers_GivesUpWhenRateLimitedForGood(t *testing.T) {
+	var calls int
+	var mu sync.Mutex
+	api := newSeedAPI(t, func(inner http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/auth/register" {
+				mu.Lock()
+				calls++
+				mu.Unlock()
+				writeJSON(w, 429, map[string]any{"error": map[string]any{"code": "RATE_LIMITED", "message": "slow", "request_id": "q"}})
+				return
+			}
+			inner.ServeHTTP(w, r)
+		})
+	})
+	o := seedOptions{APIURL: api.srv.URL, Count: 1, Balance: 100, AdminEmail: "admin@kotoki.test", AdminPassword: "adminpw",
+		Out: filepath.Join(t.TempDir(), "users.csv"), sleep: func(context.Context, time.Duration) error { return nil }}
+	err := seedUsers(context.Background(), o, func(string) *kotokiclient.Client { return kotokiclient.New(o.APIURL) }, io.Discard)
+	require.ErrorContains(t, err, "register load-1@load.test")
+	require.Equal(t, maxSeedAttempts, calls, "bounded retries, no endless loop")
+	_, statErr := os.Stat(o.Out)
+	require.True(t, os.IsNotExist(statErr))
+}
+
+func TestSeedUsers_SpreadIPsGivesEachUserItsOwnAddress(t *testing.T) {
+	xff := map[string]string{}
+	var mu sync.Mutex
+	api := newSeedAPI(t, func(inner http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/auth/register" {
+				var in kotokiclient.RegisterRequest
+				raw, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(raw, &in)
+				r.Body = io.NopCloser(bytes.NewReader(raw))
+				mu.Lock()
+				xff[in.Email] = r.Header.Get("X-Forwarded-For")
+				mu.Unlock()
+			}
+			inner.ServeHTTP(w, r)
+		})
+	})
+	out := filepath.Join(t.TempDir(), "users.csv")
+	var stderr bytes.Buffer
+	rc := realMain(context.Background(), []string{"seed-users", "--api-url", api.srv.URL, "--count", "3", "--admin-email", "admin@kotoki.test",
+		"--admin-password", "adminpw", "--spread-ips", "--out", out}, io.Discard, &stderr)
+	require.Equal(t, 0, rc, stderr.String())
+	require.Equal(t, map[string]string{"load-1@load.test": vu.SpreadIP(0), "load-2@load.test": vu.SpreadIP(1), "load-3@load.test": vu.SpreadIP(2)}, xff,
+		"user n registers from SpreadIP(n-1), the address kotoki-load run gives that VU")
+}
+
+func TestSeedUsers_AdminPasswordFromEnvNeverEchoedInHelp(t *testing.T) {
+	t.Setenv("KOTOKI_ADMIN_EMAIL", "admin@kotoki.test")
+	t.Setenv("KOTOKI_ADMIN_PASSWORD", "s3cret-from-env")
+	var stdout, stderr bytes.Buffer
+	realMain(context.Background(), []string{"seed-users", "-h"}, &stdout, &stderr)
+	require.NotContains(t, stdout.String()+stderr.String(), "s3cret-from-env", "flag defaults are printed by -h: the env password must not be one")
+	require.Contains(t, stderr.String(), "KOTOKI_ADMIN_PASSWORD")
+
+	api := newSeedAPI(t)
+	out := filepath.Join(t.TempDir(), "users.csv")
+	t.Setenv("KOTOKI_ADMIN_PASSWORD", "adminpw")
+	stderr.Reset()
+	rc := realMain(context.Background(), []string{"seed-users", "--api-url", api.srv.URL, "--count", "1", "--out", out}, &stdout, &stderr)
+	require.Equal(t, 0, rc, stderr.String())
+
+	// the flag wins over the environment
+	t.Setenv("KOTOKI_ADMIN_PASSWORD", "wrong")
+	rc = realMain(context.Background(), []string{"seed-users", "--api-url", api.srv.URL, "--count", "1", "--admin-password", "adminpw", "--out", out}, &stdout, &stderr)
+	require.Equal(t, 0, rc, stderr.String())
 }

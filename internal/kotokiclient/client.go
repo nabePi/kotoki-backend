@@ -41,6 +41,8 @@ type APIError struct {
 	Message   string
 	RequestID string
 	Details   json.RawMessage
+	// RetryAfter is the Retry-After header of the answer (whole seconds), 0 when absent.
+	RetryAfter time.Duration
 }
 
 // Error implements error.
@@ -57,6 +59,8 @@ type Client struct {
 	ids   idgen.Generator
 	mu    sync.RWMutex
 	token string
+	// clientIP, when set, is sent as X-Forwarded-For on every call (WithClientIP).
+	clientIP string
 	// refresh mirrors the refresh cookie the server last set, so a caller can persist it (the
 	// jar alone is not exportable).
 	refresh string
@@ -67,6 +71,14 @@ type Option func(*Client)
 
 // WithHTTPClient replaces the HTTP client. It should carry a cookie jar for Refresh to work.
 func WithHTTPClient(hc *http.Client) Option { return func(c *Client) { c.hc = hc } }
+
+// WithClientIP makes the client present itself as ip: every REST call and the WebSocket handshake
+// of RunConversation carry X-Forwarded-For: ip. It lets a load generator on one host look like many
+// users to the per-IP rate limits; the server honours it only from a peer in TRUSTED_PROXY_CIDRS.
+func WithClientIP(ip string) Option { return func(c *Client) { c.clientIP = ip } }
+
+// ClientIP returns the address set by WithClientIP ("" when none).
+func (c *Client) ClientIP() string { return c.clientIP }
 
 // WithClock replaces the clock used for event timestamps and receive times.
 func WithClock(clk clock.Clock) Option { return func(c *Client) { c.clk = clk } }
@@ -196,6 +208,9 @@ func (c *Client) do(ctx context.Context, method, path string, o callOpts, out an
 			req.Header.Set("Authorization", "Bearer "+t)
 		}
 	}
+	if c.clientIP != "" {
+		req.Header.Set("X-Forwarded-For", c.clientIP)
+	}
 	for k, v := range o.headers {
 		req.Header.Set(k, v)
 	}
@@ -210,7 +225,11 @@ func (c *Client) do(ctx context.Context, method, path string, o callOpts, out an
 		return fmt.Errorf("kotokiclient: read response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return decodeAPIError(resp.StatusCode, raw)
+		apiErr := decodeAPIError(resp.StatusCode, raw)
+		if secs, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && secs > 0 {
+			apiErr.RetryAfter = time.Duration(secs) * time.Second
+		}
+		return apiErr
 	}
 	if out == nil || len(raw) == 0 {
 		return nil

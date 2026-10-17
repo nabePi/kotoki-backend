@@ -7,16 +7,30 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/csv"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/nabePi/kotoki-backend/internal/kotokiclient"
+	"github.com/nabePi/kotoki-backend/test/load/vu"
+)
+
+const (
+	// maxSeedAttempts bounds the tries of one call that keeps answering 429 RATE_LIMITED. It is generous
+	// on purpose: admin_user (balance grants) refills 2 tokens/s and every worker waits its own
+	// Retry-After, so a burst of grants is served at that rate over many short waits.
+	maxSeedAttempts = 30
+	// maxSeedWait caps one pause between tries (Retry-After of register_ip is up to an hour: waiting
+	// that long is a decision for the operator, who should use --spread-ips instead).
+	maxSeedWait = 60 * time.Second
 )
 
 // envOr returns the value of an environment variable, "" when unset (flag defaults).
@@ -28,6 +42,11 @@ func envOr(key string) string {
 type seedOptions struct {
 	APIURL, AdminEmail, AdminPassword, Out string
 	Count, Balance, Concurrency            int
+	// SpreadIPs registers user n from the address vu.SpreadIP(n-1) (X-Forwarded-For), the same one
+	// `kotoki-load run --spread-ips` gives that VU.
+	SpreadIPs bool
+
+	sleep func(ctx context.Context, d time.Duration) error // tests only; default kotokiclient.SleepContext
 }
 
 func cmdSeed(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -38,13 +57,23 @@ func cmdSeed(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.IntVar(&o.Count, "count", 0, "number of users to create (load-1@load.test ... load-N@load.test)")
 	fs.IntVar(&o.Balance, "balance", 36000, "seconds of balance granted to each user")
 	fs.StringVar(&o.AdminEmail, "admin-email", envOr("KOTOKI_ADMIN_EMAIL"), "admin account (env KOTOKI_ADMIN_EMAIL)")
-	fs.StringVar(&o.AdminPassword, "admin-password", envOr("KOTOKI_ADMIN_PASSWORD"), "admin password (env KOTOKI_ADMIN_PASSWORD; prefer the env var)")
+	// no default from the environment: -h prints flag defaults, and this one is a secret
+	fs.StringVar(&o.AdminPassword, "admin-password", "", "admin password; when empty the env KOTOKI_ADMIN_PASSWORD is used (prefer the env var: argv shows in ps)")
 	fs.IntVar(&o.Concurrency, "concurrency", 8, "users created in parallel")
 	fs.StringVar(&o.Out, "out", "users.csv", "output file: email,password per user (mode 0600)")
+	fs.BoolVar(&o.SpreadIPs, "spread-ips", false, "register each user from its own address (X-Forwarded-For) so that the per-IP limits (register 5/h) do not apply; needs TRUSTED_PROXY_CIDRS on the server")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if err := seedUsers(ctx, o, func() *kotokiclient.Client { return kotokiclient.New(o.APIURL) }, stdout); err != nil {
+	if o.AdminPassword == "" {
+		o.AdminPassword = envOr("KOTOKI_ADMIN_PASSWORD")
+	}
+	if err := seedUsers(ctx, o, func(ip string) *kotokiclient.Client {
+		if ip == "" {
+			return kotokiclient.New(o.APIURL)
+		}
+		return kotokiclient.New(o.APIURL, kotokiclient.WithClientIP(ip))
+	}, stdout); err != nil {
 		_, _ = fmt.Fprintf(stderr, "kotoki-load seed-users: %v\n", err)
 		return 2
 	}
@@ -53,7 +82,9 @@ func cmdSeed(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 // seedUsers registers Count users through the public API, grants each Balance seconds as the admin,
 // and writes email,password rows to Out. The file is written only when every user was created.
-func seedUsers(ctx context.Context, o seedOptions, newClient func() *kotokiclient.Client, stdout io.Writer) error {
+// newClient builds a client that presents itself as ip ("" = the host's own address). A call the
+// server rate-limits (429) is retried after its Retry-After, at most maxSeedAttempts times.
+func seedUsers(ctx context.Context, o seedOptions, newClient func(ip string) *kotokiclient.Client, stdout io.Writer) error {
 	switch {
 	case o.Count <= 0:
 		return fmt.Errorf("--count must be positive")
@@ -66,11 +97,12 @@ func seedUsers(ctx context.Context, o seedOptions, newClient func() *kotokiclien
 	}
 	workers := min(max(o.Concurrency, 1), o.Count)
 
-	admin := newClient()
+	admin := newClient("")
 	if err := admin.Login(ctx, o.AdminEmail, o.AdminPassword); err != nil {
 		return fmt.Errorf("admin login: %w", err)
 	}
-	terms, err := admin.Terms(ctx)
+	var terms string
+	err := retryRateLimited(ctx, o.sleep, func() (e error) { terms, e = admin.Terms(ctx); return e })
 	if err != nil {
 		return fmt.Errorf("terms version: %w", err)
 	}
@@ -90,7 +122,11 @@ func seedUsers(ctx context.Context, o seedOptions, newClient func() *kotokiclien
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				email, pw, err := seedOne(ctx, newClient(), admin, i+1, terms, int64(o.Balance))
+				ip := ""
+				if o.SpreadIPs {
+					ip = vu.SpreadIP(i)
+				}
+				email, pw, err := seedOne(ctx, o.sleep, newClient(ip), admin, i+1, terms, int64(o.Balance))
 				mu.Lock()
 				if err != nil {
 					if firstErr == nil {
@@ -128,12 +164,16 @@ feed:
 	return nil
 }
 
-func seedOne(ctx context.Context, c, admin *kotokiclient.Client, n int, terms string, balance int64) (email, password string, err error) {
+func seedOne(ctx context.Context, sleep func(context.Context, time.Duration) error, c, admin *kotokiclient.Client, n int, terms string, balance int64) (email, password string, err error) {
 	email = fmt.Sprintf("load-%d@load.test", n)
 	if password, err = randomPassword(); err != nil {
 		return "", "", err
 	}
-	u, err := c.Register(ctx, kotokiclient.RegisterRequest{Email: email, Password: password, FullName: fmt.Sprintf("Load User %d", n), TermsVersion: terms})
+	var u kotokiclient.User
+	err = retryRateLimited(ctx, sleep, func() (e error) {
+		u, e = c.Register(ctx, kotokiclient.RegisterRequest{Email: email, Password: password, FullName: fmt.Sprintf("Load User %d", n), TermsVersion: terms})
+		return e
+	})
 	if err != nil {
 		return "", "", fmt.Errorf("register %s: %w", email, err)
 	}
@@ -141,10 +181,37 @@ func seedOne(ctx context.Context, c, admin *kotokiclient.Client, n int, terms st
 	if err != nil {
 		return "", "", fmt.Errorf("register %s: user id %q: %w", email, u.ID, err)
 	}
-	if err := admin.AdminGrantBalance(ctx, id, balance, "load test seed", uuid.NewString()); err != nil {
+	key := uuid.NewString() // one key for every try of this grant: a replay never grants twice
+	if err := retryRateLimited(ctx, sleep, func() error { return admin.AdminGrantBalance(ctx, id, balance, "load test seed", key) }); err != nil {
 		return "", "", fmt.Errorf("grant balance to %s: %w", email, err)
 	}
 	return email, password, nil
+}
+
+// retryRateLimited runs f and, while it fails with 429, waits (the answer's Retry-After, else a
+// doubling second) and runs it again, at most maxSeedAttempts times in all. Any other error ends it.
+func retryRateLimited(ctx context.Context, sleep func(context.Context, time.Duration) error, f func() error) error {
+	if sleep == nil {
+		sleep = kotokiclient.SleepContext
+	}
+	var err error
+	for attempt := 1; attempt <= maxSeedAttempts; attempt++ {
+		if err = f(); err == nil {
+			return nil
+		}
+		var api *kotokiclient.APIError
+		if !errors.As(err, &api) || api.Status != http.StatusTooManyRequests || attempt == maxSeedAttempts {
+			return err
+		}
+		wait := api.RetryAfter
+		if wait <= 0 {
+			wait = time.Second << (attempt - 1)
+		}
+		if serr := sleep(ctx, min(wait, maxSeedWait)); serr != nil {
+			return serr
+		}
+	}
+	return err
 }
 
 func randomPassword() (string, error) {

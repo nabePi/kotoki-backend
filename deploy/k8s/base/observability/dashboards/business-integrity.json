@@ -48,7 +48,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(kotoki_balance_invariant_violations)",
+          "expr": "sum(kotoki_balance_invariant_violations) or vector(0)",
           "datasource": {
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
@@ -114,7 +114,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (check) (kotoki_balance_invariant_violations)",
+          "expr": "max by (check) (kotoki_balance_invariant_violations) or vector(0)",
           "datasource": {
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
@@ -322,7 +322,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "min by (table) (kotoki_partition_months_ahead)",
+          "expr": "min by (table) (kotoki_partition_months_ahead) or on() vector(NaN)",
           "datasource": {
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"

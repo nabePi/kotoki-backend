@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,7 @@ type fakeAPI struct {
 	mu                                sync.Mutex
 	created                           []kotokiclient.CreateSessionRequest
 	emails                            []string
+	xffs                              map[string]string // email -> X-Forwarded-For of its login
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -46,6 +48,10 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		f.mu.Lock()
 		f.emails = append(f.emails, in.Email)
+		if f.xffs == nil {
+			f.xffs = map[string]string{}
+		}
+		f.xffs[in.Email] = r.Header.Get("X-Forwarded-For")
 		f.mu.Unlock()
 		write(w, 200, map[string]any{"access_token": "tok-" + in.Email, "user": map[string]any{"id": "u"}})
 	})
@@ -132,7 +138,11 @@ func TestRunner_NewSessionAfterEach(t *testing.T) {
 	require.GreaterOrEqual(t, api.creates.Load(), int64(3))
 	require.Equal(t, int64(3), api.logins.Load(), "one login per VU, not per session")
 	require.ElementsMatch(t, []string{"load-a@load.test", "load-b@load.test", "load-c@load.test"}, api.emails)
-	require.Equal(t, int(convs.Load()), agg.Summary().Sessions)
+	// A conversation finishing just as the run ends is counted by Conv but, being cut by the end, not
+	// recorded: at most one per VU may differ.
+	recorded, finished := agg.Summary().Sessions, int(convs.Load())
+	require.LessOrEqual(t, recorded, finished)
+	require.GreaterOrEqual(t, recorded, finished-3)
 
 	api.srv.CloseClientConnections()
 	require.Eventually(t, func() bool { return runtime.NumGoroutine() <= before+2 }, 2*time.Second, 20*time.Millisecond, "no goroutine left behind")
@@ -344,4 +354,50 @@ func TestAggregator_OutboxLag(t *testing.T) {
 	a.AddOutboxLag(0.5)
 	a.AddOutboxLag(1.5)
 	require.Equal(t, []float64{0.5, 1.5}, a.Snapshot().OutboxLagSamples)
+}
+
+func TestSpreadIP_DistinctValidAddresses(t *testing.T) {
+	seen := map[string]bool{}
+	for n := 0; n < 70000; n++ {
+		ip := SpreadIP(n)
+		a, err := netip.ParseAddr(ip)
+		require.NoError(t, err, ip)
+		require.True(t, a.Is4() && netip.MustParsePrefix("10.0.0.0/8").Contains(a), ip)
+		require.False(t, seen[ip], "address %s repeated at %d", ip, n)
+		seen[ip] = true
+	}
+}
+
+func TestRunner_SpreadIPsGivesEveryVUItsOwnAddress(t *testing.T) {
+	api := newFakeAPI(t)
+	conv, _ := okConv(kotokiclient.Report{Status: "COMPLETED"})
+	var mu sync.Mutex
+	byClient := map[string]bool{}
+	wrapped := func(ctx context.Context, c *kotokiclient.Client, s kotokiclient.SessionSpec, st []kotokiclient.Step, k kotokiclient.Sink) (kotokiclient.Report, error) {
+		mu.Lock()
+		byClient[c.ClientIP()] = true
+		mu.Unlock()
+		return conv(ctx, c, s, st, k)
+	}
+	r := &Runner{
+		Users: users(3), Planner: scenario.NewPlanner(1, testFixtures()), Conv: wrapped, Agg: NewAggregator(),
+		Hold: 150 * time.Millisecond, APIURL: api.srv.URL, SpreadIPs: true, IPBase: 100, Pre: map[string][][]byte{},
+	}
+	require.NoError(t, r.Run(context.Background()))
+	require.Equal(t, map[string]string{
+		"load-a@load.test": SpreadIP(100), "load-b@load.test": SpreadIP(101), "load-c@load.test": SpreadIP(102),
+	}, api.xffs, "the REST calls of VU i come from SpreadIP(IPBase+i)")
+	require.Len(t, byClient, 3)
+	require.NotContains(t, byClient, "")
+}
+
+func TestRunner_NoSpreadIPsSendsNoForwardedFor(t *testing.T) {
+	api := newFakeAPI(t)
+	conv, _ := okConv(kotokiclient.Report{Status: "COMPLETED"})
+	r := &Runner{
+		Users: users(1), Planner: scenario.NewPlanner(1, testFixtures()), Conv: conv, Agg: NewAggregator(),
+		Hold: 100 * time.Millisecond, APIURL: api.srv.URL, Pre: map[string][][]byte{},
+	}
+	require.NoError(t, r.Run(context.Background()))
+	require.Equal(t, map[string]string{"load-a@load.test": ""}, api.xffs)
 }

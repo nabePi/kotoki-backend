@@ -7,6 +7,8 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -458,4 +460,53 @@ func TestPromQL_GuardsHealthyZeroSeries(t *testing.T) {
 	require.Equal(t, `sum(kotoki_rabbitmq_queue_messages{queue=~".*[.]dlq"})`, q["dlq_depth"])
 	// the denominator of the ratio stays unguarded so an empty system is "no data"
 	require.NotContains(t, strings.SplitN(q["session_failed_server_error_ratio"], ") / ", 2)[1], "vector(0)")
+}
+
+func writeMetricsFile(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "metrics.txt")
+	require.NoError(t, os.WriteFile(p, []byte(body), 0o600))
+	return p
+}
+
+func TestRequireMetrics(t *testing.T) {
+	allowed := writeMetricsFile(t, "# comment\n\nkotoki_a_total\nkotoki_b_seconds\n?kotoki_only_on_failure_total\nkotoki_partition_months_ahead\n")
+	after := parse(t, "kotoki_a_total{x=\"1\"} 3\n"+histText("kotoki_b_seconds", "", []float64{1, 0, 0, 0, 0, 0})+"kotoki_b_seconds_sum 0.01\nkotoki_b_seconds_count 1\n")
+
+	err := RequireMetrics(after, allowed)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "kotoki_partition_months_ahead", "the missing name is in the error")
+	var miss *MissingMetricsError
+	require.ErrorAs(t, err, &miss)
+	require.Equal(t, []string{"kotoki_partition_months_ahead"}, miss.Missing)
+	require.NotContains(t, err.Error(), "kotoki_a_total")
+	require.NotContains(t, err.Error(), "kotoki_b_seconds", "a histogram is present through its _bucket/_sum/_count series")
+	require.NotContains(t, err.Error(), "kotoki_only_on_failure_total", "an optional (?) metric is not required")
+
+	after = append(after, parse(t, "kotoki_partition_months_ahead 3\n")...)
+	require.NoError(t, RequireMetrics(after, allowed))
+
+	// a metric that only exists as a prefix of another name is not present
+	prefixOnly := parse(t, "kotoki_a_total_extra 1\nkotoki_b_seconds_bucket{le=\"1\"} 1\nkotoki_partition_months_ahead 1\n")
+	err = RequireMetrics(prefixOnly, allowed)
+	require.ErrorContains(t, err, "kotoki_a_total")
+	require.NotContains(t, err.Error(), "kotoki_b_seconds", "a histogram is present through any one of its series")
+
+	// any one series of a histogram makes it present
+	two := writeMetricsFile(t, "kotoki_b_seconds\n")
+	for _, one := range []string{"kotoki_b_seconds_bucket{le=\"1\"} 1\n", "kotoki_b_seconds_sum 1\n", "kotoki_b_seconds_count 1\n"} {
+		require.NoError(t, RequireMetrics(parse(t, one), two), one)
+	}
+
+	// several missing names are all listed, sorted
+	err = RequireMetrics(nil, allowed)
+	require.Error(t, err)
+	msg := err.Error()
+	require.Less(t, strings.Index(msg, "kotoki_a_total"), strings.Index(msg, "kotoki_b_seconds"))
+	require.Less(t, strings.Index(msg, "kotoki_b_seconds"), strings.Index(msg, "kotoki_partition_months_ahead"))
+}
+
+func TestRequireMetrics_CannotPassEmpty(t *testing.T) {
+	require.Error(t, RequireMetrics(parse(t, "kotoki_x 1\n"), writeMetricsFile(t, "# nothing\n?kotoki_optional\n")), "no required metric at all is a bad contract file")
+	require.Error(t, RequireMetrics(parse(t, "kotoki_x 1\n"), filepath.Join(t.TempDir(), "missing.txt")))
 }

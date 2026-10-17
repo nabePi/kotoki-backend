@@ -42,6 +42,8 @@ type runOptions struct {
 	PromURL                     string
 	MetricsURLs                 []string
 	VerifyDB                    string
+	MetricsFile                 string // metrics.txt: the metric contract of a --metrics-urls run
+	SpreadIPs                   bool
 	AwaitEvaluations            time.Duration
 	Seed                        int64
 	BackgroundREST, SampleEvery time.Duration
@@ -74,6 +76,8 @@ func parseRun(args []string) (runOptions, error) {
 	fs.StringVar(&gateName, "gate", "", "gate: g1, g2, g3, g4a, g4b, soak, real, g1-local")
 	fs.StringVar(&o.VerifyDB, "verify-db", "", "PostgreSQL URL (read-only role): run kotoki-verify after the run and feed K13 (evaluations) and K14")
 	fs.DurationVar(&o.AwaitEvaluations, "await-evaluations", 5*time.Minute, "with --verify-db: how long completed sessions get to receive their evaluation (K13)")
+	fs.StringVar(&o.MetricsFile, "metrics-file", "", "with --metrics-urls: metrics.txt; every name in it without '?' must appear in the final scrape (metric-contract, outside K1-K15)")
+	fs.BoolVar(&o.SpreadIPs, "spread-ips", false, "each VU presents its own address (X-Forwarded-For) so that the per-IP limits do not throttle one generator host; needs TRUSTED_PROXY_CIDRS on the server (local runs)")
 	fs.StringVar(&o.Out, "out", "", "result file (JSON)")
 	fs.Int64Var(&o.Seed, "seed", 1, "seed of the behaviour model")
 	fs.DurationVar(&o.BackgroundREST, "background-rest", time.Minute, "period of each user's background REST calls (0: off)")
@@ -134,6 +138,9 @@ func parseRun(args []string) (runOptions, error) {
 	}
 	if metricsURLs != "" && len(o.MetricsURLs) == 0 {
 		return o, errors.New("--metrics-urls is empty")
+	}
+	if o.MetricsFile != "" && o.PromURL != "" {
+		return o, errors.New("--metrics-file needs --metrics-urls: the metric contract reads a scrape")
 	}
 	if o.AwaitEvaluations < 0 {
 		return o, errors.New("--await-evaluations cannot be negative")
@@ -197,14 +204,22 @@ func sliceForInstance(users []vu.Credential, totalVUs, instances, index int) ([]
 	if n == 0 {
 		return nil, 0, fmt.Errorf("%d VUs are too few for %d instances", totalVUs, instances)
 	}
-	start := index*per + min(index, rem)
+	start := instanceStart(totalVUs, instances, index)
 	return users[start : start+n], n, nil
+}
+
+// instanceStart is the position in the users file of the first user of instance index.
+func instanceStart(totalVUs, instances, index int) int {
+	per, rem := totalVUs/instances, totalVUs%instances
+	return index*per + min(index, rem)
 }
 
 // runConfig is a run that is ready to start.
 type runConfig struct {
 	Spec   gate.Spec
 	Runner *vu.Runner
+	// MetricsFile, when set, turns on the metric contract (Source runs only): see server.RequireMetrics.
+	MetricsFile string
 	// Exactly one of Source (scrape mode: a snapshot before and after, plus periodic outbox lag
 	// samples) and Prom (staging) provides the server-side observations.
 	Source server.Source
@@ -273,9 +288,11 @@ func build(o runOptions, stderr io.Writer) (runConfig, error) {
 			Users: users, VUs: vus, Planner: planner, Conv: kotokiclient.RunConversation, Agg: vu.NewAggregator(),
 			Ramp: o.Spec.Ramp, Hold: o.Spec.Hold, BackgroundRESTEvery: o.BackgroundREST,
 			APIURL: o.APIURL, WSURL: o.WSURL, Origin: o.Origin, Pre: pre,
+			SpreadIPs: o.SpreadIPs, IPBase: instanceStart(o.Spec.VUs, o.Instances, o.InstanceIndex),
 			Logf: func(f string, a ...any) { _, _ = fmt.Fprintf(stderr, "kotoki-load: "+f+"\n", a...) },
 		},
-		Meta: map[string]string{"api_url": o.APIURL, "fixtures": dir, "seed": fmt.Sprint(o.Seed)},
+		Meta:        map[string]string{"api_url": o.APIURL, "fixtures": dir, "seed": fmt.Sprint(o.Seed)},
+		MetricsFile: o.MetricsFile,
 	}
 	if o.VerifyDB != "" {
 		cfg.Extra = verifyExtra(o.VerifyDB, time.Now(), o.AwaitEvaluations)
@@ -351,6 +368,7 @@ func execute(ctx context.Context, cfg runConfig, stdout, stderr io.Writer) int {
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	obs := gate.Observation{}
+	var contract *contractResult
 	switch {
 	case cfg.Prom != nil:
 		window := max(finished.Sub(started).Round(time.Second), time.Second)
@@ -364,6 +382,9 @@ func execute(ctx context.Context, cfg runConfig, stdout, stderr io.Writer) int {
 			addErr("final scrape: %v", err)
 		} else {
 			obs = server.FromScrape(before, after, agg.Snapshot())
+			if cfg.MetricsFile != "" {
+				contract = checkContract(after, cfg.MetricsFile)
+			}
 		}
 	}
 	if cfg.Extra != nil {
@@ -380,13 +401,17 @@ func execute(ctx context.Context, cfg runConfig, stdout, stderr io.Writer) int {
 		obs[k] = v
 	}
 
+	if cfg.MetricsFile != "" && contract == nil {
+		// the final scrape failed: the contract could not be checked, which is a failure of it
+		contract = &contractResult{Error: "no final scrape to check"}
+	}
 	results := gate.Evaluate(cfg.Spec, obs)
-	pass := gate.AllPass(results)
+	pass := gate.AllPass(results) && (contract == nil || contract.Pass)
 	verdict := "FAIL"
 	if pass {
 		verdict = "PASS"
 	}
-	printResults(stdout, cfg.Spec, results, verdict)
+	printResults(stdout, cfg.Spec, results, verdict, contract)
 	for _, e := range errs {
 		_, _ = fmt.Fprintf(stderr, "kotoki-load run: %s\n", e)
 	}
@@ -395,7 +420,7 @@ func execute(ctx context.Context, cfg runConfig, stdout, stderr io.Writer) int {
 		for k, v := range cfg.Meta {
 			meta[k] = v
 		}
-		if err := writeResult(cfg, results, obs, pass, errs, meta); err != nil {
+		if err := writeResult(cfg, results, obs, contract, pass, errs, meta); err != nil {
 			_, _ = fmt.Fprintf(stderr, "kotoki-load run: write %s: %v\n", cfg.Out, err)
 			return 2
 		}
@@ -457,7 +482,28 @@ func maxOf(s promtext.Samples, name string) (float64, bool) {
 	return m, found
 }
 
-func printResults(w io.Writer, spec gate.Spec, rs []gate.Result, verdict string) {
+// contractResult is the metric contract of a run (server.RequireMetrics): a check beside K1-K15 that
+// fails the run when a metric the repository promises is not exposed.
+type contractResult struct {
+	Pass    bool     `json:"pass"`
+	Missing []string `json:"missing"`
+	Error   string   `json:"error,omitempty"`
+}
+
+func checkContract(after promtext.Samples, file string) *contractResult {
+	err := server.RequireMetrics(after, file)
+	if err == nil {
+		return &contractResult{Pass: true, Missing: []string{}}
+	}
+	res := &contractResult{Missing: []string{}, Error: err.Error()}
+	var miss *server.MissingMetricsError
+	if errors.As(err, &miss) {
+		res.Missing = miss.Missing
+	}
+	return res
+}
+
+func printResults(w io.Writer, spec gate.Spec, rs []gate.Result, verdict string, contract *contractResult) {
 	for _, r := range rs {
 		status, value := "FAIL", fmt.Sprintf("%g", r.Value)
 		switch {
@@ -474,6 +520,13 @@ func printResults(w io.Writer, spec gate.Spec, rs []gate.Result, verdict string)
 		}
 		_, _ = fmt.Fprintln(w, line)
 	}
+	if contract != nil {
+		status, detail := "PASS", ""
+		if !contract.Pass {
+			status, detail = "FAIL", ": "+contract.Error
+		}
+		_, _ = fmt.Fprintf(w, "  %-4s %-5s %-10s %s%s\n", "MC", status, "-", "metric-contract (outside K1-K15)", detail)
+	}
 	_, _ = fmt.Fprintf(w, "GATE %s: %s\n", spec.Name, verdict)
 }
 
@@ -487,7 +540,7 @@ type resultJSON struct {
 	Reason    string   `json:"reason,omitempty"`
 }
 
-func writeResult(cfg runConfig, rs []gate.Result, obs gate.Observation, pass bool, errs []string, meta map[string]string) error {
+func writeResult(cfg runConfig, rs []gate.Result, obs gate.Observation, contract *contractResult, pass bool, errs []string, meta map[string]string) error {
 	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 	out := struct {
 		Gate        string             `json:"gate"`
@@ -502,11 +555,12 @@ func writeResult(cfg runConfig, rs []gate.Result, obs gate.Observation, pass boo
 		Observation map[string]float64 `json:"observation"`
 		Client      vu.Summary         `json:"client"`
 		Errors      []string           `json:"errors"`
+		Contract    *contractResult    `json:"metric_contract,omitempty"`
 		Meta        map[string]string  `json:"meta"`
 	}{
 		Gate: cfg.Spec.Name, Mode: cfg.Spec.Mode, VUs: cfg.Spec.VUs, Ramp: cfg.Spec.Ramp.String(), Hold: cfg.Spec.Hold.String(),
 		Instance: cfg.Instance, Instances: cfg.Instances, Pass: pass, Observation: map[string]float64{},
-		Client: cfg.Runner.Agg.Summary(), Errors: append([]string{}, errs...), Meta: meta,
+		Client: cfg.Runner.Agg.Summary(), Errors: append([]string{}, errs...), Contract: contract, Meta: meta,
 	}
 	for _, r := range rs {
 		j := resultJSON{ID: r.ID, Name: r.Name, Pass: r.Pass, Skipped: r.Skipped, Threshold: r.Threshold, Reason: r.Reason}

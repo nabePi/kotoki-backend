@@ -40,6 +40,13 @@ type Runner struct {
 	BackgroundRESTEvery time.Duration
 
 	APIURL, WSURL, Origin string
+	// SpreadIPs makes VU i present itself as SpreadIP(IPBase+i) (X-Forwarded-For) on every REST call
+	// and WebSocket handshake. One generator host would otherwise exhaust the per-IP limits
+	// (login, ws_connect_ip) that real users, each on their own address, never share. The server
+	// honours the header only from a peer in TRUSTED_PROXY_CIDRS, so this is for local and test
+	// deployments. Ignored when NewClient is set.
+	SpreadIPs bool
+	IPBase    int
 	// Pre holds the pre-encoded packets by fixture name (Plan.Steps).
 	Pre map[string][][]byte
 
@@ -104,9 +111,12 @@ func (r *Runner) Run(ctx context.Context) error {
 	n := r.vus()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	newClient := r.NewClient
-	if newClient == nil {
-		newClient = r.defaultClients()
+	defaults := r.defaultClients()
+	newClient := func(idx int) *kotokiclient.Client {
+		if r.NewClient != nil {
+			return r.NewClient()
+		}
+		return defaults(idx)
 	}
 
 	var wg sync.WaitGroup
@@ -121,7 +131,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.vu(ctx, k, newClient())
+			r.vu(ctx, k, newClient(k))
 		}()
 	}
 	if ctx.Err() == nil && step > 0 {
@@ -141,13 +151,23 @@ func (r *Runner) Run(ctx context.Context) error {
 
 // defaultClients gives every VU its own cookie jar (its own refresh cookie) over one shared
 // transport, so that connections are reused across VUs.
-func (r *Runner) defaultClients() func() *kotokiclient.Client {
+func (r *Runner) defaultClients() func(idx int) *kotokiclient.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.MaxIdleConnsPerHost = 256
-	return func() *kotokiclient.Client {
+	return func(idx int) *kotokiclient.Client {
 		jar, _ := cookiejar.New(nil) // never fails with nil options
-		return kotokiclient.New(r.APIURL, kotokiclient.WithHTTPClient(&http.Client{Jar: jar, Timeout: 30 * time.Second, Transport: tr}))
+		opts := []kotokiclient.Option{kotokiclient.WithHTTPClient(&http.Client{Jar: jar, Timeout: 30 * time.Second, Transport: tr})}
+		if r.SpreadIPs {
+			opts = append(opts, kotokiclient.WithClientIP(SpreadIP(r.IPBase+idx)))
+		}
+		return kotokiclient.New(r.APIURL, opts...)
 	}
+}
+
+// SpreadIP is the n-th (0-based) distinct address of 10.0.0.0/8 that SpreadIPs hands out.
+func SpreadIP(n int) string {
+	m := n + 1
+	return fmt.Sprintf("10.%d.%d.%d", m>>16&255, m>>8&255, m&255)
 }
 
 // vuState is what one VU keeps between sessions.

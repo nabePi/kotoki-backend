@@ -121,11 +121,11 @@ func providers() Dashboard {
 		ts("Local concurrency wait P95 and rejections", "s",
 			quantile(0.95, "kotoki_provider_concurrency_wait_seconds", "", "provider, capability", "5m"),
 			"sum by (provider, capability) (rate(kotoki_provider_concurrency_rejected_total[5m])) or vector(0)"),
-		ts("STT connection rotations per second", "ops", "sum by (provider) (rate(kotoki_stt_rotations_total[5m]))"),
+		ts("STT connection rotations per second", "ops", "sum by (provider) (rate(kotoki_stt_rotations_total[5m])) or vector(0)"),
 		ts("Usage per hour by unit (tokens, characters, audio seconds)", "short",
 			"sum by (provider, capability, unit) (increase(kotoki_provider_usage_total[1h]))"),
 		ts("Estimated cost per hour (USD)", "currencyUSD",
-			"sum by (provider, capability) (increase(kotoki_provider_cost_usd_total[1h]))"),
+			"sum by (provider, capability) (increase(kotoki_provider_cost_usd_total[1h])) or vector(0)"),
 		ts("Session cost P95 (USD) and cost per minute P95", "currencyUSD",
 			quantile(0.95, "kotoki_session_cost_usd", "", "", "1h"),
 			quantile(0.95, "kotoki_session_cost_per_minute_usd", "", "", "1h")),
@@ -187,9 +187,9 @@ func dataStores() Dashboard {
 
 func businessIntegrity() Dashboard {
 	return Dashboard{UID: "kotoki-business", Title: "Business integrity", Panels: []Panel{
-		stat("Balance invariant violations", "short", "sum(kotoki_balance_invariant_violations)"),
+		stat("Balance invariant violations", "short", "sum(kotoki_balance_invariant_violations) or vector(0)"),
 		stat("FAILED sessions, last hour", "short", `sum(increase(kotoki_sessions_ended_total{status="FAILED"}[1h])) or vector(0)`),
-		ts("Balance invariant violations per check", "short", "max by (check) (kotoki_balance_invariant_violations)"),
+		ts("Balance invariant violations per check", "short", "max by (check) (kotoki_balance_invariant_violations) or vector(0)"),
 		ts("Settlement: sessions ended per hour by end_reason and status", "short",
 			"sum by (end_reason, status) (increase(kotoki_sessions_ended_total[1h]))"),
 		ts("FAILED sessions per hour", "short", `sum by (end_reason) (increase(kotoki_sessions_ended_total{status="FAILED"}[1h])) or vector(0)`),
@@ -199,6 +199,7 @@ func businessIntegrity() Dashboard {
 			`time() - max(kotoki_job_last_success_timestamp_seconds{job="balance_reconcile"})`,
 			`time() - max(kotoki_job_last_success_timestamp_seconds{job="reservation_cleanup"})`),
 		ts("Session sweeper actions per hour", "short", "sum by (rule, result) (increase(kotoki_sweeper_actions_total[1h]))"),
-		ts("Partition months ahead per table", "short", "min by (table) (kotoki_partition_months_ahead)"),
+		ts("Partition months ahead per table", "short", // NaN, not 0: before the first run of the daily job the gauge has no series, and 0 would read as "no partition ahead"
+			"min by (table) (kotoki_partition_months_ahead) or on() vector(NaN)"),
 	}}
 }

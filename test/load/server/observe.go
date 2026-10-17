@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"github.com/nabePi/kotoki-backend/test/load/gate"
 	"github.com/nabePi/kotoki-backend/test/load/hist"
 	"github.com/nabePi/kotoki-backend/test/load/promtext"
+	"github.com/nabePi/kotoki-backend/test/tools/metricref"
 )
 
 // Metric names read by FromScrape. TestPromQL_ReferencesKnownMetrics keeps them in metrics.txt.
@@ -203,4 +205,51 @@ func nearestRank(xs []float64, q float64) (float64, bool) {
 		rank = 1
 	}
 	return s[rank-1], true
+}
+
+// MissingMetricsError is the failure of RequireMetrics: Missing (sorted) of Required names have no series.
+type MissingMetricsError struct {
+	Missing  []string
+	Required int
+}
+
+func (e *MissingMetricsError) Error() string {
+	return fmt.Sprintf("metric contract: %d of %d required metrics have no series in the final scrape: %s",
+		len(e.Missing), e.Required, strings.Join(e.Missing, ", "))
+}
+
+// RequireMetrics is the metric contract of a local run: every name in the allowed file (metrics.txt)
+// without the '?' prefix must have at least one series in the final scrape; a histogram counts
+// through its _bucket, _sum or _count series. It returns an error naming every missing metric, so
+// that a dashboard, alert or gate that reads a metric the code does not expose cannot stay unnoticed.
+// Names marked '?' (registered but silent until a failure path runs) are not required. A file with
+// no required name is an error: the contract cannot pass empty.
+func RequireMetrics(after promtext.Samples, allowedFile string) error {
+	known, err := metricref.LoadAllowed(allowedFile)
+	if err != nil {
+		return fmt.Errorf("metric contract: %w", err)
+	}
+	present := make(map[string]bool, len(after))
+	for _, s := range after {
+		present[s.Name] = true
+	}
+	var required, missing []string
+	for name, optional := range known {
+		if optional {
+			continue
+		}
+		required = append(required, name)
+		if present[name] || present[name+"_bucket"] || present[name+"_sum"] || present[name+"_count"] {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	if len(required) == 0 {
+		return fmt.Errorf("metric contract: %s lists no required metric", allowedFile)
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return &MissingMetricsError{Missing: missing, Required: len(required)}
+	}
+	return nil
 }
