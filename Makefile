@@ -148,7 +148,7 @@ cli:
 	CGO_ENABLED=1 $(GO) build -o bin/kotoki-cli ./cmd/kotoki-cli
 
 docker-build:
-	for b in api realtime worker migrate; do \
+	for b in api realtime worker migrate seed; do \
 	  $(CONTAINER_ENGINE) build -f deploy/docker/$$b.Dockerfile --build-arg VERSION=$(VERSION) \
 	    --build-arg GIT_COMMIT=$(GIT_COMMIT) -t kotoki/$$b:$(VERSION) . || exit 1; done
 
