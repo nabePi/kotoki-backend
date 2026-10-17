@@ -1,0 +1,9 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kotoki-worker-memory
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: worker-memory}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: worker-memory}

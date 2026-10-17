@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kotoki-worker-evaluation-config
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: worker-evaluation}
+data:
+  # Grace pod = WORKER_SHUTDOWN_GRACE + 10 (spec §13.10.2); nilai >= handler timeout (§9.6.2).
+  WORKER_SHUTDOWN_GRACE: 200s
+  OTEL_SERVICE_NAME: kotoki-worker-evaluation

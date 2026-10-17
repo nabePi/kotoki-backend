@@ -1,0 +1,9 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kotoki-worker-core
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: worker-core}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: worker-core}

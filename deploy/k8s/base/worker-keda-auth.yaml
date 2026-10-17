@@ -1,0 +1,10 @@
+# Kredensial scaler RabbitMQ: URI amqp(s) lengkap ada di Secret kotoki-keda-secrets (kunci host,
+# dibuat overlay/ExternalSecret); tidak ada nilai di manifest.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: kotoki-keda-rabbitmq
+  labels: {app.kubernetes.io/name: kotoki}
+spec:
+  secretTargetRef:
+    - {parameter: host, name: kotoki-keda-secrets, key: host}
