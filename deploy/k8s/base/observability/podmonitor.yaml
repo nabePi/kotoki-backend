@@ -1,0 +1,27 @@
+# Scrape /metrics (port `ops`) semua pod aplikasi: api, realtime, worker-* (spec §13.7.3).
+# Job migrate/seed tidak punya port `ops` sehingga tidak menjadi target.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kotoki
+  namespace: observability
+  labels:
+    release: kube-prometheus-stack   # podMonitorSelector bawaan kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames: [kotoki]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kotoki
+  # label `app_kubernetes_io_component` (api|realtime|worker-*) dipakai alert/dashboard per deployment.
+  # `version` sengaja tidak ikut: berganti tiap rilis (churn deret).
+  podTargetLabels:
+    - app.kubernetes.io/component
+  podMetricsEndpoints:
+    - port: ops
+      path: /metrics
+      interval: 15s
+      # kotoki_job_* membawa label `job` (session_sweeper, ...). Tanpa honorLabels Prometheus mengganti
+      # label itu dengan label target `job` dan menyimpan aslinya sebagai exported_job, sehingga alert
+      # SweeperStale/CleanupStale tidak pernah cocok.
+      honorLabels: true

@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Objek observability memakai namespace `observability` sendiri (transformer unsetOnly di base tidak
+# menimpanya). Namespace dibuat oleh kube-prometheus-stack, bukan di sini.
+resources:
+  - podmonitor.yaml
+  - otel-collector-lb.yaml
+  - otel-collector-sampler.yaml
+  - alloy-audit-rule.yaml

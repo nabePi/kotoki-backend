@@ -48,6 +48,7 @@ resources:
   - networkpolicy/api.yaml
   - networkpolicy/realtime.yaml
   - networkpolicy/worker.yaml
+  - observability
 # Tag diganti overlay (tag = git SHA; prod = digest). REPLACE_SHA sengaja tidak valid agar
 # base mentah tidak pernah ter-deploy.
 images:

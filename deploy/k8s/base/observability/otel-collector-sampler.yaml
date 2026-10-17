@@ -1,0 +1,146 @@
+# Tier 2 collector: tail sampling (spec §13.1/§13.7.2): 100% trace berstatus ERROR, 100% durasi
+# > 2 s, 10% sisanya (policy bersifat OR), lalu OTLP ke Tempo. Menerima trace hanya dari tier lb
+# lewat Service headless (resolver DNS exporter loadbalancing), sehingga satu trace selalu
+# berakhir di satu replika. Rahasia/PII tidak ada di konfigurasi; tidak ada exporter debug.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-sampler-config
+  namespace: observability
+  labels: &labels
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: sampler
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc: {endpoint: 0.0.0.0:4317}
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 800
+        spike_limit_mib: 150
+      tail_sampling:
+        decision_wait: 10s
+        num_traces: 50000
+        expected_new_traces_per_sec: 200
+        policies:
+          - name: errors
+            type: status_code
+            status_code: {status_codes: [ERROR]}
+          - name: slow
+            type: latency
+            latency: {threshold_ms: 2000}
+          - name: baseline
+            type: probabilistic
+            probabilistic: {sampling_percentage: 10}
+      batch: {}
+    exporters:
+      otlp/tempo:
+        endpoint: tempo.observability:4317
+        tls: {insecure: true}
+    extensions:
+      health_check: {endpoint: "0.0.0.0:13133"}
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, tail_sampling, batch]
+          exporters: [otlp/tempo]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector-sampler
+  namespace: observability
+  labels: &labels
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: sampler
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 25%, maxUnavailable: 0}
+  selector:
+    matchLabels: *labels
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      priorityClassName: kotoki-default
+      terminationGracePeriodSeconds: 40   # decision_wait 10 s + flush batch + margin
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: *labels}
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.120.0
+          args:
+            - --config=/etc/otelcol/config.yaml
+          ports:
+            - {name: otlp-grpc, containerPort: 4317}
+            - {name: health, containerPort: 13133}
+          env:
+            - {name: GOMEMLIMIT, value: 900MiB}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          livenessProbe:
+            httpGet: {path: /, port: health}
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /, port: health}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          volumeMounts:
+            - {name: config, mountPath: /etc/otelcol, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: otel-collector-sampler-config}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector-sampler-headless
+  namespace: observability
+  labels: &labels
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: sampler
+spec:
+  clusterIP: None
+  selector: *labels
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: otlp-grpc}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: otel-collector-sampler
+  namespace: observability
+  labels: &labels
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: sampler
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: *labels

@@ -35,7 +35,9 @@ for ov in "${targets[@]}"; do
   expect "$ov" PriorityClass kotoki-default '.value' 1000
   expect "$ov" PriorityClass kotoki-default '.globalDefault' false
 
-  deps="$(names_of "$ov" Deployment)"
+  # Hanya Deployment aplikasi (namespace kotoki); collector di namespace observability diperiksa
+  # 60-observability.sh, yang juga gagal bila ada Deployment di luar dua himpunan itu.
+  deps="$(K=Deployment "$YQ" -r '.[] | select(.kind == strenv(K) and .metadata.namespace == "kotoki") | .metadata.name' "$(render "$ov")")"
   if [ -z "$deps" ]; then _fail "$ov: tidak ada Deployment"; continue; fi
   for d in $deps; do
     expect "$ov" Deployment "$d" '.metadata.namespace' kotoki

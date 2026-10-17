@@ -1,0 +1,36 @@
+# Aturan log audit (spec §13.7.1, §13.8.6). Baris slog JSON dengan "audit":true (internal/auth,
+# httpapi, jobs/account_purge) masuk stream Loki {stream="audit"}; retensi per stream: 400 hari untuk
+# audit, 30 hari untuk log aplikasi lain (loki-retention.yaml disisipkan ke konfigurasi Loki oleh
+# platform; `retention_stream` butuh compactor retention_enabled). Hanya label `stream` yang
+# ditambahkan: ip, user_id, email, dan user agent TIDAK dijadikan label.
+# Berkas audit.alloy di-include oleh konfigurasi Grafana Alloy (DaemonSet); `loki.write.default` dan
+# `loki.source.kubernetes.pods` didefinisikan di sana (di luar repo ini).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-audit-rule
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: alloy-audit-rule
+data:
+  audit.alloy: |
+    // Log aplikasi tetap 30 hari (720h); stream audit 400 hari (9600h), lihat loki-retention.yaml.
+    loki.process "kotoki_audit" {
+      forward_to = [loki.write.default.receiver]
+
+      stage.match {
+        selector = "{namespace=\"kotoki\"} |= \"\\\"audit\\\":true\""
+        stage.static_labels {
+          values = {
+            stream = "audit",
+          }
+        }
+      }
+    }
+  loki-retention.yaml: |
+    limits_config:
+      retention_period: 720h        # 30 hari: log aplikasi
+      retention_stream:
+        - selector: '{stream="audit"}'
+          priority: 1
+          period: 9600h             # 400 hari: audit
