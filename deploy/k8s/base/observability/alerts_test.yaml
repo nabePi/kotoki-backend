@@ -1,0 +1,911 @@
+# promtool test rules (make prom-check). rule_files = out/rules.yaml, gerasi oleh hack/extract-rules.sh
+# dari prometheusrule.yaml. Setiap kasus: deret masukan -> kapan alert harus (tidak) menyala.
+rule_files:
+  - ../../../../out/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # (a) PartitionsRunningOut: sisa 1 bulan -> firing critical setelah for 30m; sisa 2 -> tidak
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_partition_months_ahead{table="session_turns"}'
+        values: '1x40'
+    alert_rule_test:
+      - alertname: PartitionsRunningOut
+        eval_time: 29m
+        exp_alerts: []
+      - alertname: PartitionsRunningOut
+        eval_time: 31m
+        exp_alerts:
+          - exp_labels: {severity: critical, table: session_turns}
+            exp_annotations: &partitions_ann
+              summary: "Partisi session_turns tersisa kurang dari 2 bulan ke depan"
+              runbook: R9
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R9-jobs-stale.md
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_partition_months_ahead{table="session_turns"}'
+        values: '2x40'
+    alert_rule_test:
+      - {alertname: PartitionsRunningOut, eval_time: 35m, exp_alerts: []}
+
+  # (b) BalanceInvariantViolation: for 0m, critical segera
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_balance_invariant_violations{check="R1"}'
+        values: '1x10'
+      - series: 'kotoki_balance_invariant_violations{check="R2"}'
+        values: '0x10'
+    alert_rule_test:
+      - alertname: BalanceInvariantViolation
+        eval_time: 0m
+        exp_alerts:
+          - exp_labels: {severity: critical, check: R1}
+            exp_annotations:
+              summary: "Invarian saldo R1 dilanggar"
+              runbook: R7
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R7-balance-invariant.md
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_balance_invariant_violations{check="R1"}'
+        values: '0x10'
+    alert_rule_test:
+      - {alertname: BalanceInvariantViolation, eval_time: 5m, exp_alerts: []}
+
+  # (c) SweeperStale: sukses terakhir t=120 s; basi > 60 s sejak t=240 s, for 2m -> firing t=360 s
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_job_last_success_timestamp_seconds{job="session_sweeper"}'
+        values: '0 60 120'
+    alert_rule_test:
+      - {alertname: SweeperStale, eval_time: 4m, exp_alerts: []}      # baru basi, masih pending
+      - {alertname: SweeperStale, eval_time: 5m, exp_alerts: []}      # pending (for 2m belum lewat)
+      - alertname: SweeperStale
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "session_sweeper tidak sukses lebih dari 60 detik"
+              runbook: R9
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R9-jobs-stale.md
+  - interval: 1m   # sweeper sehat: timestamp terus maju
+    input_series:
+      - series: 'kotoki_job_last_success_timestamp_seconds{job="session_sweeper"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - {alertname: SweeperStale, eval_time: 15m, exp_alerts: []}
+
+  # (d) DLQNotEmpty: DLQ berisi 1 pesan 11 m -> warning; antrean utama tidak dihitung
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_rabbitmq_queue_messages{queue="evaluation.session_completed.dlq"}'
+        values: '1x20'
+      - series: 'kotoki_rabbitmq_queue_messages{queue="evaluation.session_completed"}'
+        values: '5x20'
+    alert_rule_test:
+      - {alertname: DLQNotEmpty, eval_time: 9m, exp_alerts: []}
+      - alertname: DLQNotEmpty
+        eval_time: 11m
+        exp_alerts:
+          - exp_labels: {severity: warning, queue: evaluation.session_completed.dlq}
+            exp_annotations:
+              summary: "DLQ evaluation.session_completed.dlq tidak kosong"
+              runbook: R3
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+      - {alertname: DLQGrowing, eval_time: 11m, exp_alerts: []}      # 1 <= 50
+  - interval: 1m   # DLQGrowing: > 50 (51) critical, tepat 50 tidak
+    input_series:
+      - series: 'kotoki_rabbitmq_queue_messages{queue="memory.session_completed.dlq"}'
+        values: '51x20'
+      - series: 'kotoki_rabbitmq_queue_messages{queue="learner.evaluation_completed.dlq"}'
+        values: '50x20'
+    alert_rule_test:
+      - alertname: DLQGrowing
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels: {severity: critical, queue: memory.session_completed.dlq}
+            exp_annotations:
+              summary: "DLQ memory.session_completed.dlq lebih dari 50 pesan"
+              runbook: R3
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+  - interval: 1m   # QueueBacklog: > 200 dan naik terus 15 m; retry/DLQ dan antrean datar tidak
+    input_series:
+      - series: 'kotoki_rabbitmq_queue_messages{queue="evaluation.session_completed"}'
+        values: '0+30x40'
+      - series: 'kotoki_rabbitmq_queue_messages{queue="memory.session_completed"}'
+        values: '500x40'
+      - series: 'kotoki_rabbitmq_queue_messages{queue="evaluation.session_completed.retry.5s"}'
+        values: '0+30x40'
+    alert_rule_test:
+      - {alertname: QueueBacklog, eval_time: 15m, exp_alerts: []}
+      - {alertname: QueueBacklog, eval_time: 20m, exp_alerts: []}      # > 200 sejak ~7m, for 15m belum lewat
+      - alertname: QueueBacklog
+        eval_time: 25m
+        exp_alerts:
+          - exp_labels: {severity: warning, queue: evaluation.session_completed}
+            exp_annotations:
+              summary: "Antrean evaluation.session_completed lebih dari 200 pesan dan terus naik"
+              runbook: R3
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+
+  # (e) RealtimeRejectingCapacity: laju rejected_capacity > 0 selama 5m -> critical
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_realtime_connections_total{result="rejected_capacity"}'
+        values: '0+1x20'
+      - series: 'kotoki_realtime_connections_total{result="accepted"}'
+        values: '0+100x20'
+    alert_rule_test:
+      - {alertname: RealtimeRejectingCapacity, eval_time: 3m, exp_alerts: []}
+      - alertname: RealtimeRejectingCapacity
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Realtime menolak koneksi karena kapasitas penuh"
+              runbook: R6
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R6-realtime-capacity.md
+  - interval: 1m   # tidak ada penolakan kapasitas -> diam
+    input_series:
+      - series: 'kotoki_realtime_connections_total{result="rejected_capacity"}'
+        values: '0x20'
+      - series: 'kotoki_realtime_connections_total{result="accepted"}'
+        values: '0+100x20'
+    alert_rule_test:
+      - {alertname: RealtimeRejectingCapacity, eval_time: 15m, exp_alerts: []}
+
+  # (f) ProviderUnavailable: circuit OPEN STT/LLM/EVALUATION (vendor aktif), atau SEMUA vendor TTS
+  - interval: 1m   # STT: kedua provider OPEN -> dua alert critical
+    input_series:
+      - series: 'kotoki_provider_circuit_state{provider="OPENAI",capability="STT"}'
+        values: '1x10'
+      - series: 'kotoki_provider_circuit_state{provider="ELEVENLABS",capability="STT"}'
+        values: '1x10'
+    alert_rule_test:
+      - alertname: ProviderUnavailable
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels: {severity: critical, capability: STT, provider: OPENAI}
+            exp_annotations: &unavail_ann
+              summary: "Vendor aktif tidak tersedia (circuit OPEN) tanpa fallback otomatis: ganti vendor manual (R10)"
+              runbook: R2
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R2-provider-degraded.md
+          - exp_labels: {severity: critical, capability: STT, provider: ELEVENLABS}
+            exp_annotations: *unavail_ann
+  - interval: 1m   # STT: satu-satunya vendor aktif OPEN -> critical (tidak ada fallback, D-017)
+    input_series:
+      - series: 'kotoki_provider_circuit_state{provider="OPENAI",capability="STT"}'
+        values: '1x10'
+    alert_rule_test:
+      - alertname: ProviderUnavailable
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels: {severity: critical, capability: STT, provider: OPENAI}
+            exp_annotations: *unavail_ann
+  - interval: 1m   # LLM OPEN (satu pod) -> critical; Evaluation HALF_OPEN (2) dan STT CLOSED tidak
+    input_series:
+      - series: 'kotoki_provider_circuit_state{provider="OPENAI",capability="LLM",pod="a"}'
+        values: '1x10'
+      - series: 'kotoki_provider_circuit_state{provider="OPENAI",capability="LLM",pod="b"}'
+        values: '0x10'
+      - series: 'kotoki_provider_circuit_state{provider="OPENAI",capability="EVALUATION"}'
+        values: '2x10'
+      - series: 'kotoki_provider_circuit_state{provider="OPENAI",capability="EMBEDDING"}'
+        values: '1x10'
+      - series: 'kotoki_provider_circuit_state{provider="OPENAI",capability="STT"}'
+        values: '0x10'
+    alert_rule_test:
+      - alertname: ProviderUnavailable
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels: {severity: critical, capability: LLM, provider: OPENAI}
+            exp_annotations: *unavail_ann
+  - interval: 1m   # Evaluation OPEN -> critical
+    input_series:
+      - series: 'kotoki_provider_circuit_state{provider="DEEPSEEK",capability="EVALUATION"}'
+        values: '1x10'
+    alert_rule_test:
+      - alertname: ProviderUnavailable
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels: {severity: critical, capability: EVALUATION, provider: DEEPSEEK}
+            exp_annotations: *unavail_ann
+  - interval: 1m   # TTS: hanya satu dari dua vendor OPEN -> tidak (karakter masih punya vendor lain)
+    input_series:
+      - series: 'kotoki_provider_circuit_state{provider="ELEVENLABS",capability="TTS"}'
+        values: '1x10'
+      - series: 'kotoki_provider_circuit_state{provider="CARTESIA",capability="TTS"}'
+        values: '0x10'
+    alert_rule_test:
+      - {alertname: ProviderUnavailable, eval_time: 5m, exp_alerts: []}
+  - interval: 1m   # TTS: kedua vendor OPEN -> critical
+    input_series:
+      - series: 'kotoki_provider_circuit_state{provider="ELEVENLABS",capability="TTS"}'
+        values: '1x10'
+      - series: 'kotoki_provider_circuit_state{provider="CARTESIA",capability="TTS"}'
+        values: '1x10'
+    alert_rule_test:
+      - alertname: ProviderUnavailable
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels: {severity: critical, capability: TTS}
+            exp_annotations: *unavail_ann
+
+  # ProviderCircuitOpen: warning per (provider, capability) setelah 2m
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_provider_circuit_state{provider="CARTESIA",capability="TTS"}'
+        values: '1x10'
+    alert_rule_test:
+      - {alertname: ProviderCircuitOpen, eval_time: 1m, exp_alerts: []}
+      - alertname: ProviderCircuitOpen
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels: {severity: warning, provider: CARTESIA, capability: TTS}
+            exp_annotations:
+              summary: "Circuit breaker CARTESIA/TTS OPEN"
+              runbook: R2
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R2-provider-degraded.md
+
+  # (g) TurnLatencyP95High: 20% turn di atas 1,5 s -> P95 ~1,9 s: warning, bukan critical
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="1.5",kind="reply",used_fallback="false"}'
+        values: '0+80x30'
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="2",kind="reply",used_fallback="false"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="+Inf",kind="reply",used_fallback="false"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - {alertname: TurnLatencyP95High, eval_time: 5m, exp_alerts: []}
+      - alertname: TurnLatencyP95High
+        eval_time: 13m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "P95 latensi turn (end-of-turn ke audio pertama) di atas 1,5 s"
+              runbook: R1
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+      - {alertname: TurnLatencyP95Critical, eval_time: 13m, exp_alerts: []}
+  - interval: 1m   # turn sehat (semua <= 1,5 s) dan turn opening lambat tidak memicu
+    input_series:
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="1.5",kind="reply",used_fallback="false"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="+Inf",kind="reply",used_fallback="false"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="1.5",kind="opening",used_fallback="false"}'
+        values: '0x30'
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="+Inf",kind="opening",used_fallback="false"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - {alertname: TurnLatencyP95High, eval_time: 20m, exp_alerts: []}
+  - interval: 1m   # TurnLatencyP95Critical: P95 > 2,5 s selama 5m
+    input_series:
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="2.5",kind="reply",used_fallback="false"}'
+        values: '0+50x30'
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="5",kind="reply",used_fallback="false"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="+Inf",kind="reply",used_fallback="false"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - {alertname: TurnLatencyP95Critical, eval_time: 4m, exp_alerts: []}
+      - alertname: TurnLatencyP95Critical
+        eval_time: 9m
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "P95 latensi turn di atas 2,5 s"
+              runbook: R1
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+
+  # P95 sedikit di atas 1,5 s (~1,58 s): warning menyala, critical tidak (menangkap ambang yang longgar)
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="1.5",kind="reply",used_fallback="true"}'
+        values: '0+94x30'
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="2",kind="reply",used_fallback="true"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="+Inf",kind="reply",used_fallback="true"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - alertname: TurnLatencyP95High
+        eval_time: 13m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "P95 latensi turn (end-of-turn ke audio pertama) di atas 1,5 s"
+              runbook: R1
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+      - {alertname: TurnLatencyP95Critical, eval_time: 13m, exp_alerts: []}
+  # P95 sedikit di atas 2,5 s (~2,58 s): critical menyala (ambang tidak boleh longgar)
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="2.5",kind="reply",used_fallback="false"}'
+        values: '0+94x30'
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="3",kind="reply",used_fallback="false"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_turn_end_to_first_audio_seconds_bucket{le="+Inf",kind="reply",used_fallback="false"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - alertname: TurnLatencyP95Critical
+        eval_time: 9m
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "P95 latensi turn di atas 2,5 s"
+              runbook: R1
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+  # P95 overhead ~0,175 s dan bargein ~0,16 s: keduanya di atas 150 ms tetapi di bawah 200 ms
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_realtime_server_overhead_seconds_bucket{le="0.15"}'
+        values: '0+90x30'
+      - series: 'kotoki_realtime_server_overhead_seconds_bucket{le="0.2"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_server_overhead_seconds_bucket{le="+Inf"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_bargein_stop_seconds_bucket{le="0.15"}'
+        values: '0+90x30'
+      - series: 'kotoki_realtime_bargein_stop_seconds_bucket{le="0.2"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_bargein_stop_seconds_bucket{le="+Inf"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - alertname: ServerOverheadHigh
+        eval_time: 13m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "P95 overhead server di atas 150 ms"
+              runbook: R1
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+      - alertname: BargeInStopP95High
+        eval_time: 13m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "P95 berhenti-setelah-barge-in di atas 150 ms"
+              runbook: R1
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+  # ServerOverheadHigh / BargeInStopP95High: ambang 150 ms
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_realtime_server_overhead_seconds_bucket{le="0.15"}'
+        values: '0+50x30'
+      - series: 'kotoki_realtime_server_overhead_seconds_bucket{le="0.3"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_server_overhead_seconds_bucket{le="+Inf"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_bargein_stop_seconds_bucket{le="0.15"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_bargein_stop_seconds_bucket{le="+Inf"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - alertname: ServerOverheadHigh
+        eval_time: 13m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "P95 overhead server di atas 150 ms"
+              runbook: R1
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+      - {alertname: BargeInStopP95High, eval_time: 13m, exp_alerts: []}
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_realtime_bargein_stop_seconds_bucket{le="0.15"}'
+        values: '0+80x30'
+      - series: 'kotoki_realtime_bargein_stop_seconds_bucket{le="0.3"}'
+        values: '0+100x30'
+      - series: 'kotoki_realtime_bargein_stop_seconds_bucket{le="+Inf"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - alertname: BargeInStopP95High
+        eval_time: 13m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "P95 berhenti-setelah-barge-in di atas 150 ms"
+              runbook: R1
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+
+  # RealtimeCapacityHigh: 85/100 sesi -> warning; tepat 80% tidak; RealtimeOutboundDrops: > 0,1/s
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_realtime_sessions_active{state="active",pod="a"}'
+        values: '50x20'
+      - series: 'kotoki_realtime_sessions_active{state="detached",pod="a"}'
+        values: '5x20'
+      - series: 'kotoki_realtime_sessions_active{state="active",pod="b"}'
+        values: '30x20'
+      - series: 'kotoki_realtime_session_capacity{pod="a"}'
+        values: '50x20'
+      - series: 'kotoki_realtime_session_capacity{pod="b"}'
+        values: '50x20'
+      - series: 'kotoki_realtime_slow_consumer_total{pod="a"}'
+        values: '0+7x20'
+    alert_rule_test:
+      - {alertname: RealtimeCapacityHigh, eval_time: 3m, exp_alerts: []}
+      - alertname: RealtimeCapacityHigh
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Sesi realtime aktif di atas 80% kapasitas"
+              runbook: R6
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R6-realtime-capacity.md
+      - {alertname: RealtimeOutboundDrops, eval_time: 8m, exp_alerts: []}   # jendela rate 5m belum penuh + for 10m
+      - alertname: RealtimeOutboundDrops
+        eval_time: 19m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Koneksi diputus karena antrean keluar penuh (slow consumer)"
+              runbook: R6
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R6-realtime-capacity.md
+  - interval: 1m   # 80/100 tepat dan slow consumer 0,05/s -> diam
+    input_series:
+      - series: 'kotoki_realtime_sessions_active{state="active"}'
+        values: '80x20'
+      - series: 'kotoki_realtime_session_capacity'
+        values: '100x20'
+      - series: 'kotoki_realtime_slow_consumer_total'
+        values: '0+3x20'
+    alert_rule_test:
+      - {alertname: RealtimeCapacityHigh, eval_time: 15m, exp_alerts: []}
+      - {alertname: RealtimeOutboundDrops, eval_time: 15m, exp_alerts: []}
+
+  # WSConnectFailureHigh: ratelimit/ticket/draining dikecualikan; > 0,1% hasil lain -> warning
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_realtime_connections_total{result="accepted"}'
+        values: '0+1000x30'
+      - series: 'kotoki_realtime_connections_total{result="rejected_unavailable"}'
+        values: '0+2x30'
+      - series: 'kotoki_realtime_connections_total{result="rejected_ratelimit"}'
+        values: '0+50x30'
+    alert_rule_test:
+      - {alertname: WSConnectFailureHigh, eval_time: 5m, exp_alerts: []}
+      - alertname: WSConnectFailureHigh
+        eval_time: 14m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Kegagalan koneksi WebSocket di atas 0,1%"
+              runbook: R1
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+  - interval: 1m   # hanya penolakan yang dikecualikan -> diam
+    input_series:
+      - series: 'kotoki_realtime_connections_total{result="accepted"}'
+        values: '0+1000x30'
+      - series: 'kotoki_realtime_connections_total{result="rejected_ratelimit"}'
+        values: '0+50x30'
+      - series: 'kotoki_realtime_connections_total{result="rejected_ticket"}'
+        values: '0+50x30'
+      - series: 'kotoki_realtime_connections_total{result="rejected_draining"}'
+        values: '0+50x30'
+    alert_rule_test:
+      - {alertname: WSConnectFailureHigh, eval_time: 20m, exp_alerts: []}
+
+  # ApiErrorRateHigh: 2% 5xx -> critical; 0,5% tidak; service lain diabaikan
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_http_requests_total{service="kotoki-api",method="GET",route="/api/v1/me",status="500"}'
+        values: '0+2x30'
+      - series: 'kotoki_http_requests_total{service="kotoki-api",method="GET",route="/api/v1/me",status="200"}'
+        values: '0+98x30'
+    alert_rule_test:
+      - {alertname: ApiErrorRateHigh, eval_time: 3m, exp_alerts: []}
+      - alertname: ApiErrorRateHigh
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Rasio respons 5xx API di atas 1%"
+              runbook: R1
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_http_requests_total{service="kotoki-api",method="GET",route="/api/v1/me",status="500"}'
+        values: '0+1x30'
+      - series: 'kotoki_http_requests_total{service="kotoki-api",method="GET",route="/api/v1/me",status="200"}'
+        values: '0+199x30'
+      - series: 'kotoki_http_requests_total{service="kotoki-realtime",method="GET",route="x",status="500"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - {alertname: ApiErrorRateHigh, eval_time: 15m, exp_alerts: []}
+
+  # ApiLatencyP95High: jalur POST /sessions lambat (P95 ~0,4 s > 0,3 s) walau agregat sehat
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_http_request_duration_seconds_bucket{service="kotoki-api",method="GET",route="/api/v1/me",le="0.1"}'
+        values: '0+10000x30'
+      - series: 'kotoki_http_request_duration_seconds_bucket{service="kotoki-api",method="GET",route="/api/v1/me",le="+Inf"}'
+        values: '0+10000x30'
+      - series: 'kotoki_http_request_duration_seconds_bucket{service="kotoki-api",method="POST",route="/api/v1/sessions",le="0.3"}'
+        values: '0+80x30'
+      - series: 'kotoki_http_request_duration_seconds_bucket{service="kotoki-api",method="POST",route="/api/v1/sessions",le="0.5"}'
+        values: '0+100x30'
+      - series: 'kotoki_http_request_duration_seconds_bucket{service="kotoki-api",method="POST",route="/api/v1/sessions",le="+Inf"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - {alertname: ApiLatencyP95High, eval_time: 5m, exp_alerts: []}
+      - alertname: ApiLatencyP95High
+        eval_time: 14m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "P95 latensi API di atas 200 ms (POST /sessions di atas 300 ms)"
+              runbook: R1
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+  - interval: 1m   # rute realtime yang lambat tidak dihitung; /sessions 250 ms (<= 300 ms) diam
+    input_series:
+      - series: 'kotoki_http_request_duration_seconds_bucket{service="kotoki-api",method="GET",route="/api/v1/realtime/ws",le="0.1"}'
+        values: '0x30'
+      - series: 'kotoki_http_request_duration_seconds_bucket{service="kotoki-api",method="GET",route="/api/v1/realtime/ws",le="+Inf"}'
+        values: '0+100x30'
+      - series: 'kotoki_http_request_duration_seconds_bucket{service="kotoki-api",method="POST",route="/api/v1/sessions",le="0.1"}'
+        values: '0+100x30'
+      - series: 'kotoki_http_request_duration_seconds_bucket{service="kotoki-api",method="POST",route="/api/v1/sessions",le="+Inf"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - {alertname: ApiLatencyP95High, eval_time: 20m, exp_alerts: []}
+
+  # ProviderErrorRateHigh: 10% error -> warning; 2% tidak
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_provider_errors_total{provider="OPENAI",capability="LLM",kind="TIMEOUT",vendor_code="other"}'
+        values: '0+10x30'
+      - series: 'kotoki_provider_requests_total{provider="OPENAI",capability="LLM",model="m",task="",outcome="success"}'
+        values: '0+90x30'
+      - series: 'kotoki_provider_errors_total{provider="CARTESIA",capability="TTS",kind="TIMEOUT",vendor_code="other"}'
+        values: '0+2x30'
+      - series: 'kotoki_provider_requests_total{provider="CARTESIA",capability="TTS",model="m",task="",outcome="success"}'
+        values: '0+98x30'
+    alert_rule_test:
+      - {alertname: ProviderErrorRateHigh, eval_time: 3m, exp_alerts: []}
+      - alertname: ProviderErrorRateHigh
+        eval_time: 9m
+        exp_alerts:
+          - exp_labels: {severity: warning, provider: OPENAI, capability: LLM}
+            exp_annotations:
+              summary: "Rasio error provider OPENAI/LLM di atas 5%"
+              runbook: R2
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R2-provider-degraded.md
+
+  # ProviderFallbackRateHigh: 20% fallback TTS 15m -> warning; 5% tidak
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_provider_fallback_total{capability="TTS",from="ELEVENLABS",to="CARTESIA",reason="TIMEOUT"}'
+        values: '0+20x50'
+      - series: 'kotoki_provider_requests_total{provider="ELEVENLABS",capability="TTS",model="m",task="",outcome="success"}'
+        values: '0+100x50'
+    alert_rule_test:
+      - {alertname: ProviderFallbackRateHigh, eval_time: 10m, exp_alerts: []}
+      - alertname: ProviderFallbackRateHigh
+        eval_time: 35m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Fallback TTS ke voice.fallback di atas 10% permintaan TTS"
+              runbook: R2
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R2-provider-degraded.md
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_provider_fallback_total{capability="TTS",from="ELEVENLABS",to="CARTESIA",reason="TIMEOUT"}'
+        values: '0+5x50'
+      - series: 'kotoki_provider_requests_total{provider="ELEVENLABS",capability="TTS",model="m",task="",outcome="success"}'
+        values: '0+100x50'
+    alert_rule_test:
+      - {alertname: ProviderFallbackRateHigh, eval_time: 40m, exp_alerts: []}
+
+  # OutboxLagHigh (> 60 s) / OutboxLagCritical (> 300 s) / OutboxFailed (> 0)
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_outbox_oldest_pending_age_seconds{pod="a"}'
+        values: '90x20'
+      - series: 'kotoki_outbox_failed{pod="a"}'
+        values: '1x20'
+    alert_rule_test:
+      - {alertname: OutboxLagHigh, eval_time: 3m, exp_alerts: []}
+      - alertname: OutboxLagHigh
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Outbox tertunda lebih dari 60 detik"
+              runbook: R3
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+      - {alertname: OutboxLagCritical, eval_time: 12m, exp_alerts: []}
+      - alertname: OutboxFailed
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Ada baris outbox yang gagal permanen"
+              runbook: R3
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_outbox_oldest_pending_age_seconds'
+        values: '400x20'
+    alert_rule_test:
+      - alertname: OutboxLagCritical
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Outbox tertunda lebih dari 300 detik"
+              runbook: R3
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+
+  # SweeperHeartbeatSuspended: 1 selama 10m -> warning
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_sweeper_heartbeat_checks_suspended{pod="a"}'
+        values: '1x20'
+    alert_rule_test:
+      - {alertname: SweeperHeartbeatSuspended, eval_time: 8m, exp_alerts: []}
+      - alertname: SweeperHeartbeatSuspended
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Pemeriksaan heartbeat sweeper ditangguhkan"
+              runbook: R9
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R9-jobs-stale.md
+
+  # CleanupStale: batas per job (account_purge 1 jam); job lain belum melewati batasnya
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_job_last_success_timestamp_seconds{job="account_purge"}'
+        values: '0x80'
+      - series: 'kotoki_job_last_success_timestamp_seconds{job="transcript_retention"}'
+        values: '0x80'
+      - series: 'kotoki_job_last_success_timestamp_seconds{job="partition_maintenance"}'
+        values: '0x80'
+    alert_rule_test:
+      - {alertname: CleanupStale, eval_time: 65m, exp_alerts: []}     # pending: basi 65m, for 10m
+      - alertname: CleanupStale
+        eval_time: 75m
+        exp_alerts:
+          - exp_labels: {severity: warning, job: account_purge}
+            exp_annotations:
+              summary: "Job account_purge tidak sukses melewati batas"
+              runbook: R9
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R9-jobs-stale.md
+  - interval: 1m   # reservation_cleanup > 5m dan transcript_retention > 3h
+    input_series:
+      - series: 'kotoki_job_last_success_timestamp_seconds{job="reservation_cleanup"}'
+        values: '0x240'
+      - series: 'kotoki_job_last_success_timestamp_seconds{job="memory_cleanup"}'
+        values: '0x240'
+    alert_rule_test:
+      - alertname: CleanupStale
+        eval_time: 30m
+        exp_alerts:
+          - exp_labels: {severity: warning, job: reservation_cleanup}
+            exp_annotations: &cleanup_ann_rc
+              summary: "Job reservation_cleanup tidak sukses melewati batas"
+              runbook: R9
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R9-jobs-stale.md
+      - alertname: CleanupStale
+        eval_time: 200m
+        exp_alerts:
+          - exp_labels: {severity: warning, job: reservation_cleanup}
+            exp_annotations: *cleanup_ann_rc
+          - exp_labels: {severity: warning, job: memory_cleanup}
+            exp_annotations:
+              summary: "Job memory_cleanup tidak sukses melewati batas"
+              runbook: R9
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R9-jobs-stale.md
+
+  # CleanupStale: partition_maintenance > 26h (S-6); 25h masih sehat
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_job_last_success_timestamp_seconds{job="partition_maintenance"}'
+        values: '0x1700'
+    alert_rule_test:
+      - {alertname: CleanupStale, eval_time: 1500m, exp_alerts: []}   # basi 25h
+      - {alertname: CleanupStale, eval_time: 1565m, exp_alerts: []}   # basi 26h05, for 10m belum lewat
+      - alertname: CleanupStale
+        eval_time: 1600m
+        exp_alerts:
+          - exp_labels: {severity: warning, job: partition_maintenance}
+            exp_annotations:
+              summary: "Job partition_maintenance tidak sukses melewati batas"
+              runbook: R9
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R9-jobs-stale.md
+
+  # DBPoolSaturated: 95% -> warning per deployment; 85% tidak
+  - interval: 1m
+    input_series:
+      - series: 'kotoki_db_pool_acquired_conns{app_kubernetes_io_component="api",pod="a"}'
+        values: '19x20'
+      - series: 'kotoki_db_pool_max_conns{app_kubernetes_io_component="api",pod="a"}'
+        values: '20x20'
+      - series: 'kotoki_db_pool_acquired_conns{app_kubernetes_io_component="realtime",pod="b"}'
+        values: '17x20'
+      - series: 'kotoki_db_pool_max_conns{app_kubernetes_io_component="realtime",pod="b"}'
+        values: '20x20'
+    alert_rule_test:
+      - {alertname: DBPoolSaturated, eval_time: 3m, exp_alerts: []}
+      - alertname: DBPoolSaturated
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels: {severity: warning, app_kubernetes_io_component: api}
+            exp_annotations:
+              summary: "Pool koneksi DB api di atas 90%"
+              runbook: R5
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R5-postgres.md
+
+  # PostgresDown / PostgresCPUHigh / RedisDown / RedisMemoryHigh
+  - interval: 1m
+    input_series:
+      - series: 'pg_up'
+        values: '0x20'
+      - series: 'kotoki:postgres_cpu_utilization:ratio'
+        values: '0.85x30'
+      - series: 'redis_up'
+        values: '0x20'
+      - series: 'kotoki:redis_memory_utilization:ratio'
+        values: '0.85x30'
+    alert_rule_test:
+      - {alertname: PostgresDown, eval_time: 0m, exp_alerts: []}
+      - alertname: PostgresDown
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "PostgreSQL tidak dapat dijangkau"
+              runbook: R5
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R5-postgres.md
+      - {alertname: PostgresCPUHigh, eval_time: 10m, exp_alerts: []}
+      - alertname: PostgresCPUHigh
+        eval_time: 17m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "CPU PostgreSQL di atas 80%"
+              runbook: R5
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R5-postgres.md
+      - alertname: RedisDown
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Redis tidak dapat dijangkau"
+              runbook: R4
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R4-redis.md
+      - alertname: RedisMemoryHigh
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Memori Redis di atas 80%"
+              runbook: R4
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R4-redis.md
+  - interval: 1m   # sehat: up == 1 dan pemakaian tepat 0,8
+    input_series:
+      - series: 'pg_up'
+        values: '1x20'
+      - series: 'kotoki:postgres_cpu_utilization:ratio'
+        values: '0.8x30'
+      - series: 'redis_up'
+        values: '1x20'
+      - series: 'kotoki:redis_memory_utilization:ratio'
+        values: '0.8x30'
+    alert_rule_test:
+      - {alertname: PostgresDown, eval_time: 10m, exp_alerts: []}
+      - {alertname: PostgresCPUHigh, eval_time: 25m, exp_alerts: []}
+      - {alertname: RedisDown, eval_time: 10m, exp_alerts: []}
+      - {alertname: RedisMemoryHigh, eval_time: 25m, exp_alerts: []}
+
+  # RabbitMQNodeDown: 2 dari 3 node -> warning; 3 node diam; tanpa deret sama sekali -> warning
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_identity_info{pod="rmq-0"}'
+        values: '1x20'
+      - series: 'rabbitmq_identity_info{pod="rmq-1"}'
+        values: '1x20'
+    alert_rule_test:
+      - {alertname: RabbitMQNodeDown, eval_time: 1m, exp_alerts: []}
+      - alertname: RabbitMQNodeDown
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations: &rmq_down_ann
+              summary: "Node RabbitMQ kurang dari 3"
+              runbook: R3
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_identity_info{pod="rmq-0"}'
+        values: '1x20'
+      - series: 'rabbitmq_identity_info{pod="rmq-1"}'
+        values: '1x20'
+      - series: 'rabbitmq_identity_info{pod="rmq-2"}'
+        values: '1x20'
+    alert_rule_test:
+      - {alertname: RabbitMQNodeDown, eval_time: 10m, exp_alerts: []}
+  - interval: 1m   # semua node hilang dari scrape -> tetap menyala (count kosong = 0)
+    input_series:
+      - series: 'up{job="other"}'
+        values: '1x20'
+    alert_rule_test:
+      - alertname: RabbitMQNodeDown
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations: *rmq_down_ann
+
+  # RabbitMQAlarm: alarm memori atau disk -> critical setelah 1m
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_alarms_memory_used_watermark{pod="rmq-0"}'
+        values: '0x10'
+      - series: 'rabbitmq_alarms_free_disk_space_watermark{pod="rmq-1"}'
+        values: '1x10'
+    alert_rule_test:
+      - alertname: RabbitMQAlarm
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels: {severity: critical, pod: rmq-1}
+            exp_annotations:
+              summary: "RabbitMQ alarm memori atau disk pada rmq-1"
+              runbook: R3
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+
+  # PodCrashLooping: > 3 restart/15m di namespace kotoki -> warning segera; namespace lain diabaikan
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="kotoki",pod="kotoki-api-x",container="api"}'
+        values: '0+1x30'
+      - series: 'kube_pod_container_status_restarts_total{namespace="kube-system",pod="dns-x",container="dns"}'
+        values: '0+1x30'
+      - series: 'kube_pod_container_status_restarts_total{namespace="kotoki",pod="kotoki-realtime-y",container="realtime"}'
+        values: '2x30'
+    alert_rule_test:
+      - alertname: PodCrashLooping
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: kotoki, pod: kotoki-api-x, container: api}
+            exp_annotations:
+              summary: "Pod kotoki/kotoki-api-x restart lebih dari 3 kali dalam 15 menit"
+              runbook: R6
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R6-realtime-capacity.md
+
+  # PodCrashLooping: tepat 3 restart/15m tidak cukup, 4 restart menyala
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="kotoki",pod="p4",container="c"}'
+        values: '0 0 0 0 0 0 0 0 4x20'
+      - series: 'kube_pod_container_status_restarts_total{namespace="kotoki",pod="p3",container="c"}'
+        values: '0 0 0 0 0 0 0 0 3x20'
+    alert_rule_test:
+      - alertname: PodCrashLooping
+        eval_time: 20m
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: kotoki, pod: p4, container: c}
+            exp_annotations:
+              summary: "Pod kotoki/p4 restart lebih dari 3 kali dalam 15 menit"
+              runbook: R6
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R6-realtime-capacity.md
+
+  # CertificateExpiringSoon: sisa 13 hari -> warning setelah 1h; 15 hari diam
+  - interval: 1m
+    input_series:
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{name="kotoki-edge"}'
+        values: '1123200x120'
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{name="other"}'
+        values: '1296000x120'
+    alert_rule_test:
+      - {alertname: CertificateExpiringSoon, eval_time: 30m, exp_alerts: []}
+      - alertname: CertificateExpiringSoon
+        eval_time: 90m
+        exp_alerts:
+          - exp_labels: {severity: warning, name: kotoki-edge}
+            exp_annotations:
+              summary: "Sertifikat kotoki-edge kedaluwarsa kurang dari 14 hari"
+              runbook: R11
+              runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R11-gateway-certificate.md

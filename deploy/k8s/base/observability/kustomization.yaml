@@ -7,3 +7,4 @@ resources:
   - otel-collector-lb.yaml
   - otel-collector-sampler.yaml
   - alloy-audit-rule.yaml
+  - prometheusrule.yaml

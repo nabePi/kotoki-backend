@@ -75,6 +75,13 @@ for ov in "${targets[@]}"; do
   expect "$ov" PodMonitor kotoki "$P.podTargetLabels | join(\",\")" app.kubernetes.io/component
   expect "$ov" PodMonitor kotoki '.metadata.labels.release' kube-prometheus-stack
 
+  # ---- PrometheusRule kotoki-alerts: 34 alert bernama persis hack/alert-names.txt (isi ekspresi: make prom-check
+  # dan test/tools/metricref); di sini hanya keberadaan objek yang di-render ke manifest.
+  expect "$ov" PrometheusRule kotoki-alerts '.metadata.namespace' $NS
+  expect "$ov" PrometheusRule kotoki-alerts '.metadata.labels.release' kube-prometheus-stack
+  expect "$ov" PrometheusRule kotoki-alerts '[.spec.groups[].rules[]] | length' 34
+  expect "$ov" PrometheusRule kotoki-alerts '[.spec.groups[].rules[].alert] | join(",")' "$(paste -sd, "$HERE/../hack/alert-names.txt")"
+
   # ---- Deployment: hanya kotoki-* di namespace kotoki dan dua collector di observability
   CHECKS=$((CHECKS + 1))
   stray="$("$YQ" -r '.[] | select(.kind == "Deployment") | select(((.metadata.namespace == "kotoki" and (.metadata.name | test("^kotoki-"))) or (.metadata.namespace == "observability" and (.metadata.name == "otel-collector-lb" or .metadata.name == "otel-collector-sampler"))) | not) | .metadata.namespace + "/" + .metadata.name' "$(render "$ov")")" || stray="yq-gagal"

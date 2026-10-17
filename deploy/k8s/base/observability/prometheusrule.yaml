@@ -1,0 +1,386 @@
+# PrometheusRule kotoki-alerts: 34 alert awal, spec §13.7.5 (nama dan urutan di hack/alert-names.txt).
+# critical -> pager on-call; warning -> kanal chat tim. Setiap nama metrik kotoki_* wajib ada di
+# hack/metrics.txt dan terdaftar di kode (test/tools/metricref); promtool: `make prom-check`.
+# Metrik eksternal (pg_up, redis_up, rabbitmq_*, kube_*, certmanager_*) berasal dari exporter/
+# managed service; kotoki:postgres_cpu_utilization:ratio dan kotoki:redis_memory_utilization:ratio
+# adalah recording rule per lingkungan (overlay, Task 11).
+# Label app_kubernetes_io_component berasal dari podTargetLabels PodMonitor (podmonitor.yaml);
+# label `job` pada kotoki_job_* aman karena PodMonitor memakai honorLabels.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kotoki-alerts
+  namespace: observability
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: kotoki.realtime
+      rules:
+        - alert: TurnLatencyP95High
+          expr: |-
+            histogram_quantile(0.95, sum by (le) (rate(kotoki_realtime_turn_end_to_first_audio_seconds_bucket{kind="reply"}[5m]))) > 1.5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "P95 latensi turn (end-of-turn ke audio pertama) di atas 1,5 s"
+            runbook: R1
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+        - alert: TurnLatencyP95Critical
+          expr: |-
+            histogram_quantile(0.95, sum by (le) (rate(kotoki_realtime_turn_end_to_first_audio_seconds_bucket{kind="reply"}[5m]))) > 2.5
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "P95 latensi turn di atas 2,5 s"
+            runbook: R1
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+        - alert: ServerOverheadHigh
+          expr: |-
+            histogram_quantile(0.95, sum by (le) (rate(kotoki_realtime_server_overhead_seconds_bucket[5m]))) > 0.15
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "P95 overhead server di atas 150 ms"
+            runbook: R1
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+        - alert: BargeInStopP95High
+          expr: |-
+            histogram_quantile(0.95, sum by (le) (rate(kotoki_realtime_bargein_stop_seconds_bucket[5m]))) > 0.15
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "P95 berhenti-setelah-barge-in di atas 150 ms"
+            runbook: R1
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+        - alert: RealtimeCapacityHigh
+          expr: |-
+            sum(kotoki_realtime_sessions_active) / sum(kotoki_realtime_session_capacity) > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Sesi realtime aktif di atas 80% kapasitas"
+            runbook: R6
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R6-realtime-capacity.md
+        - alert: RealtimeRejectingCapacity
+          expr: |-
+            sum(rate(kotoki_realtime_connections_total{result="rejected_capacity"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Realtime menolak koneksi karena kapasitas penuh"
+            runbook: R6
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R6-realtime-capacity.md
+        - alert: RealtimeOutboundDrops
+          expr: |-
+            sum(rate(kotoki_realtime_slow_consumer_total[5m])) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Koneksi diputus karena antrean keluar penuh (slow consumer)"
+            runbook: R6
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R6-realtime-capacity.md
+        - alert: WSConnectFailureHigh
+          expr: |-
+            sum(rate(kotoki_realtime_connections_total{result!~"accepted|rejected_ratelimit|rejected_ticket|rejected_draining"}[5m])) / sum(rate(kotoki_realtime_connections_total[5m])) > 0.001
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Kegagalan koneksi WebSocket di atas 0,1%"
+            runbook: R1
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+    - name: kotoki.api
+      rules:
+        - alert: ApiErrorRateHigh
+          expr: |-
+            sum(rate(kotoki_http_requests_total{service="kotoki-api",status=~"5.."}[5m])) / sum(rate(kotoki_http_requests_total{service="kotoki-api"}[5m])) > 0.01
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Rasio respons 5xx API di atas 1%"
+            runbook: R1
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+        - alert: ApiLatencyP95High
+          expr: |-
+            histogram_quantile(0.95, sum by (le) (rate(kotoki_http_request_duration_seconds_bucket{service="kotoki-api",route!~"/api/v1/realtime.*"}[5m]))) > 0.2
+            or
+            histogram_quantile(0.95, sum by (le) (rate(kotoki_http_request_duration_seconds_bucket{service="kotoki-api",route="/api/v1/sessions",method="POST"}[5m]))) > 0.3
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "P95 latensi API di atas 200 ms (POST /sessions di atas 300 ms)"
+            runbook: R1
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R1-turn-latency.md
+    - name: kotoki.providers
+      rules:
+        - alert: ProviderErrorRateHigh
+          expr: |-
+            sum by (provider, capability) (rate(kotoki_provider_errors_total[5m])) / sum by (provider, capability) (rate(kotoki_provider_requests_total[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Rasio error provider {{ $labels.provider }}/{{ $labels.capability }} di atas 5%"
+            runbook: R2
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R2-provider-degraded.md
+        - alert: ProviderCircuitOpen
+          expr: |-
+            max by (provider, capability) (kotoki_provider_circuit_state) == 1
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Circuit breaker {{ $labels.provider }}/{{ $labels.capability }} OPEN"
+            runbook: R2
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R2-provider-degraded.md
+        - alert: ProviderUnavailable
+          expr: |-
+            max by (capability, provider) (kotoki_provider_circuit_state{capability=~"STT|LLM|EVALUATION"}) == 1
+            or
+            count by (capability) (max by (capability, provider) (kotoki_provider_circuit_state{capability="TTS"}) == 1)
+              == count by (capability) (max by (capability, provider) (kotoki_provider_circuit_state{capability="TTS"}))
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Vendor aktif tidak tersedia (circuit OPEN) tanpa fallback otomatis: ganti vendor manual (R10)"
+            runbook: R2
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R2-provider-degraded.md
+        - alert: ProviderFallbackRateHigh
+          expr: |-
+            sum(rate(kotoki_provider_fallback_total{capability="TTS"}[15m])) / sum(rate(kotoki_provider_requests_total{capability="TTS"}[15m])) > 0.1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Fallback TTS ke voice.fallback di atas 10% permintaan TTS"
+            runbook: R2
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R2-provider-degraded.md
+    - name: kotoki.async
+      rules:
+        - alert: OutboxLagHigh
+          expr: |-
+            max(kotoki_outbox_oldest_pending_age_seconds) > 60
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Outbox tertunda lebih dari 60 detik"
+            runbook: R3
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+        - alert: OutboxLagCritical
+          expr: |-
+            max(kotoki_outbox_oldest_pending_age_seconds) > 300
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Outbox tertunda lebih dari 300 detik"
+            runbook: R3
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+        - alert: DLQNotEmpty
+          expr: |-
+            max by (queue) (kotoki_rabbitmq_queue_messages{queue=~".*\\.dlq"}) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "DLQ {{ $labels.queue }} tidak kosong"
+            runbook: R3
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+        - alert: DLQGrowing
+          expr: |-
+            max by (queue) (kotoki_rabbitmq_queue_messages{queue=~".*\\.dlq"}) > 50
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "DLQ {{ $labels.queue }} lebih dari 50 pesan"
+            runbook: R3
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+        - alert: QueueBacklog
+          expr: |-
+            max by (queue) (kotoki_rabbitmq_queue_messages{queue!~".*\\.(retry\\..*|dlq)"}) > 200
+            and
+            max by (queue) (deriv(kotoki_rabbitmq_queue_messages{queue!~".*\\.(retry\\..*|dlq)"}[15m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Antrean {{ $labels.queue }} lebih dari 200 pesan dan terus naik"
+            runbook: R3
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+        - alert: OutboxFailed
+          expr: |-
+            max(kotoki_outbox_failed) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Ada baris outbox yang gagal permanen"
+            runbook: R3
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+    - name: kotoki.jobs
+      rules:
+        - alert: SweeperStale
+          expr: |-
+            time() - max(kotoki_job_last_success_timestamp_seconds{job="session_sweeper"}) > 60
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "session_sweeper tidak sukses lebih dari 60 detik"
+            runbook: R9
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R9-jobs-stale.md
+        - alert: SweeperHeartbeatSuspended
+          expr: |-
+            max(kotoki_sweeper_heartbeat_checks_suspended) == 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pemeriksaan heartbeat sweeper ditangguhkan"
+            runbook: R9
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R9-jobs-stale.md
+        - alert: CleanupStale
+          expr: |-
+            time() - max by (job) (kotoki_job_last_success_timestamp_seconds{job=~"transcript_retention|outbox_retention|balance_reconcile|memory_cleanup"}) > 10800
+            or
+            time() - max by (job) (kotoki_job_last_success_timestamp_seconds{job="reservation_cleanup"}) > 300
+            or
+            time() - max by (job) (kotoki_job_last_success_timestamp_seconds{job="account_purge"}) > 3600
+            or
+            time() - max by (job) (kotoki_job_last_success_timestamp_seconds{job="partition_maintenance"}) > 93600
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Job {{ $labels.job }} tidak sukses melewati batas"
+            runbook: R9
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R9-jobs-stale.md
+        - alert: BalanceInvariantViolation
+          expr: |-
+            max by (check) (kotoki_balance_invariant_violations) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Invarian saldo {{ $labels.check }} dilanggar"
+            runbook: R7
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R7-balance-invariant.md
+        - alert: PartitionsRunningOut
+          expr: |-
+            min by (table) (kotoki_partition_months_ahead) < 2
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Partisi {{ $labels.table }} tersisa kurang dari 2 bulan ke depan"
+            runbook: R9
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R9-jobs-stale.md
+    - name: kotoki.data
+      rules:
+        - alert: DBPoolSaturated
+          expr: |-
+            sum by (app_kubernetes_io_component) (kotoki_db_pool_acquired_conns) / sum by (app_kubernetes_io_component) (kotoki_db_pool_max_conns) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pool koneksi DB {{ $labels.app_kubernetes_io_component }} di atas 90%"
+            runbook: R5
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R5-postgres.md
+        - alert: PostgresDown
+          expr: |-
+            pg_up == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PostgreSQL tidak dapat dijangkau"
+            runbook: R5
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R5-postgres.md
+        - alert: PostgresCPUHigh
+          expr: |-
+            kotoki:postgres_cpu_utilization:ratio > 0.8
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CPU PostgreSQL di atas 80%"
+            runbook: R5
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R5-postgres.md
+        - alert: RedisDown
+          expr: |-
+            redis_up == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Redis tidak dapat dijangkau"
+            runbook: R4
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R4-redis.md
+        - alert: RedisMemoryHigh
+          expr: |-
+            kotoki:redis_memory_utilization:ratio > 0.8
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Memori Redis di atas 80%"
+            runbook: R4
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R4-redis.md
+        - alert: RabbitMQNodeDown
+          expr: |-
+            (count(rabbitmq_identity_info) or vector(0)) < 3
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Node RabbitMQ kurang dari 3"
+            runbook: R3
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+        - alert: RabbitMQAlarm
+          expr: |-
+            rabbitmq_alarms_memory_used_watermark == 1
+            or
+            rabbitmq_alarms_free_disk_space_watermark == 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "RabbitMQ alarm memori atau disk pada {{ $labels.pod }}"
+            runbook: R3
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R3-async-pipeline.md
+    - name: kotoki.platform
+      rules:
+        - alert: PodCrashLooping
+          expr: |-
+            increase(kube_pod_container_status_restarts_total{namespace=~"kotoki|observability"}[15m]) > 3
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} restart lebih dari 3 kali dalam 15 menit"
+            runbook: R6
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R6-realtime-capacity.md
+        - alert: CertificateExpiringSoon
+          expr: |-
+            certmanager_certificate_expiration_timestamp_seconds - time() < 14 * 24 * 3600
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Sertifikat {{ $labels.name }} kedaluwarsa kurang dari 14 hari"
+            runbook: R11
+            runbook_url: https://github.com/nabePi/kotoki-backend/blob/main/docs/runbook/R11-gateway-certificate.md
