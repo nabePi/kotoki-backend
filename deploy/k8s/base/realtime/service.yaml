@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kotoki-realtime
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: realtime}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: realtime}
+  ports:
+    - {name: http, port: 8081, targetPort: http}

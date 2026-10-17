@@ -1074,3 +1074,10 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`kotoki-api-secrets`** tidak ada di base (milik overlay); assert hanya mewajibkan `secretRef` bernama `kotoki-*-secrets` dan menolak objek `Secret` di manifest.
 - **CRD:** `ScaledObject` (keda.sh/v1alpha1) tersedia di katalog datreeio; `SKIP_KINDS` tetap kosong.
 - **Port ops:** `config.LoadAPI` default `OPS_ADDR=:9090`; ConfigMap/Deployment api mengeset eksplisit `:9090` (sesuai spec §13.10.2).
+
+## M10-T3 — Deployment realtime + KEDA
+- **`metricType: AverageValue` ditambahkan pada trigger Prometheus ScaledObject realtime** (tabel spec §13.10.3 menyebutnya, contoh YAML spec tidak); dites.
+- **Port ops realtime = 9090:** default `config.LoadRealtime` adalah `:9091` (`.env.example`), tetapi spec §13.10.2/§13.10.4 dan plan mewajibkan `OPS_ADDR=:9090` (port `ops`); di-set eksplisit di env Deployment (bersama `HTTP_ADDR=:8081`), bukan di ConfigMap, dan dites.
+- **Test drain** (`TestRealtimeDrainBudget`-setara) berupa blok di `20-realtime.sh` yang menghitung `5 + DRAIN_SAFEPOINT_TIMEOUT + DRAIN_FLUSH_TIMEOUT + 10` dari manifest hasil render (bukan konstanta); plan tidak menyebut test Go untuk task ini, jadi tidak ada.
+- **Tambahan di luar plan:** Service realtime tanpa `sessionAffinity` kube-proxy (affinity lewat cookie gateway `kotoki_rt`, Task 6) dites; `READY ≤ MAX ≤ HARD` dites sebagai urutan sekaligus nilai persis.
+- **CRD:** `ScaledObject` realtime tervalidasi katalog datreeio; `SKIP_KINDS` tetap kosong.

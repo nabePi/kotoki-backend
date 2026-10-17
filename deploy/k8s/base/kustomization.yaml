@@ -10,8 +10,15 @@ resources:
   - api/service.yaml
   - api/pdb.yaml
   - api/scaledobject.yaml
+  - realtime/configmap.yaml
+  - realtime/deployment.yaml
+  - realtime/service.yaml
+  - realtime/pdb.yaml
+  - realtime/scaledobject.yaml
 # Tag diganti overlay (tag = git SHA; prod = digest). REPLACE_SHA sengaja tidak valid agar
 # base mentah tidak pernah ter-deploy.
 images:
   - name: ghcr.io/nabepi/kotoki-backend/api
+    newTag: REPLACE_SHA
+  - name: ghcr.io/nabepi/kotoki-backend/realtime
     newTag: REPLACE_SHA

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kotoki-realtime-config
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: realtime}
+data:
+  # Urutan kanonik R-22: READY <= MAX <= HARD (readyz 503 / session.start ditolak 4503 / upgrade 503).
+  REALTIME_READY_MAX_SESSIONS: "95"
+  REALTIME_MAX_SESSIONS: "100"
+  REALTIME_HARD_MAX_SESSIONS: "120"
+  # Anggaran drain: terminationGracePeriodSeconds 40 = preStop 5 + safepoint 20 + flush 5 + margin 10.
+  DRAIN_SAFEPOINT_TIMEOUT: 20s
+  DRAIN_FLUSH_TIMEOUT: 5s
+  OTEL_SERVICE_NAME: kotoki-realtime
