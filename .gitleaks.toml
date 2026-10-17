@@ -1,0 +1,70 @@
+# gitleaks (spec 13.8.5): the default rule set plus a narrow allowlist for the dummy values this
+# repository ships on purpose. Used by `make sec-check` and by the gitleaks step of ci.yml.
+# Needs gitleaks >= v8.25. test/arch/supplychain_test.go keeps this file honest: the example
+# locations are the only paths exempt on their own (a global allowlist skips the whole file);
+# every other entry is a per-rule allowlist that needs the path AND a pattern on the secret value
+# itself, so a real secret committed to the same file is still reported.
+title = "kotoki-backend gitleaks"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "documented example env file and test fixtures (values are dummies by construction)"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)testdata/''',
+]
+
+# The tables below only add an allowlist to a default rule: [[rules]] carries nothing but the id,
+# everything else (regex, entropy, keywords) is inherited from the default rule.
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "dev overlay: in-cluster dev dependencies use a dummy password and a labelled dev-only JWT secret"
+condition = "AND"
+paths = [
+  '''^deploy/k8s/overlays/dev/kustomization\.yaml$''',
+]
+regexes = [
+  '''^dev-only-password$''',
+  '''^ZGV2LW9ubHktbm90LWEtc2VjcmV0[A-Za-z0-9+/=]*$''',
+]
+
+[[rules.allowlists]]
+description = "synthetic credentials that the redaction tests of the provider HTTP client must scrub"
+condition = "AND"
+paths = [
+  '''^internal/provider/httpx/httpx_test\.go$''',
+]
+regexes = [
+  '''^(sk_live_ABCDEFGH12345|sk-live_ABCDEFGH12345|sk-proj-abcdef1234567890\.?|SECRETVALUE123|abcdef123456|tok_12345\.abc)$''',
+]
+
+[[rules]]
+id = "stripe-access-token"
+
+[[rules.allowlists]]
+description = "synthetic Stripe-shaped key of the redaction tests of the provider HTTP client"
+condition = "AND"
+paths = [
+  '''^internal/provider/httpx/httpx_test\.go$''',
+]
+regexes = [
+  '''^sk_live_ABCDEFGH12345$''',
+]
+
+[[rules]]
+id = "curl-auth-user"
+
+[[rules.allowlists]]
+description = "plans quote the local docker compose credentials (kotoki:kotoki, and kaiwa:kaiwa before the rename, still in git history) in example commands"
+condition = "AND"
+paths = [
+  '''^docs/superpowers/plans/[^/]+\.md$''',
+]
+regexes = [
+  '''^(kotoki:kotoki|kaiwa:kaiwa)$''',
+]

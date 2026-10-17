@@ -27,6 +27,9 @@ jobs:
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # the action's built-in gitleaks (8.24.3) ignores the [[allowlists]] tables of .gitleaks.toml
+          GITLEAKS_VERSION: "8.28.0"
+          GITLEAKS_CONFIG: .gitleaks.toml
   unit:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

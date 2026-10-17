@@ -28,7 +28,7 @@ K8S_BUILT       := base $(foreach e,$(K8S_ENVS),$(if $(wildcard deploy/k8s/overl
 
 .PHONY: env up up-obs down reset migrate-up migrate-down migrate-create seed promote-admin \
         sqlc sqlc-check tidy-check migrations-check modelname-check arch-check assets-apology fixtures fixtures16k \
-        test test-cover test-cover-integration test-integration test-e2e test-live e2e-real lint vuln \
+        test test-cover test-cover-integration test-integration test-e2e test-live e2e-real lint vuln sec-check \
         run-api run-realtime run-worker build cli docker-build load \
         k8s-tools k8s-build k8s-validate k8s-assert prom-check k8s-test dashboards dashboards-check \
         load-local verify chaos-local capacity readiness-check pins-check
@@ -129,6 +129,15 @@ lint:           ## golangci-lint $(GOLANGCI_LINT_VERSION); pasang: GOBIN=$$PWD/b
 
 vuln:
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+# gitleaks >= v8.25 (the [[allowlists]] tables of .gitleaks.toml) and trivy are not Go tools: install them
+# on PATH or in bin/tools. A missing tool fails the target (exit 2); it is never skipped silently.
+sec-check:      ## govulncheck + gitleaks (repo + history, .gitleaks.toml) + trivy fs (CRITICAL,HIGH dengan fix)
+	$(MAKE) vuln
+	@PATH="$(CURDIR)/bin/tools:$$PATH"; command -v gitleaks >/dev/null || { echo "sec-check: gitleaks tidak terpasang (butuh >= v8.25)" >&2; exit 2; }; \
+	  gitleaks detect --config .gitleaks.toml --redact --no-banner
+	@PATH="$(CURDIR)/bin/tools:$$PATH"; command -v trivy >/dev/null || { echo "sec-check: trivy tidak terpasang" >&2; exit 2; }; \
+	  trivy fs --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 .
 
 run-api:
 	$(GO) run ./cmd/api
