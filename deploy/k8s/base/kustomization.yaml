@@ -1,6 +1,9 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: kotoki
+# Namespace kotoki lewat transformer unsetOnly (bukan field `namespace:`): objek gateway menetapkan
+# envoy-gateway-system sendiri dan tidak boleh ditimpa.
+transformers:
+  - namespace-transformer.yaml
 resources:
   - namespace.yaml
   - priorityclasses.yaml
@@ -33,6 +36,18 @@ resources:
   - worker-keda-auth.yaml
   - migrate/job.yaml
   - seed/job.yaml
+  - gateway/gateway.yaml
+  - gateway/httproute-api.yaml
+  - gateway/httproute-realtime.yaml
+  - gateway/httproute-redirect.yaml
+  - gateway/backendtrafficpolicy.yaml
+  - gateway/clienttrafficpolicy.yaml
+  - gateway/certificate.yaml
+  - networkpolicy/default-deny.yaml
+  - networkpolicy/common.yaml
+  - networkpolicy/api.yaml
+  - networkpolicy/realtime.yaml
+  - networkpolicy/worker.yaml
 # Tag diganti overlay (tag = git SHA; prod = digest). REPLACE_SHA sengaja tidak valid agar
 # base mentah tidak pernah ter-deploy.
 images:

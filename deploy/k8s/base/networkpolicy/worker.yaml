@@ -1,0 +1,49 @@
+# Semua worker-*: PostgreSQL, Redis, RabbitMQ (kotoki-data, 5671 TLS), provider AI 443. Worker tidak
+# punya ingress selain scrape 9090 (common.yaml). Job migrate/seed hanya butuh PostgreSQL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kotoki-worker
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: kotoki}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [worker-core, worker-evaluation, worker-memory, worker-learner]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 192.0.2.0/24}
+      ports:
+        - {protocol: TCP, port: 5432}
+        - {protocol: TCP, port: 6379}
+        - {protocol: TCP, port: 6380}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kotoki-data}}
+      ports:
+        - {protocol: TCP, port: 5671}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+      ports:
+        - {protocol: TCP, port: 443}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kotoki-jobs
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: kotoki}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [migrate, seed]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 192.0.2.0/24}
+      ports:
+        - {protocol: TCP, port: 5432}

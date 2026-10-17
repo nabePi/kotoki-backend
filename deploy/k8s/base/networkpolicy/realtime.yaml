@@ -1,0 +1,27 @@
+# kotoki-realtime: ingress 8081 hanya dari envoy-gateway-system; egress PostgreSQL, Redis, provider AI 443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kotoki-realtime
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: realtime}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: envoy-gateway-system}}
+      ports:
+        - {protocol: TCP, port: 8081}
+  egress:
+    - to:
+        - ipBlock: {cidr: 192.0.2.0/24}
+      ports:
+        - {protocol: TCP, port: 5432}
+        - {protocol: TCP, port: 6379}
+        - {protocol: TCP, port: 6380}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+      ports:
+        - {protocol: TCP, port: 443}

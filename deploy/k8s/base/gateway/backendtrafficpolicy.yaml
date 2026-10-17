@@ -1,0 +1,38 @@
+# Realtime: consistent hash cookie kotoki_rt (TTL 3600 s; sticky = optimasi, D-084/R-23), idle koneksi
+# 120 s (ping 15 s menjaga koneksi). Sengaja TANPA maxConnectionDuration dan requestTimeout: sesi WS
+# bisa 15 menit lebih dan batas request ditentukan HTTPRoute (0s). Server menghapus cookie lewat
+# Set-Cookie Max-Age=0 pada penolakan 503 (Path harus sama: /api/v1/realtime).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: kotoki-realtime
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: realtime}
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kotoki-realtime}
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      type: Cookie
+      cookie:
+        name: kotoki_rt
+        ttl: 3600s
+        attributes:
+          Path: /api/v1/realtime
+  timeout:
+    http:
+      connectionIdleTimeout: 120s
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: kotoki-api
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: api}
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kotoki-api}
+  loadBalancer:
+    type: RoundRobin
+  timeout:
+    http:
+      connectionIdleTimeout: 120s

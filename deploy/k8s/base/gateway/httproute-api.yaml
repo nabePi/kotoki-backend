@@ -1,0 +1,23 @@
+# Host api: /api/v1 saja. /api/v1/realtime sengaja tidak dirutekan di host ini (404); ticket WS
+# diminta lewat POST /api/v1/sessions/{id}/realtime-ticket di host ini.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kotoki-api
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: api}
+spec:
+  parentRefs:
+    - {name: kotoki, namespace: envoy-gateway-system, sectionName: https}
+  hostnames: [api.kotoki.id]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /api/v1}
+      timeouts:
+        request: 30s
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - {name: Strict-Transport-Security, value: "max-age=31536000; includeSubDomains"}
+      backendRefs:
+        - {name: kotoki-api, port: 8080}

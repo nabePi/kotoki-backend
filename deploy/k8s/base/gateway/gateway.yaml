@@ -1,0 +1,34 @@
+# Satu Gateway untuk dua host publik (api.kotoki.id, realtime.kotoki.id; spec §13.10.6). Hidup di
+# namespace envoy-gateway-system; route-nya di namespace kotoki. GatewayClass `envoy-gateway` dibuat
+# oleh instalasi Envoy Gateway (di luar repo ini).
+# PERSYARATAN INFRA (bukan manifest): L4 load balancer cloud di depan Envoy wajib TCP idle timeout
+# >= 350 s (idle Envoy 120 s + ping WS 15 s); lihat docs/runbook dan checklist produksi.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: kotoki
+  namespace: envoy-gateway-system
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: gateway}
+spec:
+  gatewayClassName: envoy-gateway
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels: {kubernetes.io/metadata.name: kotoki}
+    - name: https
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - {kind: Secret, name: kotoki-edge-tls}
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels: {kubernetes.io/metadata.name: kotoki}

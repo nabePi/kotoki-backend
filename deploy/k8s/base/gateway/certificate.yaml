@@ -1,0 +1,13 @@
+# Satu sertifikat SAN untuk kedua host; secret kotoki-edge-tls dibuat cert-manager (tidak ada di repo).
+# Overlay staging mengganti dnsNames menjadi *.staging.kotoki.id (butuh solver DNS-01).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kotoki-edge
+  namespace: envoy-gateway-system
+  labels: {app.kubernetes.io/name: kotoki, app.kubernetes.io/component: gateway}
+spec:
+  secretName: kotoki-edge-tls
+  dnsNames: [api.kotoki.id, realtime.kotoki.id]
+  issuerRef: {name: letsencrypt-prod, kind: ClusterIssuer}
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}

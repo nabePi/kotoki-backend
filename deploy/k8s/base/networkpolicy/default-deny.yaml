@@ -1,0 +1,10 @@
+# Default deny ingress+egress untuk semua pod di namespace kotoki (spec §13.10.7). Izin eksplisit ada di
+# common/api/realtime/worker.yaml. Probe kubelet berasal dari node dan tidak dibatasi NetworkPolicy
+# pada CNI yang umum; bila CNI memblokirnya, tambahkan izin node di overlay.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kotoki-default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
