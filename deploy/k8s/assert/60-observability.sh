@@ -82,6 +82,25 @@ for ov in "${targets[@]}"; do
   expect "$ov" PrometheusRule kotoki-alerts '[.spec.groups[].rules[]] | length' 34
   expect "$ov" PrometheusRule kotoki-alerts '[.spec.groups[].rules[].alert] | join(",")' "$(paste -sd, "$HERE/../hack/alert-names.txt")"
 
+  # ---- Dashboard Grafana (Task 9): satu ConfigMap berlabel sidecar, enam JSON dengan judul dan panel
+  D=kotoki-dashboards
+  expect "$ov" ConfigMap $D '.metadata.namespace' $NS
+  expect "$ov" ConfigMap $D '.metadata.labels.grafana_dashboard' 1
+  expect "$ov" ConfigMap $D '.data | keys | join(",")' 'async.json,business-integrity.json,data-stores.json,kotoki-overview.json,providers.json,realtime-latency.json'
+  for kv in kotoki-overview.json:'Kotoki Overview' realtime-latency.json:'Realtime Latency' providers.json:Providers \
+            async.json:Async data-stores.json:'Data stores' business-integrity.json:'Business integrity'; do
+    key="${kv%%:*}"; title="${kv#*:}"
+    CHECKS=$((CHECKS + 1))
+    if ! cfg_load "$ov" $D "$key"; then _fail "$ov ConfigMap/$D data[$key] tidak ada atau kosong"; continue; fi
+    got="$("$YQ" -p json -oy -r '.title + "|" + (.panels | length | tostring) + "|" + ([.panels[].targets[].expr | select(. == null or . == "")] | length | tostring)' "$CFG_TMP" 2>&1)"
+    n="${got#*|}"; n="${n%%|*}"
+    if [ "${got%%|*}" = "$title" ] && [ "$n" -ge 4 ] 2>/dev/null && [ "${got##*|}" = 0 ]; then
+      _ok "$ov $D/$key '$title' ($n panel, tanpa ekspresi kosong)"
+    else
+      _fail "$ov $D/$key: want judul '$title', >=4 panel, 0 ekspresi kosong; got '$got'"
+    fi
+  done
+
   # ---- Deployment: hanya kotoki-* di namespace kotoki dan dua collector di observability
   CHECKS=$((CHECKS + 1))
   stray="$("$YQ" -r '.[] | select(.kind == "Deployment") | select(((.metadata.namespace == "kotoki" and (.metadata.name | test("^kotoki-"))) or (.metadata.namespace == "observability" and (.metadata.name == "otel-collector-lb" or .metadata.name == "otel-collector-sampler"))) | not) | .metadata.namespace + "/" + .metadata.name' "$(render "$ov")")" || stray="yq-gagal"

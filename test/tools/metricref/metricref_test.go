@@ -1,6 +1,7 @@
 package metricref
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -448,5 +449,58 @@ func TestAlertsHaveRunbook(t *testing.T) {
 func TestSortedHelper(t *testing.T) {
 	if got := Sorted(map[string]bool{"b": true, "a": true}); !sort.StringsAreSorted(got) || len(got) != 2 {
 		t.Fatalf("Sorted = %v", got)
+	}
+}
+
+// TestDashboardJSONUsesRegisteredMetrics reads the committed Grafana JSON (not the generator) and
+// requires every kotoki_ token of every target expression to resolve to a metric that is both
+// listed in metrics.txt and registered in code, so a hand-edited or stale dashboard cannot read a
+// series that does not exist.
+func TestDashboardJSONUsesRegisteredMetrics(t *testing.T) {
+	code, err := RegisteredInCode(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := LoadAllowed(metricsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	known := map[string]bool{}
+	for n := range allowed {
+		known[n] = true
+	}
+	files, err := filepath.Glob(filepath.Join(repoRoot, "deploy/k8s/base/observability/dashboards/*.json"))
+	if err != nil || len(files) != 6 {
+		t.Fatalf("dashboards/*.json = %d files (err %v), want 6", len(files), err)
+	}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var d struct {
+			Panels []struct {
+				Title   string `json:"title"`
+				Targets []struct {
+					Expr string `json:"expr"`
+				} `json:"targets"`
+			} `json:"panels"`
+		}
+		if err := json.Unmarshal(b, &d); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		for _, p := range d.Panels {
+			if len(p.Targets) == 0 {
+				t.Errorf("%s / %q: panel without targets", filepath.Base(f), p.Title)
+			}
+			for _, tg := range p.Targets {
+				for _, tok := range Extract(tg.Expr) {
+					base, ok := Resolve(tok, known)
+					if !ok || !code[base] {
+						t.Errorf("%s / %q: %s is not a registered metric (owner %s)", filepath.Base(f), p.Title, tok, owner(tok))
+					}
+				}
+			}
+		}
 	}
 }
