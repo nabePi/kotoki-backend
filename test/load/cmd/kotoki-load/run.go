@@ -18,12 +18,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/nabePi/kotoki-backend/internal/kotokiclient"
 	"github.com/nabePi/kotoki-backend/internal/kotokiclient/audio"
 	"github.com/nabePi/kotoki-backend/test/load/gate"
 	"github.com/nabePi/kotoki-backend/test/load/promtext"
 	"github.com/nabePi/kotoki-backend/test/load/scenario"
 	"github.com/nabePi/kotoki-backend/test/load/server"
+	"github.com/nabePi/kotoki-backend/test/load/verify"
 	"github.com/nabePi/kotoki-backend/test/load/vu"
 )
 
@@ -38,6 +41,8 @@ type runOptions struct {
 	Instances, InstanceIndex    int
 	PromURL                     string
 	MetricsURLs                 []string
+	VerifyDB                    string
+	AwaitEvaluations            time.Duration
 	Seed                        int64
 	BackgroundREST, SampleEvery time.Duration
 }
@@ -67,6 +72,8 @@ func parseRun(args []string) (runOptions, error) {
 	fs.StringVar(&o.PromURL, "prom-url", "", "Prometheus base URL for the server-side criteria (staging)")
 	fs.StringVar(&metricsURLs, "metrics-urls", "", "comma-separated /metrics URLs to scrape before and after the run (local)")
 	fs.StringVar(&gateName, "gate", "", "gate: g1, g2, g3, g4a, g4b, soak, real, g1-local")
+	fs.StringVar(&o.VerifyDB, "verify-db", "", "PostgreSQL URL (read-only role): run kotoki-verify after the run and feed K13 (evaluations) and K14")
+	fs.DurationVar(&o.AwaitEvaluations, "await-evaluations", 5*time.Minute, "with --verify-db: how long completed sessions get to receive their evaluation (K13)")
 	fs.StringVar(&o.Out, "out", "", "result file (JSON)")
 	fs.Int64Var(&o.Seed, "seed", 1, "seed of the behaviour model")
 	fs.DurationVar(&o.BackgroundREST, "background-rest", time.Minute, "period of each user's background REST calls (0: off)")
@@ -127,6 +134,9 @@ func parseRun(args []string) (runOptions, error) {
 	}
 	if metricsURLs != "" && len(o.MetricsURLs) == 0 {
 		return o, errors.New("--metrics-urls is empty")
+	}
+	if o.AwaitEvaluations < 0 {
+		return o, errors.New("--await-evaluations cannot be negative")
 	}
 	return o, nil
 }
@@ -267,6 +277,9 @@ func build(o runOptions, stderr io.Writer) (runConfig, error) {
 		},
 		Meta: map[string]string{"api_url": o.APIURL, "fixtures": dir, "seed": fmt.Sprint(o.Seed)},
 	}
+	if o.VerifyDB != "" {
+		cfg.Extra = verifyExtra(o.VerifyDB, time.Now(), o.AwaitEvaluations)
+	}
 	if o.PromURL != "" {
 		cfg.Prom = server.PromAPI{BaseURL: o.PromURL}
 	} else {
@@ -391,6 +404,46 @@ func execute(ctx context.Context, cfg runConfig, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// runVerify runs kotoki-verify's checks; a variable so that tests need no database.
+var runVerify = func(ctx context.Context, dsn string, o verify.Options) ([]verify.Violation, error) {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	defer pool.Close()
+	return verify.Run(ctx, pool, o)
+}
+
+// verifyExtra feeds K14 (violations V1-V7) and, when it waited for evaluations, K13's
+// sessions_without_evaluation (V8). With await == 0 V8 is not run and its key stays absent, so the
+// gate fails K13 "no data" rather than pass on an unchecked criterion. since is when the run was
+// built: the sessions of this run are the ones created after it.
+func verifyExtra(dsn string, since time.Time, await time.Duration) func(context.Context) (gate.Observation, error) {
+	return func(ctx context.Context) (gate.Observation, error) {
+		vs, err := runVerify(ctx, dsn, verify.Options{Since: since, AwaitEvaluations: await})
+		if err != nil {
+			return nil, errors.New(strings.ReplaceAll(err.Error(), dsn, "<db>"))
+		}
+		return verifyObservation(vs, await > 0), nil
+	}
+}
+
+func verifyObservation(vs []verify.Violation, awaited bool) gate.Observation {
+	var integrity, noEval float64
+	for _, v := range vs {
+		if v.Check == "V8" {
+			noEval++
+		} else {
+			integrity++
+		}
+	}
+	o := gate.Observation{"verify_violations": integrity}
+	if awaited {
+		o["sessions_without_evaluation"] = noEval
+	}
+	return o
 }
 
 func maxOf(s promtext.Samples, name string) (float64, bool) {

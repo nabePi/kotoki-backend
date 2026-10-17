@@ -1225,3 +1225,13 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`seed-users`:** kata sandi acak per user (bukan satu kata sandi bersama), CSV `email,password` 0600; user yang sudah ada = galat (tidak ada cara login tanpa sandinya). `KOTOKI_ADMIN_EMAIL/PASSWORD` sebagai default flag (lewat `os.LookupEnv`, `os.Getenv` dilarang lint).
 - **`AdminGrantBalance` mengembalikan `fmt.Errorf("%w: %w", ErrIdempotencyKeyReused, *APIError)`** agar `errors.Is` dan `errors.As` keduanya jalan.
 - **Build tag `!windows`** pada file baru test/load sesuai plan; paket T15/T16 yang ada tidak diberi tag.
+
+## M10-T18
+- **Injeksi V2, V4, V5, V7 membutuhkan pelonggaran skema di database uji sekali pakai** (`DROP CONSTRAINT chk_balance_available_non_negative`, `ux_balance_ledger_idempotency`, `ux_balance_ledger_account_version`, `chk_sessions_charged`, `uq_evaluations_session`): skema sengaja membuat keadaan itu mustahil, jadi pengecekan hanya bisa dibuktikan dengan melonggarkannya (database uji dibuat per tes dari template). V4 tidak bisa berdiri sendiri: `CONSUME` kedua selalu menggeser jumlah ledger sehingga V1 ikut menyala; tes memeriksa bahwa V4 ada di antara pelanggaran, bukan "tepat satu". V2 dibuat tepat satu dengan menambah baris `ADJUSTMENT` yang menyamakan ledger.
+- **V1 membandingkan available dan reserved terpisah** (bukan jumlahnya) terhadap ledger, lebih ketat dari kata-kata spec ("available+reserved ≠ ledger") dan setara R1.
+- **V7 bagian "efek tanpa processed_events":** efek = evaluasi `COMPLETED`, dikaitkan lewat `evaluations.source_event_id` ke `processed_events(consumer='evaluation.session_completed', event_id)`; bukan sampling (seluruh baris sejak `Since`, maks 100 ditampilkan). Consumer lain (memory, summary, learner) tidak diperiksa: spec hanya menyebut evaluasi.
+- **V8 tidak mensyaratkan baris outbox:** sesi `COMPLETED` tanpa evaluasi `COMPLETED` adalah pelanggaran walau event hilang (itu justru kegagalan yang dicari K13). Sesi `FAILED` tidak diperiksa (K13 hanya sesi `COMPLETED`).
+- **`Options` punya `PollEvery` (bawaan 5 s) dan `probe` internal untuk tes**, di luar plan. `Run` mengembalikan slice non-nil kosong saat bersih.
+- **Tes read-only memakai probe dalam transaksi** (`SHOW transaction_read_only`, `UPDATE` ditolak), bukan `pg_stat_user_tables`: statistik tuple ditulis asinkron sehingga bisa lulus palsu.
+- **`kotoki-load run --verify-db/--await-evaluations` (di luar plan T18, perlu bagi T17/T19):** tanpa ini K13 (`sessions_without_evaluation`) dan K14 tidak punya sumber di `run`. `Since` = waktu `build` (sebelum VU mulai). Default `--await-evaluations` 5 m bila `--verify-db` diberikan.
+- **`--db` default dari env `DATABASE_URL`** (via `os.LookupEnv`); DSN tidak pernah dicetak.

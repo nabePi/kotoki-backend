@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ import (
 	"github.com/nabePi/kotoki-backend/test/load/promtext"
 	"github.com/nabePi/kotoki-backend/test/load/scenario"
 	"github.com/nabePi/kotoki-backend/test/load/server"
+	"github.com/nabePi/kotoki-backend/test/load/verify"
 	"github.com/nabePi/kotoki-backend/test/load/vu"
 )
 
@@ -541,4 +543,68 @@ func TestMetricsURL_RejectsNonHTTP(t *testing.T) {
 	require.Error(t, err)
 	_, err = metricsURL("localhost:9090")
 	require.Error(t, err)
+}
+
+// ---- --verify-db ----
+
+func TestVerifyExtra_MapsViolationsToK13K14(t *testing.T) {
+	var got verify.Options
+	defer func(old func(context.Context, string, verify.Options) ([]verify.Violation, error)) { runVerify = old }(runVerify)
+	var vs []verify.Violation
+	runVerify = func(_ context.Context, dsn string, o verify.Options) ([]verify.Violation, error) {
+		require.Equal(t, "postgres://u:pw@h/db", dsn)
+		got = o
+		return vs, nil
+	}
+	since := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+
+	obs, err := verifyExtra("postgres://u:pw@h/db", since, 5*time.Minute)(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, gate.Observation{"verify_violations": 0, "sessions_without_evaluation": 0}, obs, "clean: zeros are measured, not absent")
+	require.True(t, got.Since.Equal(since))
+	require.Equal(t, 5*time.Minute, got.AwaitEvaluations)
+
+	vs = []verify.Violation{{Check: "V1"}, {Check: "V3"}, {Check: "V8"}}
+	obs, err = verifyExtra("postgres://u:pw@h/db", since, time.Minute)(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, gate.Observation{"verify_violations": 2, "sessions_without_evaluation": 1}, obs)
+
+	vs = []verify.Violation{{Check: "V1"}}
+	obs, _ = verifyExtra("postgres://u:pw@h/db", since, 0)(context.Background())
+	require.Equal(t, gate.Observation{"verify_violations": 1}, obs, "V8 was not run: the key stays absent so K13 fails with no data")
+}
+
+func TestVerifyExtra_ErrorNeverCarriesTheDSN(t *testing.T) {
+	defer func(old func(context.Context, string, verify.Options) ([]verify.Violation, error)) { runVerify = old }(runVerify)
+	runVerify = func(_ context.Context, dsn string, _ verify.Options) ([]verify.Violation, error) {
+		return nil, errors.New("dial " + dsn + " refused")
+	}
+	_, err := verifyExtra("postgres://u:s3cret@h/db", time.Now(), time.Minute)(context.Background())
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "s3cret")
+}
+
+func TestParseRun_VerifyFlags(t *testing.T) {
+	o, err := parseRun([]string{"--gate", "g1", "--metrics-urls", "http://a", "--verify-db", "postgres://x/y"})
+	require.NoError(t, err)
+	require.Equal(t, "postgres://x/y", o.VerifyDB)
+	require.Equal(t, 5*time.Minute, o.AwaitEvaluations)
+	_, err = parseRun([]string{"--gate", "g1", "--metrics-urls", "http://a", "--await-evaluations", "-1s"})
+	require.Error(t, err)
+}
+
+func TestBuild_VerifyDBSetsExtra(t *testing.T) {
+	users := filepath.Join(t.TempDir(), "users.csv")
+	require.NoError(t, os.WriteFile(users, []byte("a@load.test,pw\n"), 0o600))
+	args := []string{"--gate", "real", "--vus", "1", "--users-file", users, "--fixtures", filepath.Join("..", "..", "..", "..", "testdata", "audio"), "--prom-url", "http://p"}
+	o, err := parseRun(args)
+	require.NoError(t, err)
+	cfg, err := build(o, io.Discard)
+	require.NoError(t, err)
+	require.Nil(t, cfg.Extra)
+	o, err = parseRun(append(args, "--verify-db", "postgres://x/y"))
+	require.NoError(t, err)
+	cfg, err = build(o, io.Discard)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Extra)
 }
