@@ -75,3 +75,19 @@ var criteria = []criterion{
 	{ID: "K14", Name: "Integrity (kotoki-verify)", Checks: []check{{"verify_violations", eq, 0}}},
 	{ID: "K15", Name: "Soak drift (RSS, goroutines)", Checks: []check{{"soak_rss_drift", lt, 0.10}, {"soak_goroutine_drift", lt, 0.10}}},
 }
+
+// Keys lists every observation key the criteria read (each once, in criteria order). Collectors use
+// it to prove that the keys they emit are keys the gate understands.
+func Keys() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range criteria {
+		for _, ck := range append(append([]check(nil), c.Checks...), c.PodChecks...) {
+			if !seen[ck.Key] {
+				seen[ck.Key] = true
+				out = append(out, ck.Key)
+			}
+		}
+	}
+	return out
+}

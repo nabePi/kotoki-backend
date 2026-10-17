@@ -296,3 +296,17 @@ func TestRenderMarkdown_ContainsEveryCriterion(t *testing.T) {
 	require.Contains(t, md, "LULUS")
 	require.NotContains(t, md, "GAGAL")
 }
+
+func TestKeys_AreExactlyTheObservationKeys(t *testing.T) {
+	want := []string{
+		"turn_p95_s", "server_overhead_p95_s", "bargein_stop_p95_s", "client_bargein_p95_s", "rest_p95_s",
+		"session_create_p95_s", "ws_connect_ok_ratio", "session_failed_server_error_ratio", "resume_ok_ratio",
+		"slow_consumer_total", "protocol_violations_total", "realtime_cpu_ratio_max", "realtime_mem_ratio_max",
+		"realtime_restarts", "pg_acquire_wait_p99_s", "pg_cpu_ratio", "redis_cpu_ratio", "redis_errors",
+		"outbox_lag_p99_s", "dlq_depth", "sessions_without_evaluation", "verify_violations", "soak_rss_drift",
+		"soak_goroutine_drift", "sessions_per_pod_min", "sessions_per_pod_max",
+	}
+	require.ElementsMatch(t, want, Keys())
+	require.Len(t, Keys(), len(want), "no duplicates")
+	require.Len(t, good(), len(want))
+}
