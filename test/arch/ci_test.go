@@ -49,5 +49,41 @@ func TestCIWorkflowShape(t *testing.T) {
 	require.True(t, ok)
 	require.NotContains(t, before, "packages: write")
 	require.Contains(t, after, "packages: write")
-	require.Contains(t, ci, "image: [api, realtime, worker, migrate]")
+	require.Contains(t, ci, "image: [api, realtime, worker, migrate, seed]")
+}
+
+// buildImagesJob returns the text of the build-images job (through the end of the file: it is the last job).
+func buildImagesJob(t *testing.T) string {
+	t.Helper()
+	_, job, ok := strings.Cut(readCI(t), "\n  build-images:")
+	require.True(t, ok)
+	return job
+}
+
+func TestCIBuildImagesMatrix(t *testing.T) {
+	job := buildImagesJob(t)
+
+	m := regexp.MustCompile(`(?m)^\s+image: \[([^\]]*)\]\s*$`).FindAllStringSubmatch(job, -1)
+	require.Len(t, m, 1, "exactly one image matrix")
+	var got []string
+	for _, n := range strings.Split(m[0][1], ",") {
+		got = append(got, strings.TrimSpace(n))
+	}
+	require.Equal(t, []string{"api", "realtime", "worker", "migrate", "seed"}, got)
+
+	require.Contains(t, job, "file: deploy/docker/${{ matrix.image }}.Dockerfile")
+	require.Contains(t, job, "tags: ghcr.io/nabepi/kotoki-backend/${{ matrix.image }}:${{ github.sha }}")
+	require.NotRegexp(t, `:latest\b`, job, "images are tagged by git SHA only")
+
+	require.Regexp(t, `uses: anchore/sbom-action@[0-9a-f]{40}`, job)
+	require.Contains(t, job, "format: cyclonedx-json")
+	require.Contains(t, job, "artifact-name: sbom-${{ matrix.image }}.cdx.json")
+	require.Contains(t, job, "image: ghcr.io/nabepi/kotoki-backend/${{ matrix.image }}:${{ github.sha }}")
+
+	require.Contains(t, job, "docker buildx imagetools inspect")
+	require.Contains(t, job, "name: digests-${{ matrix.image }}")
+	require.Contains(t, job, "${{ matrix.image }}.digest")
+	require.Contains(t, job, "aquasecurity/trivy-action@")
+	require.Contains(t, job, "severity: CRITICAL,HIGH")
+	require.Contains(t, job, `exit-code: "1"`)
 }

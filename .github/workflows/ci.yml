@@ -64,7 +64,7 @@ jobs:
     permissions: {contents: read, packages: write}
     strategy:
       matrix:
-        image: [api, realtime, worker, migrate]
+        image: [api, realtime, worker, migrate, seed]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
@@ -91,3 +91,27 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ghcr.io/nabepi/kotoki-backend/${{ matrix.image }}:${{ github.sha }}
+          format: cyclonedx-json
+          artifact-name: sbom-${{ matrix.image }}.cdx.json
+          upload-artifact: true
+          upload-artifact-retention: 90
+      - if: github.event_name != 'pull_request'
+        env:
+          IMAGE_REF: ghcr.io/nabepi/kotoki-backend/${{ matrix.image }}:${{ github.sha }}
+          IMAGE_NAME: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          mkdir -p digests
+          digest="$(docker buildx imagetools inspect "$IMAGE_REF" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          case "$digest" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo "bad digest" >&2; exit 1;; esac
+          echo "$digest" > "digests/${IMAGE_NAME}.digest"
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: digests-${{ matrix.image }}
+          path: digests/${{ matrix.image }}.digest
+          if-no-files-found: error
+          retention-days: 90
