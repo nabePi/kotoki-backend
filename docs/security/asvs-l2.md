@@ -97,7 +97,10 @@ Tes e2e `TestSecurity_*` memakai biner `cmd/api` dan `cmd/realtime` asli (`test/
 | V8.1 | Respons berisi data sensitif tidak di-cache (`Cache-Control: no-store` pada `/auth/*` dan `/me*`) | AUTO | `TestSecurity_ResponseHeaders` |
 | V8.2 | Data sensitif tidak di URL atau query log (rute, bukan path mentah, yang dicatat) | AUTO | `TestAccessLogRedactsTicket` |
 | V8.3 | Persetujuan privasi tercatat dan versi terms dipaksakan | AUTO | `TestRegisterTermsVersion`, `TestUpdateConsents` |
-| V8.3 | Hak hapus akun dan purge: lihat bukti end-to-end di Task 14 | AUTO | `TestDeleteAccount` |
+| V8.3 | Hak hapus akun end-to-end: password salah 401, sesi aktif 409, sesi RESERVED dibatalkan dan reservasi dilepas, login/sesi/ticket ditolak, token dicabut | AUTO | `TestPrivacy_AccountDeletion_EndToEnd`, `TestDeleteAccount` |
+| V8.3 | Purge akun (`account_purge`): memory, evaluasi, profil learner, transcript, event, ringkasan terhapus; baris user dianonimkan; ledger dan reservasi tetap; idempoten; audit hanya `user_id` | AUTO | `TestPrivacy_AccountDeletion_EndToEnd` |
+| V8.3 | Persetujuan terms: versi harus sama dengan `PRIVACY_POLICY_VERSION`, sesi ditolak sampai persetujuan baru | AUTO | `TestPrivacy_TermsGate` |
+| V8.4 | Log server (api, realtime, worker, job) tidak memuat email, password, token, ticket, nama, atau teks percakapan setelah sesi nyata; metrik tanpa label identitas | AUTO | `TestPrivacy_LogsContainNoPII`, `TestPrivacy_Meta_DetectsLeak` |
 | V8.3 | Backup DB <= 14 hari, enkripsi at rest, restore drill | MANUAL | MG-5 (a) |
 
 ## V9 Komunikasi
