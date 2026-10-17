@@ -1,0 +1,29 @@
+# Staging: max replika lebih kecil dari prod (api 6->3; evaluation 8->4, memory 4->2, learner 3->2);
+# realtime tidak diubah (3/20, G4b butuh ~15 pod). Min replika tetap seperti prod.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kotoki-api
+spec:
+  maxReplicaCount: 3
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kotoki-worker-evaluation
+spec:
+  maxReplicaCount: 4
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kotoki-worker-memory
+spec:
+  maxReplicaCount: 2
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kotoki-worker-learner
+spec:
+  maxReplicaCount: 2

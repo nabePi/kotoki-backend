@@ -14,6 +14,14 @@ type Common struct {
 	LogTranscripts bool   `env:"LOG_TRANSCRIPTS"`
 	PprofEnabled   bool   `env:"PPROF_ENABLED"`
 	MetricsEnabled bool   `env:"METRICS_ENABLED"`
+	// Provider modes are owned by provider.RouterConfig (which reads the same variables); they are
+	// read here only so Validate can refuse "fake" when APP_ENV=prod (spec 13.2.13). Empty = unset.
+	ProviderMode           string `env:"PROVIDER_MODE"`
+	ProviderModeSTT        string `env:"PROVIDER_MODE_STT"`
+	ProviderModeLLM        string `env:"PROVIDER_MODE_LLM"`
+	ProviderModeTTS        string `env:"PROVIDER_MODE_TTS"`
+	ProviderModeEvaluation string `env:"PROVIDER_MODE_EVALUATION"`
+	ProviderModeEmbedding  string `env:"PROVIDER_MODE_EMBEDDING"`
 }
 
 // DB holds PostgreSQL pool settings (spec 13.2.3).

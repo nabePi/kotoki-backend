@@ -19,7 +19,7 @@ for ov in "${targets[@]}"; do
   expect "$ov" Deployment $D '.metadata.labels["app.kubernetes.io/component"]' realtime
   expect "$ov" Deployment $D '.spec.replicas' 3
   expect "$ov" Deployment $D "$C.command | join(\" \")" /usr/local/bin/realtime
-  expect "$ov" Deployment $D "$C.image | test(\"^ghcr.io/nabepi/kotoki-backend/realtime:\")" true
+  expect "$ov" Deployment $D "$C.image | test(\"^ghcr.io/nabepi/kotoki-backend/realtime[:@]\")" true
   expect "$ov" Deployment $D "$C.ports[] | select(.name == \"http\") | .containerPort" 8081
   expect "$ov" Deployment $D "$C.ports[] | select(.name == \"ops\") | .containerPort" 9090
   expect "$ov" Deployment $D "$C.resources.requests.cpu" 2

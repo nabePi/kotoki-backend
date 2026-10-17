@@ -21,9 +21,9 @@ GIT_COMMIT      ?= $(shell git rev-parse --short HEAD)
 N               ?= 1
 K8S_ENVS        ?= dev staging prod
 K8S_TOOLS       := $(CURDIR)/bin/tools
-# base selalu dibangun (assert Task 2-9 membaca out/k8s/base.yaml); overlay yang belum ada dilewati
-# kecuali K8S_REQUIRE_OVERLAYS=1 (wajib dinyalakan di CI setelah Task 11).
-K8S_REQUIRE_OVERLAYS ?= 0
+# base selalu dibangun (assert Task 2-9 membaca out/k8s/base.yaml). Sejak Task 11 ketiga overlay (K8S_ENVS) wajib
+# ada: overlay yang hilang menggagalkan `make k8s-build` (K8S_REQUIRE_OVERLAYS=0 hanya untuk pengembangan lokal).
+K8S_REQUIRE_OVERLAYS ?= 1
 K8S_BUILT       := base $(foreach e,$(K8S_ENVS),$(if $(wildcard deploy/k8s/overlays/$(e)/kustomization.yaml),$(e)))
 
 .PHONY: env up up-obs down reset migrate-up migrate-down migrate-create seed promote-admin \
@@ -167,7 +167,7 @@ k8s-build:      ## kustomize build base + tiap overlay -> out/k8s/<nama>.yaml
 	@for e in $(K8S_ENVS); do \
 	  if [ ! -f deploy/k8s/overlays/$$e/kustomization.yaml ]; then \
 	    [ "$(K8S_REQUIRE_OVERLAYS)" != 1 ] || { echo "k8s-build: overlay deploy/k8s/overlays/$$e belum ada"; exit 1; }; \
-	    echo "k8s-build: SKIP overlay $$e (belum ada; Task 10/11)"; continue; \
+	    echo "k8s-build: SKIP overlay $$e (K8S_REQUIRE_OVERLAYS=0)"; continue; \
 	  fi; \
 	  echo "kustomize build overlays/$$e"; \
 	  $(K8S_TOOLS)/kustomize build deploy/k8s/overlays/$$e > out/k8s/$$e.yaml.tmp || { rm -f out/k8s/$$e.yaml.tmp; exit 1; }; \
@@ -188,6 +188,8 @@ prom-check:     ## promtool check rules + test rules (alert, Task 8)
 	deploy/k8s/hack/extract-rules.sh
 	$(K8S_TOOLS)/promtool check rules out/rules.yaml
 	$(K8S_TOOLS)/promtool test rules deploy/k8s/base/observability/alerts_test.yaml
+	@for f in deploy/k8s/overlays/staging/infra-recording-rules.yaml deploy/k8s/overlays/prod/infra-recording-rules.yaml deploy/k8s/overlays/dev/deps/observability.yaml; do \
+	  $(K8S_TOOLS)/yq e 'select(.kind == "PrometheusRule") | .spec' $$f > out/rules-infra.yaml && $(K8S_TOOLS)/promtool check rules out/rules-infra.yaml || exit 1; done
 
 k8s-test: k8s-build k8s-validate k8s-assert prom-check  ## build + validate + assert + prom-check + test Go render overlay
 	$(GO) test -race -count=1 -tags k8s ./deploy/...

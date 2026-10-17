@@ -27,7 +27,7 @@ for ov in "${targets[@]}"; do
     # args[0] (bukan join): yq v4.45.1 memecah elemen berkoma pada join
     expect "$ov" Deployment $D "$C.args | length" 1
     expect "$ov" Deployment $D "$C.args[0]" "$args"
-    expect "$ov" Deployment $D "$C.image | test(\"^ghcr.io/nabepi/kotoki-backend/worker:\")" true
+    expect "$ov" Deployment $D "$C.image | test(\"^ghcr.io/nabepi/kotoki-backend/worker[:@]\")" true
     expect "$ov" Deployment $D "$C.ports | length" 1
     expect "$ov" Deployment $D "$C.resources.requests.cpu" "$rcpu"
     expect "$ov" Deployment $D "$C.resources.requests.memory" "$rmem"
@@ -85,6 +85,10 @@ for ov in "${targets[@]}"; do
     expect "$ov" ScaledObject $D '.apiVersion' keda.sh/v1alpha1
     expect "$ov" ScaledObject $D '.spec.scaleTargetRef.name' $D
     expect "$ov" ScaledObject $D '.spec.minReplicaCount' "$min"
+    # staging: max replika lebih kecil (patch-scalers.yaml): evaluation 4, memory 2, learner 2; lainnya = base
+    if [ "$ov" = staging ]; then
+      case "$w" in evaluation) max=4 ;; memory) max=2 ;; learner) max=2 ;; esac
+    fi
     expect "$ov" ScaledObject $D '.spec.maxReplicaCount' "$max"
     expect "$ov" ScaledObject $D '.spec.triggers | length' 1
     expect "$ov" ScaledObject $D '.spec.triggers[0].type' rabbitmq

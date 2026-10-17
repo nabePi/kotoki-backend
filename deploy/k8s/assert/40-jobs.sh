@@ -22,7 +22,7 @@ for ov in "${targets[@]}"; do
     expect "$ov" Job $J '.metadata.generateName // "none"' none   # nama tetap agar kubectl wait deterministik
     expect "$ov" Job $J "$POD.restartPolicy" Never
     expect "$ov" Job $J "$POD.containers | length" 1
-    expect "$ov" Job $J "$C.image | test(\"^ghcr.io/nabepi/kotoki-backend/$j:\")" true
+    expect "$ov" Job $J "$C.image | test(\"^ghcr.io/nabepi/kotoki-backend/$j[:@]\")" true
     # Secret: tepat satu envFrom, kotoki-migrate-secrets; tidak ada secret/configMap runtime lain
     expect "$ov" Job $J "$C.envFrom | length" 1
     expect "$ov" Job $J "$C.envFrom[0].secretRef.name" kotoki-migrate-secrets

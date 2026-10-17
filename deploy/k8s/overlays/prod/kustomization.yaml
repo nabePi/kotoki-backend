@@ -1,0 +1,48 @@
+# Overlay prod (spec §13.10.8). Tanpa Secret literal: kelima Secret aplikasi berasal dari ExternalSecret
+# (externalsecrets.yaml). PROVIDER_MODE=real (fake hanya untuk load test staging; prod menolak fake).
+# Nilai bertanda REPLACE_* / 192.0.2.* / 198.51.100.* / digest nol adalah PLACEHOLDER MANUAL GATE yang
+# ditolak `deploy/k8s/hack/pins-check.sh --prod` (Task 24).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - externalsecrets.yaml
+  - rabbitmq.yaml
+  - infra-recording-rules.yaml
+patches:
+  - path: patch-config.yaml
+  # peer data store: ipBlock TEST-NET base -> placeholder per overlay (CIDR subnet DB/Redis managed)
+  - path: patch-networkpolicy.yaml
+    target: {kind: NetworkPolicy, name: kotoki-api}
+  - path: patch-networkpolicy.yaml
+    target: {kind: NetworkPolicy, name: kotoki-realtime}
+  - path: patch-networkpolicy.yaml
+    target: {kind: NetworkPolicy, name: kotoki-worker}
+  - path: patch-networkpolicy.yaml
+    target: {kind: NetworkPolicy, name: kotoki-jobs}
+  # seed spesifik lingkungan
+  - target: {kind: Job, name: kotoki-seed}
+    patch: |-
+      - {op: replace, path: /spec/template/spec/containers/0/env/0/value, value: prod}
+# Image prod dirujuk lewat digest (spec §13.8.5). Digest nol = PLACEHOLDER: pipeline deploy-prod (Task 12)
+# menggantinya dengan digest hasil build; `pins-check --prod` menolak digest nol.
+images:
+  - {name: ghcr.io/nabepi/kotoki-backend/api, digest: sha256:0000000000000000000000000000000000000000000000000000000000000000}
+  - {name: ghcr.io/nabepi/kotoki-backend/realtime, digest: sha256:0000000000000000000000000000000000000000000000000000000000000000}
+  - {name: ghcr.io/nabepi/kotoki-backend/worker, digest: sha256:0000000000000000000000000000000000000000000000000000000000000000}
+  - {name: ghcr.io/nabepi/kotoki-backend/migrate, digest: sha256:0000000000000000000000000000000000000000000000000000000000000000}
+  - {name: ghcr.io/nabepi/kotoki-backend/seed, digest: sha256:0000000000000000000000000000000000000000000000000000000000000000}
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  # PROVIDER_MODE=real dan penanda keputusan pemilik produk atas vendor aktif (provider.env berisi default
+  # spec §13.2.8, bukan hasil benchmark M9). Anotasi diganti manual setelah keputusan; pins-check --prod
+  # gagal selama masih REPLACE_*.
+  - name: kotoki-provider-config
+    namespace: kotoki
+    behavior: merge
+    literals:
+      - PROVIDER_MODE=real
+    options:
+      annotations:
+        kotoki.io/provider-selection: REPLACE_PRODUCT_OWNER_DECISION

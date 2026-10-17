@@ -15,7 +15,7 @@ for ov in "${targets[@]}"; do
   expect "$ov" Deployment $D '.spec.replicas' 2
   expect "$ov" Deployment $D "$POD.terminationGracePeriodSeconds" 30
   expect "$ov" Deployment $D "$C.command | join(\" \")" /usr/local/bin/api
-  expect "$ov" Deployment $D "$C.image | test(\"^ghcr.io/nabepi/kotoki-backend/api:\")" true
+  expect "$ov" Deployment $D "$C.image | test(\"^ghcr.io/nabepi/kotoki-backend/api[:@]\")" true
   expect "$ov" Deployment $D "$C.ports[] | select(.name == \"http\") | .containerPort" 8080
   expect "$ov" Deployment $D "$C.ports[] | select(.name == \"ops\") | .containerPort" 9090
   expect "$ov" Deployment $D "$C.resources.requests.cpu" 250m
@@ -49,7 +49,9 @@ for ov in "${targets[@]}"; do
   expect "$ov" ScaledObject $D '.apiVersion' keda.sh/v1alpha1
   expect "$ov" ScaledObject $D '.spec.scaleTargetRef.name' $D
   expect "$ov" ScaledObject $D '.spec.minReplicaCount' 2
-  expect "$ov" ScaledObject $D '.spec.maxReplicaCount' 6
+  # staging: max replika lebih kecil (patch-scalers.yaml); prod = base
+  if [ "$ov" = staging ]; then API_MAX=3; else API_MAX=6; fi
+  expect "$ov" ScaledObject $D '.spec.maxReplicaCount' "$API_MAX"
   expect "$ov" ScaledObject $D '.spec.triggers | length' 1
   expect "$ov" ScaledObject $D '.spec.triggers[0].type' cpu
   expect "$ov" ScaledObject $D '.spec.triggers[0].metricType' Utilization
