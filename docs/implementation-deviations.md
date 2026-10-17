@@ -1209,3 +1209,19 @@ dapat ditautkan dari `docs/implementation-log.md` (`#<TASK-ID>`).
 - **`ClientAgg` bertipe detik dan field `ClientBargeIn` (huruf `I` besar) sesuai plan;** `Resume` histogram tidak masuk Observation (tidak ada kriteria untuk waktunya), hanya rasio `ResumeOK/ResumeTotal`. `ConnectOK/ConnectTotal` klien tidak dipakai untuk K6 (plan menetapkan K6 dari `connections_total` server).
 - **`Scraper` dan `PromAPI` mendapat field `Client *http.Client` opsional (di luar plan)** untuk timeout dan tes; bawaan 10 s dan 30 s.
 - **`PromQL` memakai satuan detik (`[1800s]`)**, bukan `<window>` mentah di plan, supaya durasi non-bulat (mis. 90s) valid di PromQL.
+
+## M10-T17
+- **`Runner` punya field tambahan di luar plan** (`VUs`, `APIURL`, `WSURL`, `Origin`, `Pre`, `NewClient`, `Sleep`, `Now`, `OnVUStart`, `Backoff`, `Logf`): runner butuh alamat, paket Opus pra-encode, dan jam/tidur yang bisa disuntik untuk tes ramp dengan jam palsu. `Runner.Planner` tetap prototipe; VU i memakai `Planner.ForVU(i)` (seed+i) sesuai "ber-seed per VU".
+- **Barge-in hanya dari turn kedua:** turn 0 tidak punya jawaban AI untuk dipotong, jadi 10% berlaku per turn yang memenuhi syarat (turn >0); barge-in dan filler eksklusif, peluang filler turn >0 dinaikkan (0,15/0,90) agar total filler tetap 15%. Barge-in di turn 0 (plan manual) turun menjadi `Speak`.
+- **Jumlah turn per sesi diperkirakan** (durasi fixture + think + 4 s), bukan diukur: sesi tetap berjalan sampai kedaluwarsa atau `End`, dan percakapan berhenti bersih bila sesi selesai lebih dulu. `EndAfter` menentukan banyaknya turn lalu `End` dikirim setelah turn terakhir dijawab, bukan tepat pada `EndAfter`.
+- **Drop ditempatkan tepat setelah ucapan turn ke-`AfterTurn`** (bukan pada waktu acak mutlak): "putus TCP sekali pada waktu acak" tercapai lewat turn acak.
+- **`ResumeTotal` = jumlah Drop pada plan, `ResumeOK` = min(resume terukur, Drop):** sesi yang gagal sebelum resume dihitung gagal resume.
+- **Connect OK klien** = `ConnectMS > 0` atau percakapan tanpa galat (Report dikembalikan walau galat). Tidak dipakai untuk K6 (K6 dari server, T16).
+- **REST latar = `Balance` + `Catalog`** (klien M5 tidak punya riwayat/profil), keputusan plan. Latensi REST sisi klien tidak diukur (K5 dari server).
+- **`--vus` adalah total seluruh instance**, dibagi rata ke `--instances`; `users.csv` dipotong berdampingan (instance awal mengambil sisa). Spec tidak menyebut apakah per instance atau total; satu instance ≤ 500 VU tetap tanggung jawab operator.
+- **`--metrics-urls`:** URL tanpa path diberi `/metrics` (port ops 9090 melayani di sana); `Scraper` sendiri tidak diubah.
+- **Hanya `--profile default`; `--no-audio-save` selalu aktif** (mematikannya ditolak). Flag tambahan: `--seed`, `--background-rest`, `--sample-every`.
+- **Hasil `run` menimpa observasi server dengan ukuran klien untuk kunci klien** (`client_bargein_p95_s`, `resume_ok_ratio`, `outbox_lag_p99_s` bila ada sampel). Observasi tambahan (K10-K12 dari kube, K13/K14 dari verify) disuntik lewat `runConfig.Extra`.
+- **`seed-users`:** kata sandi acak per user (bukan satu kata sandi bersama), CSV `email,password` 0600; user yang sudah ada = galat (tidak ada cara login tanpa sandinya). `KOTOKI_ADMIN_EMAIL/PASSWORD` sebagai default flag (lewat `os.LookupEnv`, `os.Getenv` dilarang lint).
+- **`AdminGrantBalance` mengembalikan `fmt.Errorf("%w: %w", ErrIdempotencyKeyReused, *APIError)`** agar `errors.Is` dan `errors.As` keduanya jalan.
+- **Build tag `!windows`** pada file baru test/load sesuai plan; paket T15/T16 yang ada tidak diberi tag.
